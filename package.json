@@ -19,6 +19,10 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "README.md",
+    "dist"
+  ],
   "scripts": {
     "build": "tsdown",
     "test": "vitest --coverage",

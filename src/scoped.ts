@@ -64,8 +64,7 @@ export function createContainer(options?: LoggerOptions): Container {
   }
 }
 
-// eslint-disable-next-line unused-imports/no-unused-vars
-export interface ProvidedKey<Key, T, D extends DependencyMap | undefined> {
+export interface ProvidedKey<Key, _T, _D extends DependencyMap | undefined> {
   key: Key
 }
 
