@@ -1,6 +1,6 @@
 # Injeca
 
-Pure function programming based dependency injection library
+Pure functional programming (means no `class` and extra wrappers and containers) based dependency injection with application lifecycle management.
 
 > Heavily inspired by [uber/fig](https://go.uber.org/fig) and [uber/dig](https://go.uber.org/dig) in Golang ecosystem.
 
@@ -22,18 +22,18 @@ yarn add injeca
 
 ## Basic usage
 
-`injeca` ships with a global singleton container exposed as `injecta`. You can register
+`injeca` ships with a global singleton container exposed as `injeca`. You can register
 providers, declare their dependencies, and run invocations once everything is ready.
 
 ```ts
 import { createServer } from 'node:http'
 
-import { injecta, lifecycle } from 'injeca'
+import { injeca, lifecycle } from 'injeca'
 
 // Providers return a value once and are cached inside the container.
-const config = injecta.provide('config', () => ({ port: 3000 }))
+const config = injeca.provide('config', () => ({ port: 3000 }))
 
-const server = injecta.provide({
+const server = injeca.provide({
   dependsOn: { config, lifecycle },
   async build({ dependsOn }) {
     const { config, lifecycle } = dependsOn
@@ -46,7 +46,7 @@ const server = injecta.provide({
   },
 })
 
-injecta.invoke({
+injeca.invoke({
   dependsOn: { server },
   async callback({ server }) {
     // eslint-disable-next-line no-console
@@ -54,10 +54,10 @@ injecta.invoke({
   },
 })
 
-await injecta.start()
+await injeca.start()
 
 process.once('SIGINT', async () => {
-  await injecta.stop()
+  await injeca.stop()
 })
 ```
 

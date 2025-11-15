@@ -42,7 +42,7 @@ export type {
   ResolveDependencyDeclaration,
 } from './scoped'
 
-export const injecta = {
+export const injeca = {
   provide: globalProvide,
   invoke: globalInvoke,
   start: globalStart,
