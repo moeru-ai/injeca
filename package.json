@@ -10,6 +10,7 @@
     "url": "https://github.com/moeru-ai"
   },
   "license": "MIT",
+  "homepage": "https://github.com/moeru-ai/injeca",
   "repository": {
     "type": "git",
     "url": "https://github.com/moeru-ai/injeca.git"
@@ -20,9 +21,13 @@
       "default": "./dist/index.mjs"
     }
   },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.mts",
   "files": [
     "README.md",
-    "dist"
+    "dist",
+    "package.json"
   ],
   "scripts": {
     "build": "tsdown",
