@@ -1,6 +1,7 @@
 {
   "name": "injeca",
   "type": "module",
+  "version": "0.0.1",
   "packageManager": "pnpm@10.22.0",
   "description": "Pure function programming based dependency injection library inspired by go.uber.org/fig and go.uber.org/dig.",
   "author": {
