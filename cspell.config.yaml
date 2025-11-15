@@ -1,0 +1,22 @@
+version: "0.2"
+ignorePaths: []
+dictionaryDefinitions: []
+dictionaries: []
+words:
+  - AIRI
+  - attw
+  - bumpp
+  - crossws
+  - eventa
+  - guiiai
+  - injeca
+  - listhen
+  - logg
+  - moeru
+  - taze
+  - tsdown
+  - unbird
+  - unplugin
+  - webworkers
+ignoreWords: []
+import: []
