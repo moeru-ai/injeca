@@ -205,6 +205,18 @@ async function resolveInstance<T>(container: Container, name: string): Promise<T
   return instance as T
 }
 
+export async function resolve<Deps extends Record<string, string | ProvidedKey<any, any, any>>>(container: Container, dependsOn: Deps): Promise<ResolveDependencyDeclaration<Deps>> {
+  const resolved: Record<string, any> = {}
+
+  for (const [key, depName] of Object.entries(dependsOn)) {
+    const normalizedName = normalizeName(depName)
+
+    resolved[key] = await resolveInstance(container, normalizedName)
+  }
+
+  return resolved as ResolveDependencyDeclaration<Deps>
+}
+
 function topologicalSort(dependencyGraph: Map<string, string[]>): string[] {
   const visited = new Set<string>()
   const visiting = new Set<string>()

@@ -1,6 +1,7 @@
 import {
   invoke as globalInvoke,
   provide as globalProvide,
+  resolve as globalResolve,
   setLogger as globalSetLogger,
   start as globalStart,
   stop as globalStop,
@@ -21,6 +22,7 @@ export {
   invoke,
   lifecycle,
   provide,
+  resolve,
   start,
   stop,
 } from './scoped'
@@ -45,6 +47,7 @@ export type {
 export const injeca = {
   provide: globalProvide,
   invoke: globalInvoke,
+  resolve: globalResolve,
   start: globalStart,
   stop: globalStop,
   setLogger: globalSetLogger,

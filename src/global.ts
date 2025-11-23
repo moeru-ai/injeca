@@ -1,7 +1,7 @@
 import type { DependencyMap, InvokeOption, InvokeOptionWithKeys, Logger, ProvideOption, ProvideOptionWithKeys, ResolveDependencyDeclaration } from '.'
 import type { ProvidedKey } from './scoped'
 
-import { createContainer, provide as indexProvide, start as indexStart, stop as indexStop } from '.'
+import { createContainer, provide as indexProvide, resolve as indexResolve, start as indexStart, stop as indexStop } from '.'
 
 let globalContainer = createContainer()
 
@@ -34,6 +34,10 @@ export function invoke<D extends DependencyMap>(option: InvokeOption<D> | Invoke
   else {
     globalContainer.invocations.push(option as any)
   }
+}
+
+export function resolve<Deps extends Record<string, string | ProvidedKey<any, any, any>>>(dependsOn: Deps): Promise<ResolveDependencyDeclaration<Deps>> {
+  return indexResolve(globalContainer, dependsOn)
 }
 
 export function start(): Promise<void> {

@@ -2,7 +2,7 @@ import type { Lifecycle } from './builtin'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { createContainer, invoke, lifecycle, normalizeName, normalizeProvideOption, provide, start, stop } from './scoped'
+import { createContainer, invoke, lifecycle, normalizeName, normalizeProvideOption, provide, resolve, start, stop } from './scoped'
 
 describe('normalizeName', () => {
   it('should normalize names correctly', () => {
@@ -213,5 +213,69 @@ describe('workflow with auto name', () => {
       expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
       expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
     }
+  })
+})
+
+describe('resolve', () => {
+  it('should resolve dependencies directly without invoking start', async () => {
+    const app = createContainer()
+
+    const database = provide(app, 'database', () => ({ url: 'memory://' }))
+
+    const modelBuild = vi.fn().mockImplementation(async ({ dependsOn }) => ({ dbUrl: dependsOn.database.url, name: 'User' }))
+    const model = provide(app, 'model', {
+      dependsOn: { database },
+      build: modelBuild,
+    })
+
+    const controllerBuild = vi.fn().mockImplementation(async ({ dependsOn }) => `handling ${dependsOn.model.name} from ${dependsOn.model.dbUrl}`)
+    const controller = provide(app, 'controller', {
+      dependsOn: { model },
+      build: controllerBuild,
+    })
+
+    const resolved = await resolve(app, { controller })
+
+    expect(resolved.controller).toBe('handling User from memory://')
+    expect(app.lifecycleHooks.size).toBe(0)
+
+    expect(modelBuild).toHaveBeenCalledTimes(1)
+    expect(Object.keys(modelBuild.mock.calls[0][0].dependsOn)).toHaveLength(1)
+    expect(modelBuild.mock.calls[0][0].dependsOn.database).toStrictEqual({ url: 'memory://' })
+
+    expect(controllerBuild).toHaveBeenCalledTimes(1)
+    expect(Object.keys(controllerBuild.mock.calls[0][0].dependsOn)).toHaveLength(1)
+    expect(controllerBuild.mock.calls[0][0].dependsOn.model).toStrictEqual({ dbUrl: 'memory://', name: 'User' })
+  })
+
+  it('should wire lifecycle while resolving dependencies', async () => {
+    const app = createContainer()
+    const onStopSpy = vi.fn()
+
+    const database = provide(app, 'database', {
+      dependsOn: { lifecycle },
+      build: ({ dependsOn }) => {
+        dependsOn.lifecycle.appHooks.onStop(onStopSpy)
+        return { url: 'memory://' }
+      },
+    })
+
+    const model = provide(app, 'model', {
+      dependsOn: { database },
+      build: ({ dependsOn }) => ({ dbUrl: dependsOn.database.url, name: 'Account' }),
+    })
+
+    const controller = provide(app, 'controller', {
+      dependsOn: { model },
+      build: ({ dependsOn }) => `handling ${dependsOn.model.name} from ${dependsOn.model.dbUrl}`,
+    })
+
+    const resolved = await resolve(app, { controller })
+
+    expect(resolved.controller).toBe('handling Account from memory://')
+    expect(app.lifecycleHooks.size).toBe(1)
+
+    await stop(app)
+    expect(onStopSpy).toHaveBeenCalledTimes(1)
   })
 })
