@@ -158,7 +158,9 @@ export function invoke<D extends DependencyMap>(container: Container, option: In
 
 async function resolveInstance<T>(container: Container, name: string): Promise<T> {
   if (container.instances.has(name)) {
-    return container.instances.get(name) as T
+    const existing = container.instances.get(name)
+    // NOTICE: Cache in-progress promise so concurrent resolve calls share the same build.
+    return existing instanceof Promise ? await existing as T : existing as T
   }
 
   const provider = container.providers.get(name)
@@ -192,17 +194,25 @@ async function resolveInstance<T>(container: Container, name: string): Promise<T
     name,
   }
 
-  container.logger.beforeRun(name)
+  async function buildAndStore(): Promise<T> {
+    container.logger.beforeRun(name)
 
-  const startTime = performance.now()
-  const instance = await provider.build(context)
-  const duration = performance.now() - startTime
+    const startTime = performance.now()
+    // NOTICE: here we assert provider is defined because we checked above
+    const instance = await provider!.build(context)
+    const duration = performance.now() - startTime
 
-  container.logger.run(name, duration)
+    container.logger.run(name, duration)
 
-  container.instances.set(name, instance)
+    container.instances.set(name, instance)
 
-  return instance as T
+    return instance as T
+  }
+
+  const buildPromise = buildAndStore()
+  container.instances.set(name, buildPromise)
+
+  return await buildPromise
 }
 
 export async function resolve<Deps extends Record<string, string | ProvidedKey<any, any, any>>>(container: Container, dependsOn: Deps): Promise<ResolveDependencyDeclaration<Deps>> {

@@ -1,5 +1,6 @@
 import type { Lifecycle } from './builtin'
 
+import { sleep } from '@moeru/std/sleep'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createContainer, invoke, lifecycle, normalizeName, normalizeProvideOption, provide, resolve, start, stop } from './scoped'
@@ -277,5 +278,24 @@ describe('resolve', () => {
 
     await stop(app)
     expect(onStopSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('should reuse in-progress builds to avoid duplicate construction', async () => {
+    const app = createContainer()
+
+    const buildSpy = vi.fn().mockImplementation(async () => {
+      await sleep(250)
+      return { createdAt: Date.now() }
+    })
+
+    const service = provide(app, 'service', buildSpy)
+
+    const [first, second] = await Promise.all([
+      resolve(app, { service }),
+      resolve(app, { service }),
+    ])
+
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+    expect(first.service).toBe(second.service)
   })
 })
