@@ -61,6 +61,33 @@ process.once('SIGINT', async () => {
 })
 ```
 
+> [!WARNING]
+>
+> **`injeca` implements singleton / cached dependencies by default**
+>
+> This means every value returned by `build` will be stored and `build` will only
+> got called once.
+>
+> If `build` returns a function, that function is cached (not the result of calling
+> it). This is useful for lazy dependencies, "getters", or wrappers for singleton,
+> but it also means any side effects inside the returned function will run on every call.
+>
+> If you want the returned function to be reusable (e.g. a single window), create
+> the reusable closure once inside `build`, and return a wrapper that calls it:
+>
+> ```ts
+> const settingsWindow = injeca.provide('windows:settings', {
+>   dependsOn: { widgetsManager },
+>   build: ({ dependsOn }) => {
+>     const getWindow = setupReusableSettingsWindow(dependsOn) // created once
+>     return async () => await getWindow() // can be called many times
+>   },
+> })
+> ```
+
+Avoid recreating the reusable function inside the returned function, otherwise
+each call starts from a fresh cache and can create duplicate resources.
+
 ### Manual containers
 
 If you need multiple containers (for tests or per-request scopes), create them

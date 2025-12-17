@@ -298,4 +298,57 @@ describe('resolve', () => {
     expect(buildSpy).toHaveBeenCalledTimes(1)
     expect(first.service).toBe(second.service)
   })
+
+  it('should reuse resolved results', async () => {
+    const app = createContainer()
+
+    let databaseCreatedAt: number | undefined
+
+    const databaseBuildSpy = vi.fn().mockImplementation(async () => {
+      await sleep(100)
+      databaseCreatedAt = Date.now()
+      return { name: 'database', createdAt: databaseCreatedAt }
+    })
+    const database = provide(app, 'database', databaseBuildSpy)
+
+    const model1BuildSpy = vi.fn().mockImplementation(async ({ dependsOn }) => {
+      await sleep(100)
+      return { name: 'model1', dbName: dependsOn.database.name, dbCreatedAt: dependsOn.database.createdAt }
+    })
+    const model1 = provide(app, 'model1', {
+      dependsOn: { database },
+      build: model1BuildSpy,
+    })
+
+    const model2BuildSpy = vi.fn().mockImplementation(async ({ dependsOn }) => {
+      await sleep(100)
+      return { name: 'model2', dbName: dependsOn.database.name, dbCreatedAt: dependsOn.database.createdAt }
+    })
+    const model2 = provide(app, 'model2', {
+      dependsOn: { database },
+      build: model2BuildSpy,
+    })
+
+    const handler = provide(app, 'handler', {
+      dependsOn: { model1, model2 },
+      build: async ({ dependsOn }) => {
+        return {
+          model1: dependsOn.model1,
+          model2: dependsOn.model2,
+        }
+      },
+    })
+
+    const resolved = await resolve(app, { handler })
+
+    expect(resolved.handler.model1.dbName).toBe('database')
+    expect(resolved.handler.model2.dbName).toBe('database')
+    expect(resolved.handler.model1.dbCreatedAt).toBe(databaseCreatedAt)
+    expect(resolved.handler.model2.dbCreatedAt).toBe(databaseCreatedAt)
+    expect(resolved.handler).toBe(await resolve(app, { handler }).then(r => r.handler))
+
+    expect(databaseBuildSpy).toHaveBeenCalledTimes(1)
+    expect(model1BuildSpy).toHaveBeenCalledTimes(1)
+    expect(model2BuildSpy).toHaveBeenCalledTimes(1)
+  })
 })
