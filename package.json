@@ -2,7 +2,7 @@
   "name": "injeca",
   "type": "module",
   "version": "0.1.5",
-  "packageManager": "pnpm@10.25.0",
+  "packageManager": "pnpm@10.28.0",
   "description": "Pure functional programming based dependency injection library inspired by go.uber.org/fig and go.uber.org/dig.",
   "author": {
     "name": "Moeru AI Project AIRI Team",
@@ -53,21 +53,21 @@
     }
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^6.7.1",
-    "@moeru/eslint-config": "^0.1.0-beta.13",
-    "@moeru/std": "^0.1.0-beta.13",
-    "@moeru/tsconfig": "^0.1.0-beta.13",
-    "@types/node": "^25.0.2",
-    "bumpp": "^10.3.2",
+    "@antfu/eslint-config": "^6.7.3",
+    "@moeru/eslint-config": "^0.1.0-beta.15",
+    "@moeru/std": "^0.1.0-beta.15",
+    "@moeru/tsconfig": "^0.1.0-beta.15",
+    "@types/node": "^25.0.9",
+    "bumpp": "^10.4.0",
     "eslint": "^9.39.2",
-    "eslint-plugin-oxlint": "^1.32.0",
-    "oxlint": "^1.32.0",
+    "eslint-plugin-oxlint": "^1.39.0",
+    "oxlint": "^1.39.0",
     "publint": "^0.3.16",
     "taze": "^19.9.2",
     "tsdown": "^0.17.4",
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.5.6",
-    "vite": "^7.2.7",
-    "vitest": "^4.0.15"
+    "vite": "^7.3.1",
+    "vitest": "^4.0.17"
   }
 }
