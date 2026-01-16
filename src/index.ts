@@ -27,9 +27,11 @@ export {
   stop,
 } from './scoped'
 export type {
+  ProvidedBy as AsProvidedOf,
   BuildContext,
   Container,
   DependencyMap,
+  InferProvided,
   InvokeOption,
   InvokeOptionFunc,
   InvokeOptionObject,

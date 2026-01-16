@@ -24,7 +24,11 @@ export type BuildContext<D extends DependencyMap | undefined = undefined> = {
 } & (D extends undefined ? { dependsOn?: unknown } : { dependsOn: D })
 
 export type ResolveDependencyDeclaration<Deps extends Record<string, string | ProvidedKey<any, any, any>>> = {
-  [K in keyof Deps]: Deps[K] extends ProvidedKey<any, infer T, any> ? T : any
+  [K in keyof Deps]: Deps[K] extends ProvidedKey<any, infer T, any>
+    ? T
+    : Deps[K] extends ProvidedBy<infer T>
+      ? T
+      : any
 }
 
 export type ProvideOptionObject<T, D extends DependencyMap | undefined = undefined> = { build: (context: BuildContext<D>) => T | Promise<T> } & (D extends undefined ? { dependsOn?: Record<string, never> } : { dependsOn: { [K in keyof D]: string } })
@@ -67,6 +71,15 @@ export function createContainer(options?: LoggerOptions): Container {
 export interface ProvidedKey<Key, _T, _D extends DependencyMap | undefined> {
   key: Key
 }
+
+export type ProvidedBy<T> = string & { __providedType?: T }
+
+export type InferProvided<T>
+  = T extends ProvidedKey<any, infer P, any>
+    ? P
+    : T extends ProvidedBy<infer P>
+      ? P
+      : never
 
 export function normalizeName(nameOrProvidedKey: string | ProvidedKey<any, any, any>): string {
   if (typeof nameOrProvidedKey === 'object' && nameOrProvidedKey !== null && 'key' in nameOrProvidedKey) {

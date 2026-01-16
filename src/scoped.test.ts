@@ -1,9 +1,20 @@
 import type { Lifecycle } from './builtin'
+import type { InferProvided, ProvidedBy } from './scoped'
 
 import { sleep } from '@moeru/std/sleep'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
-import { createContainer, invoke, lifecycle, normalizeName, normalizeProvideOption, provide, resolve, start, stop } from './scoped'
+import {
+  createContainer,
+  invoke,
+  lifecycle,
+  normalizeName,
+  normalizeProvideOption,
+  provide,
+  resolve,
+  start,
+  stop,
+} from './scoped'
 
 describe('normalizeName', () => {
   it('should normalize names correctly', () => {
@@ -247,6 +258,33 @@ describe('resolve', () => {
     expect(controllerBuild).toHaveBeenCalledTimes(1)
     expect(Object.keys(controllerBuild.mock.calls[0][0].dependsOn)).toHaveLength(1)
     expect(controllerBuild.mock.calls[0][0].dependsOn.model).toStrictEqual({ dbUrl: 'memory://', name: 'User' })
+  })
+
+  it('should allow forced types for string dependency keys', async () => {
+    interface Database {
+      url: string
+    }
+
+    const app = createContainer()
+    provide(app, 'db', () => ({ url: 'memory://' } as Database))
+
+    const resolved = await resolve(app, { database: 'db' as ProvidedBy<Database> })
+
+    expectTypeOf(resolved.database).toMatchTypeOf<Database>()
+    expect(resolved.database.url).toBe('memory://')
+  })
+
+  it('should infer provided types from ProvidedKey and AsProvidedOf', () => {
+    interface Database {
+      url: string
+    }
+
+    const app = createContainer()
+    // eslint-disable-next-line unused-imports/no-unused-vars
+    const database = provide(app, 'db', () => ({ url: 'memory://' } as Database))
+
+    expectTypeOf<InferProvided<typeof database>>().toEqualTypeOf<Database>()
+    expectTypeOf<InferProvided<ProvidedBy<Database>>>().toEqualTypeOf<Database>()
   })
 
   it('should wire lifecycle while resolving dependencies', async () => {
