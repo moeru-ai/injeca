@@ -20,6 +20,14 @@ ni injeca
 yarn add injeca
 ```
 
+### Agent Skills
+
+Install the [injeca skill](https://skills.sh) to your AI coding agent:
+
+```sh
+npx skills add moeru-ai/injeca
+```
+
 ## Basic usage
 
 `injeca` ships with a global singleton container exposed as `injeca`. You can register
