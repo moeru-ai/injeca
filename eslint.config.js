@@ -11,7 +11,7 @@ export default defineConfig({
   ignores: [
     'cspell.config.yaml',
     'cspell.config.yml',
-    'SKILL.md',
+    'skills/injeca/SKILL.md',
   ],
 }, {
   rules: {
