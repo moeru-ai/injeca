@@ -133,6 +133,7 @@ describe('workflow with typed', () => {
     async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
       await params.database.connect()
       const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
+      params.lifecycle?.appHooks.onStart(async () => await server.start())
       params.lifecycle?.appHooks.onStop(async () => await server.stop())
       return server
     }
@@ -151,7 +152,7 @@ describe('workflow with typed', () => {
 
     invoke(app, {
       dependsOn: { webSocketServer },
-      callback: async ({ webSocketServer }) => await webSocketServer.start(),
+      callback: () => {},
     })
 
     await start(app)

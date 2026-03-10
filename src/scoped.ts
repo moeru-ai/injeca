@@ -308,7 +308,7 @@ export async function stopLifecycleHooks(container: Container): Promise<void> {
 }
 
 export async function start(container: Container): Promise<void> {
-  await startLifecycleHooks(container)
+  const resolvedInvocations: Record<string, any>[] = []
 
   for (const invocation of container.invocations) {
     const resolvedDependencies: Record<string, any> = {}
@@ -319,7 +319,13 @@ export async function start(container: Container): Promise<void> {
       }
     }
 
-    await invocation.callback(resolvedDependencies)
+    resolvedInvocations.push(resolvedDependencies)
+  }
+
+  await startLifecycleHooks(container)
+
+  for (const [index, invocation] of container.invocations.entries()) {
+    await invocation.callback(resolvedInvocations[index] ?? {})
   }
 
   container.logger.running()
