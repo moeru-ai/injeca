@@ -2,7 +2,7 @@
   "name": "injeca",
   "type": "module",
   "version": "0.2.0",
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@10.33.4",
   "description": "Pure functional programming based dependency injection library inspired by go.uber.org/fig and go.uber.org/dig.",
   "author": {
     "name": "Moeru AI Project AIRI Team",
@@ -43,9 +43,9 @@
     "up": "taze -w -r -I -f && pnpm prune && pnpm dedupe"
   },
   "peerDependencies": {
-    "@guiiai/logg": ">= 1",
+    "@guiiai/logg": ">= 1.2.11",
     "error-stack-parser": "^2.1.4",
-    "nanoid": ">=5"
+    "nanoid": ">=5.1.11"
   },
   "peerDependenciesMeta": {
     "@guiiai/logg": {
@@ -53,21 +53,21 @@
     }
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^8.2.0",
+    "@antfu/eslint-config": "^8.3.0",
     "@moeru/eslint-config": "^0.1.0-beta.18",
     "@moeru/std": "^0.1.0-beta.18",
     "@moeru/tsconfig": "^0.1.0-beta.18",
-    "@types/node": "^25.6.0",
-    "bumpp": "^11.0.1",
-    "eslint": "^10.2.0",
-    "eslint-plugin-oxlint": "^1.60.0",
-    "oxlint": "^1.60.0",
-    "publint": "^0.3.18",
-    "taze": "^19.11.0",
-    "tsdown": "^0.17.4",
-    "typescript": "^6.0.2",
+    "@types/node": "^25.8.0",
+    "bumpp": "^11.1.0",
+    "eslint": "^10.4.0",
+    "eslint-plugin-oxlint": "^1.65.0",
+    "oxlint": "^1.65.0",
+    "publint": "^0.3.21",
+    "taze": "^19.12.0",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3",
     "unplugin-unused": "^0.5.7",
-    "vite": "^8.0.8",
-    "vitest": "^4.1.4"
+    "vite": "^8.0.13",
+    "vitest": "^4.1.6"
   }
 }
