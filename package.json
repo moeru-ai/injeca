@@ -65,7 +65,7 @@
     "publint": "^0.3.18",
     "taze": "^19.11.0",
     "tsdown": "^0.17.4",
-    "typescript": "^6.0.2",
+    "typescript": "^7.0.2",
     "unplugin-unused": "^0.5.7",
     "vite": "^8.0.8",
     "vitest": "^4.1.4"
