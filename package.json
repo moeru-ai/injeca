@@ -45,7 +45,7 @@
   "peerDependencies": {
     "@guiiai/logg": ">= 1",
     "error-stack-parser": "^2.1.4",
-    "nanoid": ">=5"
+    "nanoid": ">=6.0.1"
   },
   "peerDependenciesMeta": {
     "@guiiai/logg": {
