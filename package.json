@@ -58,7 +58,7 @@
     "@moeru/std": "^0.1.0-beta.18",
     "@moeru/tsconfig": "^0.1.0-beta.18",
     "@types/node": "^25.6.0",
-    "bumpp": "^11.0.1",
+    "bumpp": "^12.3.0",
     "eslint": "^10.2.0",
     "eslint-plugin-oxlint": "^1.60.0",
     "oxlint": "^1.60.0",
