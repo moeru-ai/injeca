@@ -8,4 +8,5 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   unused: true,
+  failOnWarn: 'ci-only',
 })
