@@ -15,23 +15,23 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           run_install: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           cache: pnpm
-          node-version: latest
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # npm 11.5.1 or later is required so update to latest to use OIDC trusted publisher
+      # npm 11.5.1 or later is required for OIDC trusted publishing.
       # https://github.com/eslint/config-inspector/pull/174/files
       # https://github.com/e18e/ecosystem-issues/issues/201
-      - run: npm install -g npm@latest
-      - run: pnpm i
+      - run: npm install -g npm@12.2.0
+      - run: pnpm install --frozen-lockfile
       - run: pnpm dlx changelogithub
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

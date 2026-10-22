@@ -1,3 +1,5 @@
+import perfectionist from 'eslint-plugin-perfectionist'
+
 import { defineConfig } from '@moeru/eslint-config'
 
 export default defineConfig(
@@ -31,6 +33,9 @@ export default defineConfig(
     ignores: [
       '**/*.md',
     ],
+    plugins: {
+      perfectionist,
+    },
     rules: {
       'perfectionist/sort-imports': [
         'error',
