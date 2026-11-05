@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { InvalidArgumentError } from '../diagnostics/errors'
 import { readEdges } from '../graph/nodes'
-import { defineKey, firstAvailable, isFallbackDependency, isOptionalDependency, normalizeName, optional } from './keys'
+import { defineKey, firstAvailable, isConditionalDependency, isExclusiveKey, isFallbackDependency, isOptionalDependency, normalizeName, optional, where } from './keys'
 
 describe('defineKey', () => {
   it('returns a frozen key that normalizes to its name', () => {
@@ -17,6 +17,44 @@ describe('defineKey', () => {
     expect(() => defineKey('')).toThrow(InvalidArgumentError)
     expect(() => defineKey(' airi.llm')).toThrow(InvalidArgumentError)
     expect(() => defineKey('airi.llm\n')).toThrow(InvalidArgumentError)
+  })
+
+  it('marks an exclusive key, and rejects an exclusive option that is not a boolean', () => {
+    const key = defineKey<string>('dev.airi.whiteboard', { exclusive: true })
+
+    expect(key).toEqual({ key: 'dev.airi.whiteboard', exclusive: true })
+    expect(isExclusiveKey(key)).toBe(true)
+    expect(isExclusiveKey(defineKey('airi.llm'))).toBe(false)
+    expect(isExclusiveKey('dev.airi.whiteboard')).toBe(false)
+    // @ts-expect-error The exclusive option is a boolean.
+    expect(() => defineKey('airi.llm', { exclusive: 'yes' })).toThrow(InvalidArgumentError)
+  })
+})
+
+describe('where', () => {
+  it('returns a frozen condition marker, and combines with optional() in both orders', () => {
+    const key = defineKey<string>('airi.llm')
+    const condition = (): boolean => true
+    const marker = where(key, condition)
+
+    expect(isConditionalDependency(marker)).toBe(true)
+    expect(isConditionalDependency({ ...marker })).toBe(false)
+    expect(Object.isFrozen(marker)).toBe(true)
+    expect(optional(marker)).toMatchObject({ dependencies: ['airi.llm'], condition })
+    expect(where(optional(key), condition)).toMatchObject({ dependencies: ['airi.llm'], condition })
+    expect(readEdges('consumer', { llm: marker, tts: optional(where('airi.tts', condition)) })).toEqual([
+      { name: 'llm', keyName: 'airi.llm', candidates: ['airi.llm'], optional: false, fallback: false, condition },
+      { name: 'tts', keyName: 'airi.tts', candidates: ['airi.tts'], optional: true, fallback: false, condition },
+    ])
+  })
+
+  it('rejects a condition that is not a function, a second condition, and a fallback marker', () => {
+    const condition = (): boolean => true
+    // @ts-expect-error The condition is a function.
+    expect(() => where('airi.llm', 'v2')).toThrow(InvalidArgumentError)
+    expect(() => where(where(optional('airi.llm'), condition), condition)).toThrow(InvalidArgumentError)
+    // @ts-expect-error A fallback marker cannot have a condition.
+    expect(() => where(firstAvailable('a', 'b'), condition)).toThrow(InvalidArgumentError)
   })
 })
 

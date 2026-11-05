@@ -14,9 +14,9 @@ const transitionalPhases: ReadonlySet<string> = new Set(['building', 'starting',
 /** The result of one settle check. `'waiting'` checks again at the next drain. */
 type SettleCheck = 'waiting' | { readonly kind: 'done' } | { readonly kind: 'failed', readonly errors: readonly unknown[] }
 
-/** Lists the present services and invocations of `containers`. */
+/** Lists the present services and invocations of `containers`. A `perConsumer` registration never runs, so it is not in the list. Its consumer services are. */
 function presentServices(containers: readonly ContainerNode[]): ServiceNode[] {
-  return containers.flatMap(container => [...container.services].filter(service => visibleKinds.has(service.kind) && service.signals.present()))
+  return containers.flatMap(container => [...container.services].filter(service => visibleKinds.has(service.kind) && service.signals.present() && !service.perConsumer))
 }
 
 /**

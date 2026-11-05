@@ -2,6 +2,7 @@ import type { InstanceNode, ServiceNode, StopIntent } from '../graph/graph'
 import type { CleanupFrame } from '../helpers/cleanup-context'
 
 import { setPhase } from '../graph/nodes'
+import { removeDeclaration } from '../graph/resolvers/exclusive'
 import { batch } from '../helpers/signals'
 import { invokeUser, loggerOf } from './calls'
 import { syncHolds } from './holds'
@@ -101,6 +102,25 @@ function settleAfterStop(service: ServiceNode, errors: readonly unknown[]): void
   const intent = service.stopIntent
   service.stopIntent = {}
 
+  // A new service that did not reach its swap leaves. The old service does not change.
+  const { swap } = service
+  if (swap) {
+    const failure = intent.failure ?? (errors.length > 0 ? { error: errors[0] } : undefined)
+    service.swap = undefined
+    if (failure) {
+      service.failure = failure
+      setPhase(service, 'failed', { reason: intent.reason ?? 'The replacement failed. The old instance stays.', decision: intent.decision })
+      swap.settle({ kind: 'failed', error: failure.error })
+    }
+    else {
+      swap.settle(service.signals.active() ? { kind: 'cancelled' } : { kind: 'stopping' })
+    }
+    service.signals.present(false)
+    service.teardownErrors.push(...errors)
+    finalize(service)
+    return
+  }
+
   if (!service.signals.present()) {
     service.teardownErrors.push(...errors)
     finalize(service)
@@ -118,10 +138,24 @@ function settleAfterStop(service: ServiceNode, errors: readonly unknown[]): void
 }
 
 export function finalize(service: ServiceNode): void {
+  const { swap, template } = service
+  service.swap = undefined
+  swap?.settle({ kind: 'cancelled' })
   service.disposeEffects()
   service.container.services.delete(service)
-  setPhase(service, 'withdrawn')
+  batch(() => {
+    removeDeclaration(service)
+    if (template) {
+      const consumers = template.signals.consumers()
+      if (consumers.get(service.container) === service)
+        template.signals.consumers(new Map([...consumers].filter(([, consumer]) => consumer !== service)))
+    }
+    setPhase(service, 'withdrawn')
+  })
   service.withdrawal.resolve([...service.teardownErrors])
+  // A withdrawn `perConsumer` registration finalizes after its last consumer service.
+  if (template)
+    service.container.runtime.reconciler.markDirty(template)
   // The effect is gone, so no phase change requests a drain. Request one for the drained listeners.
   service.container.runtime.reconciler.requestDrain()
 }

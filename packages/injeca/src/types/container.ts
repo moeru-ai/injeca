@@ -1,5 +1,6 @@
 import type { Logger, LoggerOptions } from '../diagnostics/logger'
 import type { Clock } from '../helpers/clock'
+import type { KeyReference } from './keys'
 import type { OwnerRecord } from './service'
 
 export interface Container {
@@ -15,4 +16,9 @@ export interface ContainerOptions extends LoggerOptions {
   owner?: OwnerRecord
   /** The time source. Only a root container reads it. A child container uses the clock of its root. */
   clock?: Clock
+  /**
+   * The keys that do not resolve from the ancestors. The container and its descendants resolve them only from their own registrations.
+   * An isolated key also ends the resolution area of an exclusive key of an ancestor.
+   */
+  isolate?: readonly KeyReference[]
 }

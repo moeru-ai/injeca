@@ -1,6 +1,6 @@
 import type { Clock } from '../helpers/clock'
 import type { WatchKey } from '../queries/watch'
-import type { BuildContext, Container, ObserveRecord, OwnerRecord, ServicePhase, ServiceState } from '../types'
+import type { BuildContext, Container, KeyReference, ObserveRecord, OwnerRecord, ServicePhase, ServiceState } from '../types'
 
 import { nodeOf } from '../graph/nodes'
 import { createContainer } from '../primitives/container'
@@ -79,7 +79,7 @@ export function manualClock(): ManualClock {
 }
 
 /** Creates a container for a test. Logging is off, unless `enabled` is `true`. */
-export function createTestContainer(options: { parent?: Container, owner?: OwnerRecord, clock?: Clock, enabled?: boolean } = {}): Container {
+export function createTestContainer(options: { parent?: Container, owner?: OwnerRecord, clock?: Clock, enabled?: boolean, isolate?: readonly KeyReference[] } = {}): Container {
   return createContainer({ enabled: false, ...options })
 }
 

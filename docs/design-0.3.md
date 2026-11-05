@@ -202,7 +202,9 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 
 - `createContainer(options?)` returns a container. `options.parent` makes a child container. `options.owner` is a serializable owner record. injeca does not interpret its fields.
 - A container resolves keys from its own registrations and from those of its ancestors.
-- A container can isolate a key. Then the key does not resolve from the ancestors.
+- A registration in a child container shadows an ancestor provider of the same key only while it is `running`. Until then, dependents keep the ancestor provider. When the child provider starts, dependents move to it, and they get `dependency-change`. When it stops, they move back to the ancestor provider. So shadowing never leaves a gap.
+- A container can isolate a key. Then the key does not resolve from the ancestors. `createContainer({ isolate: [key] })` sets the isolated keys. They do not change later. An isolated key also ends the resolution area of an exclusive key of an ancestor.
+- `watch(container, key)` reports the provider that a consumer in `container` resolves. With shadowing, that is the ancestor provider until the child provider runs.
 - `dispose(container)` withdraws the registrations and invocations of the container, disposes the child containers, and runs the effects of the container in reverse registration order.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
 - A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. The check is the same in every runtime, so injeca does not use `AsyncLocalStorage`.
@@ -233,7 +235,10 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - injeca decides the conflict from the set of registrations. The order has no effect.
 - A service in `conflict` runs no code. Its dependents stay `pending`.
 - When only one registration remains, that service leaves `conflict` and converges.
-- `explain()` lists the owners of all conflicting registrations.
+- `explain()` lists the owners of all conflicting registrations, in container order.
+- A registration of the same name without the exclusive marker counts as a declaration. A conflict needs only one exclusive declaration.
+- A `running` service stops when a second declaration appears. Then it goes to `conflict`.
+- The conflict is a phase, not an error. No call throws `exclusive-conflict` in step 3.
 
 ### Resolution conditions
 
@@ -241,6 +246,9 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - If the condition returns `false`, the dependency is not resolved. A required dependency keeps the service `pending`. An optional dependency is `undefined`.
 - The condition must be pure and synchronous. A thrown error counts as `false` and goes to the observe stream.
 - `explain()` names the provider that the condition rejected.
+- The condition checks the provider that the shadowing rule selects. A rejection does not fall back to an ancestor provider.
+- The input of a condition is frozen, so injeca calls each condition once for each provider registration and keeps the result.
+- `where(optional(key), condition)` and `optional(where(key, condition))` are the same.
 - plugin-sdk uses conditions for semantic version ranges. injeca does not know semantic versions.
 
 ### Fallback dependencies
@@ -260,6 +268,8 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - A container has one current registration for each key. Before `start()`, a second `provide` of the same name replaces the first registration, as in 0.2. After `start()`, use `replace()`. A second `provide` fails with `duplicate-service`.
 - A replacement before `start()` sends a `registration-replaced` record to the observe stream. No hook runs for it.
 - `options.perConsumer: true` makes `build` run once for each consumer container. Then the build context has `consumer`, the owner record of that consumer. The instance disposes with the consumer container.
+  - The registration itself never builds and stays `pending`. `start()` does not wait for it. Each consumer container gets its own service in that container. Its observe records carry the owner of the consumer container.
+  - `replace()` on the registration replaces each running consumer service atomically. The other consumer services build again on demand.
 - `options.metadata` is a frozen record that resolution conditions and graph queries can read.
 
 ### Build context
@@ -354,6 +364,9 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - The swap is one batch. After it, the service has a new `instanceId`. Dependents follow the rule for a replaced required dependency in [dependency-change](#dependency-change).
 - The old instance runs `stop` and dispose only after each holder releases it. A holder that calls an `unavailable` old instance gets the failure that `unavailable` means.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
+- `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
+- A service without a serving instance (`pending`, `conflict`, `failed`, `building`, or `starting`) has no old instance to keep. The new registration takes the slot at once.
+- An option without `metadata` keeps the metadata of the registration. `perConsumer` does not change.
 
 ### Transactions
 
@@ -373,6 +386,11 @@ await tx.commit()
 - `tx.abort()` removes all declared services and built services of the transaction.
 - A commit fails with `transaction-incomplete` if a declared service has no `provide`, unless the declaration is optional.
 - Container disposal during a pending transaction aborts the transaction. A build that settles after the abort cannot publish.
+- `commit()` resolves after the publish. It does not wait for the `start` hooks. They run in dependency order, so a service starts after the services of the same transaction that it requires.
+- In a container that is not started, `commit()` builds nothing and publishes all services as `pending`. `start()` builds them.
+- `tx.provide` without `dependsOn` uses the edges of `tx.declare`. A second `tx.provide` or `tx.replace` of one key fails with `duplicate-service`.
+- At the commit, `tx.provide` of a key that a started container already has fails with `duplicate-service`. `tx.replace` of a key without a current registration fails with `stale-registration`.
+- After a disposal, `commit()` rejects with `build-after-dispose`. After `tx.abort()`, it rejects with `transaction-incomplete`.
 
 ## Convergence
 
@@ -506,6 +524,10 @@ Graph queries are pure reads. They never change state.
 
 A user interface can preview an action before the user confirms it. An example: "Disabling Y also stops X, A, and B." For this, `graph(container).impact()` runs on a copy of the graph with the proposed change. The copy does not change the real graph. No action requires a preview.
 
+- The queries cover the container and its descendants. A key resolves as for a consumer in the container. A key that only a descendant has resolves to the first such service.
+- `order()` keeps the members of one cycle together, in registration order.
+- A change for `impact()` is `{ kind: 'withdraw', key }`, `{ kind: 'replace', key }`, or `{ kind: 'dispose', container }`. The result has `stopped`, `rebuilt`, and `notified`. `notified` lists the dependents with a `dependency-change` handler, because the handler decides. An ancestor provider that serves counts as an alternative, so its dependents rebuild and do not stop.
+
 ### Listener registry
 
 injeca does not dispatch events. It gives consumers a place to store listeners that a container owns:
@@ -513,6 +535,7 @@ injeca does not dispatch events. It gives consumers a place to store listeners t
 - `listen(container, eventKey, handler, metadata?)` stores a listener. The container owns it.
 - `listeners(container, eventKey)` returns the current listeners, with owner and metadata. Metadata examples are priority, timeout, and failure policy.
 - An event key is any object with a string `id`. eventa definitions have this shape. injeca does not import eventa.
+- `listen()` returns a function that removes the listener. `listeners()` covers the container and its descendants, in registration order.
 
 The consumer defines the rules that run these listeners. For example, the AIRI harness combines gate decisions, runs transform hooks in a declared order, and collects inject hooks in parallel.
 
@@ -546,12 +569,12 @@ The implementation has two layers. The interactive model uses the same split.
 | --- | --- |
 | Root | `index.ts` (public entry), `scoped.ts` (functions that take a container), `global.ts` (the global `injeca` object) |
 | `primitives/` | The public composition primitives: `provide`, `invoke`, `resolve`, `start` and `stop`, keys, containers, and decisions |
-| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, and later the graph queries |
+| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, the graph queries, and `listeners` |
 | `diagnostics/` | Errors, explanations, and the logger |
 | `types/` | Public types, by area |
 | `graph/` | `graph.ts` (the data model of the graph: the node types, `DependencyEdge`, `Resolution`, `StatusValue`, `Runtime`, `Reconciler`, and `Observer`), status, and observers |
-| `graph/nodes/` | The functions for each node kind: `container`, `service`, and `edge`. The types are in `graph.ts`, because they refer to each other |
-| `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution. `plain.ts` and `fallback.ts` resolve each edge kind |
+| `graph/nodes/` | The functions for each node kind: `container`, `service`, `edge`, `registration`, and `consumer` (the services of a `perConsumer` registration), with `definition` (the options of one registration). The types are in `graph.ts`, because they refer to each other |
+| `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution and the shadowing rule. `plain.ts` and `fallback.ts` resolve each edge kind. `exclusive.ts` has the conflicts. `condition.ts` runs the resolution conditions |
 | `reconciler/` | The execution layer. `reconciler.ts` has the queue and the drain. Each transition has one file |
 | `helpers/` | Internal building blocks: signals, the delivery queue, the cleanup context, the clock, and small utilities |
 | `testing/` | The `injeca/testing` entry (`testing.ts`) and test helpers |

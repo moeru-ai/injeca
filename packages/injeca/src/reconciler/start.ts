@@ -6,6 +6,7 @@ import { epochOf } from '../graph/resolvers/resolvers'
 import { loggerOf } from './calls'
 import { beginHookRun, finishRun, recordDecision, runHandlers } from './hook-run'
 import { enterStopping } from './stop'
+import { completeSwap } from './swap'
 
 /** Runs the `start` hooks of a built instance. The service moves to `running`, or it stops. */
 export async function runStart(service: ServiceNode, instance: InstanceNode): Promise<void> {
@@ -39,7 +40,11 @@ export async function runStart(service: ServiceNode, instance: InstanceNode): Pr
     case 'handled':
       logger?.hookOnStartComplete(service.name, performance.now() - startTime)
       // A dependency that changed during the start is a change for the running service.
-      setPhase(service, 'running')
+      // A new service of a replacement swaps in only now, so the old instance serves until here.
+      if (service.swap)
+        completeSwap(service)
+      else
+        setPhase(service, 'running')
       return
     case 'stop':
       enterStopping(service, { parkEpoch: epochOf(service, edge => instance.bindings.get(edge.name)), reason: decision?.reason, decision: 'stop' })

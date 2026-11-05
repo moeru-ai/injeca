@@ -111,6 +111,7 @@ export function createBuildContext(service: ServiceNode, instance: InstanceNode)
     container: service.container.api,
     name: service.name,
     instanceId: instance.id,
+    ...withoutUndefined({ consumer: service.consumer }),
     dependsOn: Object.freeze(dependsOn),
     on: (hook: unknown, handler: RawHookHandler) => {
       if (!instance.building)

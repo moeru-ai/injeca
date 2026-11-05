@@ -1,0 +1,255 @@
+import type { BuildContext } from '../types'
+
+import { describe, expect, it, vi } from 'vitest'
+
+import { ReplaceWhileStoppingError } from '../diagnostics/errors'
+import { provide, start, stop } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, stateOf } from '../testing/helpers'
+
+describe('replace', () => {
+  it('does not let a stale registration replace a newer service (design test 1)', async () => {
+    const app = createTestContainer()
+    const first = provide(app, 'airi.llm', () => 'first')
+    const second = provide(app, 'airi.llm', () => 'second')
+    await start(app)
+
+    await expect(first.replace(() => 'from stale')).resolves.toBe(false)
+    expect(stateOf(app, 'airi.llm').phase).toBe('running')
+
+    await second.withdraw()
+    await expect(second.replace(() => 'after withdraw')).resolves.toBe(false)
+  })
+
+  it('replaces an unavailable service. The new instance is ready after start, and dependents return to ready (design test 24)', async () => {
+    const app = createTestContainer()
+    let setStatus: BuildContext['setStatus'] = () => {}
+    const llm = provide(app, 'airi.llm', (context) => {
+      setStatus = context.setStatus
+      return 'old'
+    })
+    const speechBuild = vi.fn(({ dependsOn }: { dependsOn: { llm: string } }) => `speech(${dependsOn.llm})`)
+    provide(app, 'voice.speech', { dependsOn: { llm }, build: speechBuild })
+    await start(app)
+
+    setStatus('unavailable', 'gateway down')
+    await drained(app)
+    expect(stateOf(app, 'voice.speech').status).toBe('unavailable')
+    const oldId = stateOf(app, llm).instanceId
+
+    await expect(llm.replace(() => 'new')).resolves.toBe(true)
+    await drained(app)
+
+    const state = stateOf(app, llm)
+    expect(state).toMatchObject({ phase: 'running', status: 'ready' })
+    expect(state.instanceId).not.toBe(oldId)
+    expect(stateOf(app, 'voice.speech')).toMatchObject({ phase: 'running', status: 'ready' })
+    // The dependent has no handler, so it rebuilds with the new instance.
+    expect(speechBuild).toHaveBeenLastCalledWith(expect.objectContaining({ dependsOn: { llm: 'new' } }))
+  })
+
+  it('keeps the old instance and its status when the new start fails (design test 25)', async () => {
+    const app = createTestContainer()
+    let setStatus: BuildContext['setStatus'] = () => {}
+    const oldStop = vi.fn()
+    const llm = provide(app, 'airi.llm', (context) => {
+      setStatus = context.setStatus
+      context.on('stop', oldStop)
+      return 'old'
+    })
+    const speechBuild = vi.fn(() => 'speech')
+    provide(app, 'voice.speech', { dependsOn: { llm }, build: speechBuild })
+    await start(app)
+    setStatus('degraded', 'fallback voice')
+    await drained(app)
+    const { records } = collectRecords(app)
+    const before = stateOf(app, llm)
+
+    const error = new Error('cannot listen')
+    const newStop = vi.fn()
+    await expect(llm.replace(({ on }) => {
+      on('start', () => {
+        throw error
+      })
+      on('stop', newStop)
+      return 'new'
+    })).rejects.toBe(error)
+    await drained(app)
+
+    expect(stateOf(app, llm)).toEqual(before)
+    expect(stateOf(app, llm).status).toBe('degraded')
+    expect(speechBuild).toHaveBeenCalledTimes(1)
+    expect(oldStop).not.toHaveBeenCalled()
+    // A failed start runs the stop hooks of the new instance, as for any start that fails.
+    expect(newStop).toHaveBeenCalledTimes(1)
+    expect(records).toContainEqual(expect.objectContaining({ type: 'phase', key: 'airi.llm', to: 'failed' }))
+
+    // The registration stays current. A later replace works.
+    await expect(llm.replace(() => 'newer')).resolves.toBe(true)
+  })
+
+  it('keeps the old instance when the new build fails', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const before = stateOf(app, llm)
+
+    const error = new Error('bad module')
+    await expect(llm.replace(() => {
+      throw error
+    })).rejects.toBe(error)
+    expect(stateOf(app, llm)).toEqual(before)
+  })
+
+  it('serves the old instance during the new build and start, and swaps in one batch', async () => {
+    const app = createTestContainer()
+    const startGate = deferred()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    const changes: unknown[] = []
+    provide(app, 'voice.speech', {
+      dependsOn: { llm },
+      build: ({ on }) => {
+        on('dependency-change', ({ dependsOn, changes: list, decide }) => {
+          changes.push({ value: dependsOn.llm.value, changes: list.length })
+          return decide.handled()
+        })
+        return 'speech'
+      },
+    })
+    await start(app)
+    const oldId = stateOf(app, llm).instanceId
+
+    const replaced = llm.replace(({ on }) => {
+      on('start', () => startGate.promise)
+      return 'new'
+    })
+    await drained(app)
+    // The new instance is starting. The old instance still serves.
+    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
+    expect(changes).toEqual([])
+
+    startGate.resolve()
+    await expect(replaced).resolves.toBe(true)
+    await drained(app)
+    expect(stateOf(app, llm).instanceId).not.toBe(oldId)
+    expect(changes).toEqual([{ value: 'new', changes: 1 }])
+  })
+
+  it('disposes the old instance only after the last holder moves to the new instance (design test 26)', async () => {
+    const app = createTestContainer()
+    const order: string[] = []
+    const holdGate = deferred()
+    const llm = provide(app, 'airi.llm', ({ on }) => {
+      on('stop', () => {
+        order.push('old llm stop')
+      })
+      return 'old'
+    })
+    // The first holder moves at once with its handler.
+    provide(app, 'voice.fast', {
+      dependsOn: { llm },
+      build: ({ on }) => {
+        on('dependency-change', ({ decide }) => decide.handled())
+        return 'fast'
+      },
+    })
+    // The second holder has no handler. It stops and rebuilds, and its stop hook waits.
+    provide(app, 'voice.slow', {
+      dependsOn: { llm },
+      build: ({ on, dependsOn }) => {
+        on('stop', async () => {
+          order.push(`slow stop with ${dependsOn.llm}`)
+          await holdGate.promise
+        })
+        return 'slow'
+      },
+    })
+    await start(app)
+
+    await llm.replace(() => 'new')
+    await drained(app)
+    expect(order).toEqual(['slow stop with old'])
+
+    holdGate.resolve()
+    await drained(app)
+    expect(order).toEqual(['slow stop with old', 'old llm stop'])
+    expect(stateOf(app, 'voice.slow').phase).toBe('running')
+  })
+
+  it('fails with replace-while-stopping for a service in stopping (design test 27)', async () => {
+    const app = createTestContainer()
+    const holdGate = deferred()
+    const llm = provide(app, 'airi.llm', () => 'llm')
+    provide(app, 'voice.speech', {
+      dependsOn: { llm },
+      build: ({ on }) => {
+        on('stop', () => holdGate.promise)
+        return 'speech'
+      },
+    })
+    await start(app)
+
+    // `stop()` keeps the registrations. The provider waits for its holder in `stopping`.
+    const stopped = stop(app)
+    await drained(app)
+    expect(stateOf(app, llm).phase).toBe('stopping')
+    await expect(llm.replace(() => 'new')).rejects.toBeInstanceOf(ReplaceWhileStoppingError)
+
+    holdGate.resolve()
+    await stopped
+  })
+
+  it('replaces a service that does not run at once', async () => {
+    const app = createTestContainer()
+    const build = vi.fn(() => 'new')
+    const llm = provide(app, 'airi.llm', {
+      dependsOn: { missing: 'not.provided' },
+      build: () => 'old',
+    })
+    void start(app)
+    await drained(app)
+    expect(stateOf(app, llm).phase).toBe('pending')
+
+    await expect(llm.replace(build)).resolves.toBe(true)
+    await drained(app)
+    expect(stateOf(app, llm).phase).toBe('running')
+    expect(build).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a newer replace supersede a pending one, and a withdrawal cancel it', async () => {
+    const app = createTestContainer()
+    const gate = deferred()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+
+    const first = llm.replace(({ on }) => {
+      on('start', () => gate.promise)
+      return 'first'
+    })
+    await drained(app)
+    const second = llm.replace(() => 'second')
+    await expect(first).resolves.toBe(false)
+    await expect(second).resolves.toBe(true)
+    gate.resolve()
+
+    const third = llm.replace(({ on }) => {
+      on('start', () => new Promise(() => {}))
+      return 'third'
+    })
+    await drained(app)
+    await expect(llm.withdraw()).resolves.toBe(true)
+    await expect(third).resolves.toBe(false)
+    expect(stateOf(app, llm).phase).toBeUndefined()
+  })
+
+  it('keeps the metadata when the option has none, and takes new dependencies', async () => {
+    const app = createTestContainer()
+    const config = provide(app, 'airi.config', () => ({ model: 'gpt' }))
+    const llm = provide(app, 'airi.llm', { metadata: { version: '1.0.0' }, build: () => 'old' })
+    await start(app)
+
+    const build = vi.fn((model: string) => model)
+    await llm.replace({ dependsOn: { config }, build: ({ dependsOn }) => build(dependsOn.config.model) })
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(stateOf(app, llm).phase).toBe('running')
+  })
+})

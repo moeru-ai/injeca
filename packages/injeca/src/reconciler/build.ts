@@ -1,10 +1,12 @@
 import type { InstanceNode, ServiceNode, StatusValue } from '../graph/graph'
 import type { DependencyState } from '../types'
+import type { Snapshot } from './snapshot'
 
 import { signal } from 'alien-signals'
 
-import { setPhase } from '../graph/nodes'
-import { buildLost, epochOf, findProvider, requiredAvailable, resolutionOf, resolvedInstance } from '../graph/resolvers/resolvers'
+import { ensureConsumerService, setPhase } from '../graph/nodes'
+import { inConflict } from '../graph/resolvers/exclusive'
+import { buildLost, candidatesOf, epochOf, requiredAvailable, resolutionOf, resolvedInstance } from '../graph/resolvers/resolvers'
 import { batch } from '../helpers/signals'
 import { createBuildContext } from './build-context'
 import { invokeUser, loggerOf } from './calls'
@@ -13,15 +15,20 @@ import { currentSnapshot } from './snapshot'
 import { runStart } from './start'
 import { finalize, mergeIntent, teardown } from './stop'
 
-type BuildResult = { readonly ok: true, readonly value: unknown } | { readonly ok: false, readonly error: unknown }
+export type BuildResult = { readonly ok: true, readonly value: unknown } | { readonly ok: false, readonly error: unknown }
 
-/** An active service makes the providers of its edges converge too, before `start()`. A fallback edge demands each candidate. */
+/**
+ * An active service makes the providers of its edges converge too, before `start()`. A fallback edge demands each candidate.
+ * A `perConsumer` registration gets a service for the container of `service`. The nearest registration of each key is demanded.
+ */
 function demandProviders(service: ServiceNode): void {
   for (const edge of service.edges) {
     for (const keyName of edge.candidates) {
-      const provider = findProvider(service.container, keyName, service)
-      if (provider && !provider.signals.serving() && !provider.signals.demanded())
-        provider.signals.demanded(true)
+      const candidates = candidatesOf(service.container, keyName, service)
+      const providers = candidates.map(registration => registration.perConsumer ? ensureConsumerService(registration, service.container) : registration)
+      const [nearest] = providers
+      if (nearest && !nearest.signals.serving() && !nearest.signals.demanded())
+        nearest.signals.demanded(true)
     }
   }
 }
@@ -46,6 +53,10 @@ export function reconcilePending(service: ServiceNode): void {
     finalize(service)
     return
   }
+  if (inConflict(service)) {
+    setPhase(service, 'conflict', { reason: `The exclusive key '${service.name}' has more than one declaration.` })
+    return
+  }
   if (!service.signals.active())
     return
 
@@ -62,9 +73,15 @@ export function reconcilePending(service: ServiceNode): void {
 }
 
 function beginBuild(service: ServiceNode): void {
+  const instance = prepareInstance(service, currentSnapshot(service))
+  void runBuild(service, instance).then(result => completeBuild(service, instance, result))
+}
+
+/** Creates the instance of a build from a snapshot of its dependencies, and moves the service to `building`. The service holds each bound provider. */
+export function prepareInstance(service: ServiceNode, snapshot: Snapshot): InstanceNode {
   const bindings = new Map<string, InstanceNode>()
   const handled = new Map<string, DependencyState | undefined>()
-  for (const [name, entry] of currentSnapshot(service)) {
+  for (const [name, entry] of snapshot) {
     handled.set(name, entry?.state)
     if (entry)
       bindings.set(name, entry.instance)
@@ -99,16 +116,22 @@ function beginBuild(service: ServiceNode): void {
     setPhase(service, 'building')
   })
 
+  return instance
+}
+
+/** Runs `build` for a prepared instance. It never rejects. */
+export function runBuild(service: ServiceNode, instance: InstanceNode): Promise<BuildResult> {
   const logger = loggerOf(service)
   logger?.beforeRun(service.name)
   const startTime = performance.now()
   const buildContext = createBuildContext(service, instance)
-  invokeUser(() => service.build(buildContext)).then(
-    (value) => {
+
+  return invokeUser(() => service.build(buildContext)).then(
+    (value): BuildResult => {
       logger?.run(service.name, performance.now() - startTime)
-      completeBuild(service, instance, { ok: true, value })
+      return { ok: true, value }
     },
-    (error: unknown) => completeBuild(service, instance, { ok: false, error }),
+    (error: unknown): BuildResult => ({ ok: false, error }),
   )
 }
 

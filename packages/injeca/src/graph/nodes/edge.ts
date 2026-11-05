@@ -1,11 +1,11 @@
-import type { ProvidedKey } from '../../types'
+import type { ProvidedKey, ResolutionCondition } from '../../types'
 import type { DependencyEdge } from '../graph'
 
 import { InvalidArgumentError } from '../../diagnostics/errors'
-import { isFallbackDependency, isOptionalDependency, normalizeName } from '../../primitives/keys'
+import { isConditionalDependency, isFallbackDependency, isOptionalDependency, normalizeName } from '../../primitives/keys'
 
-function edgeOf(name: string, candidates: readonly string[], optional: boolean, fallback: boolean): DependencyEdge {
-  return Object.freeze({ name, keyName: candidates.join(' | '), candidates, optional, fallback })
+function edgeOf(name: string, candidates: readonly string[], optional: boolean, fallback: boolean, condition?: ResolutionCondition): DependencyEdge {
+  return Object.freeze({ name, keyName: candidates.join(' | '), candidates, optional, fallback, ...(condition ? { condition } : {}) })
 }
 
 /**
@@ -27,7 +27,9 @@ export function readEdges(owner: string, dependsOn: unknown): readonly Dependenc
 
   return Object.freeze(entries.map(([name, dependency]): DependencyEdge => {
     if (isOptionalDependency(dependency))
-      return edgeOf(name, dependency.dependencies, true, dependency.dependencies.length > 1)
+      return edgeOf(name, dependency.dependencies, true, dependency.dependencies.length > 1, dependency.condition)
+    if (isConditionalDependency(dependency))
+      return edgeOf(name, dependency.dependencies, false, false, dependency.condition)
     if (isFallbackDependency(dependency))
       return edgeOf(name, dependency.dependencies, false, true)
     if (typeof dependency === 'string' || (typeof dependency === 'object' && dependency !== null && 'key' in dependency)) {
@@ -36,6 +38,6 @@ export function readEdges(owner: string, dependsOn: unknown): readonly Dependenc
         return edgeOf(name, Object.freeze([keyName]), false, false)
     }
 
-    throw new InvalidArgumentError(`The dependency '${name}' of '${owner}' is not a name, a key, an optional marker, or a fallback marker.`)
+    throw new InvalidArgumentError(`The dependency '${name}' of '${owner}' is not a name, a key, an optional marker, a fallback marker, or a condition marker.`)
   }))
 }

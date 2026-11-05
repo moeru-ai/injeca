@@ -132,13 +132,12 @@ describe('dependency-change', () => {
     await drained(root)
 
     expect(builds).toHaveBeenCalledTimes(1)
-    // The child provider shadows the root provider as soon as it registers, so the dependency disappears until it runs.
+    // The child provider shadows the root provider only while it runs. So the dependency moves without a gap.
     expect(calls).toEqual([
       { tts: 'root tts', previous: undefined },
-      { tts: undefined, previous: 'call 1' },
-      { tts: 'child tts', previous: 'call 2' },
-      { tts: 'root tts', previous: 'call 3' },
-      { tts: undefined, previous: 'call 4' },
+      { tts: 'child tts', previous: 'call 1' },
+      { tts: 'root tts', previous: 'call 2' },
+      { tts: undefined, previous: 'call 3' },
     ])
   })
 

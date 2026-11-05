@@ -3,8 +3,7 @@ import type { BuildContext, StatusCause } from '../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { InvalidArgumentError, StartTimeoutError } from '../diagnostics/errors'
-import { explainKey } from '../diagnostics/explain'
-import { defineKey, optional, provide, start } from '../scoped'
+import { defineKey, graph, optional, provide, start } from '../scoped'
 import { collectRecords, createTestContainer, drained, manualClock, stateOf } from '../testing/helpers'
 
 type SetStatus = BuildContext['setStatus']
@@ -238,7 +237,7 @@ describe('effective status', () => {
     proxy.setStatus('unavailable', { reason: 'the remote store is offline', cause: remoteCause })
 
     const chain = { key: 'gateway.logs', owner: { kind: 'host' }, status: 'unavailable', reason: 'the remote store is offline', cause: remoteCause }
-    expect(explainKey(app, 'voice.speech')).toMatchObject({ phase: 'running', status: 'unavailable', cause: chain })
+    expect(graph(app).explain('voice.speech')).toMatchObject({ phase: 'running', status: 'unavailable', cause: chain })
 
     // A dependent that waits lists the unavailable dependency as a blocker, with the same chain.
     provide(app, 'voice.summary', { dependsOn: { logs: proxy.registration }, build: () => 'summary' })

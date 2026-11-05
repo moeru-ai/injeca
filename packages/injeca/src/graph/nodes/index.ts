@@ -1,3 +1,6 @@
+export * from './consumer'
 export * from './container'
+export * from './definition'
 export * from './edge'
+export * from './registration'
 export * from './service'

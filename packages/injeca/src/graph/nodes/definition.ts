@@ -1,0 +1,55 @@
+import type { ServiceMetadata } from '../../types'
+import type { BuildFunction, ServiceDefinition } from '../graph'
+
+import { InvalidArgumentError } from '../../diagnostics/errors'
+import { readEdges } from './edge'
+
+const emptyMetadata: ServiceMetadata = Object.freeze({})
+
+function readMetadata(name: string, metadata: unknown, fallback: ServiceMetadata | undefined): ServiceMetadata {
+  if (metadata === undefined)
+    return fallback ?? emptyMetadata
+  if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata))
+    throw new InvalidArgumentError(`The metadata option of '${name}' must be a record.`)
+
+  try {
+    return Object.freeze({ ...metadata })
+  }
+  catch (error) {
+    throw new InvalidArgumentError(`Cannot read the metadata option of '${name}'.`, { cause: error })
+  }
+}
+
+/**
+ * Reads the options of one registration once: the function shorthand, or the object form.
+ * Reading caller-owned properties happens inside a narrow `try`. `inherit` gives the metadata when the options have none.
+ */
+export function readDefinition(name: string, option: unknown, inherit?: { readonly metadata: ServiceMetadata }): ServiceDefinition {
+  let build: unknown
+  let dependsOn: unknown
+  let metadata: unknown
+  let perConsumer: unknown
+  try {
+    const object: { build?: unknown, dependsOn?: unknown, metadata?: unknown, perConsumer?: unknown } = typeof option === 'function'
+      ? { build: option }
+      : typeof option === 'object' && option !== null ? option : {}
+    build = object.build
+    dependsOn = object.dependsOn
+    metadata = object.metadata
+    perConsumer = object.perConsumer
+  }
+  catch (error) {
+    throw new InvalidArgumentError(`Cannot read the provide options of '${name}'.`, { cause: error })
+  }
+  if (typeof build !== 'function')
+    throw new InvalidArgumentError(`The build option of '${name}' is not a function.`)
+  if (perConsumer !== undefined && typeof perConsumer !== 'boolean')
+    throw new InvalidArgumentError(`The perConsumer option of '${name}' must be a boolean.`)
+
+  return {
+    edges: readEdges(name, dependsOn),
+    build: build as BuildFunction,
+    metadata: readMetadata(name, metadata, inherit?.metadata),
+    perConsumer: perConsumer === true,
+  }
+}
