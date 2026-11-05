@@ -609,12 +609,14 @@ The reconciler owns async work.
 
 Each step is one pull request in `moeru-ai/injeca` with its tests. The 0.2 tests must pass at each step without changes, except the tests of `lifecycle`.
 
-1. Core: the new engine under the 0.2 API. Keys with `withdraw()`, `defineKey`, `optional`, the build context (`on('start')`, `on('stop')`, `effect`, `signal`), invocations, `resolve`, `start`, `stop`, child containers, `dispose`, decisions, and errors. The `lifecycle` key is removed.
-2. Convergence: run-time `provide` and withdrawal, epochs, holder waits, `dependency-change`, status and effective status, `setStatus` after `build`, cause chains, `firstAvailable`, `dependency-status-change`, `watch`, `waitFor`, and `observe`.
-3. Composition: transactions, atomic replacement, exclusive keys, resolution conditions, `perConsumer`, key isolation, graph queries, and the listener registry.
-4. Retries: requeue, backoff, `maxAttempts`, and timeouts.
-5. Release: the README, the injeca skill, and version 0.3.0.
-6. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
+Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The maintainer releases it with `bumpp` after the merge. Step 6 is the next work.
+
+1. Done. Core: the new engine under the 0.2 API. Keys with `withdraw()`, `defineKey`, `optional`, the build context (`on('start')`, `on('stop')`, `effect`, `signal`), invocations, `resolve`, `start`, `stop`, child containers, `dispose`, decisions, and errors. The `lifecycle` key is removed.
+2. Done. Convergence: run-time `provide` and withdrawal, epochs, holder waits, `dependency-change`, status and effective status, `setStatus` after `build`, cause chains, `firstAvailable`, `dependency-status-change`, `watch`, `waitFor`, and `observe`.
+3. Done. Composition: transactions, atomic replacement, exclusive keys, resolution conditions, `perConsumer`, key isolation, graph queries, and the listener registry.
+4. Done. Retries: requeue, backoff, `maxAttempts`, and timeouts.
+5. Done, except the publish. Release: the README, the injeca skill, and version 0.3.0.
+6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
 

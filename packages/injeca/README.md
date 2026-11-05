@@ -116,6 +116,64 @@ on('start', async ({ decide, attempt }) => {
 })
 ```
 
+### Retries
+
+A `start` hook can return `decide.requeue()` to try again later. The service keeps its instance, so `build` does not run again.
+
+```ts
+on('start', async ({ decide }) => {
+  try {
+    await device.connect()
+  }
+  catch (error) {
+    return decide.requeue({
+      backoff: { kind: 'exponential', initial: 500, max: 30_000, jitter: 0.2 },
+      maxAttempts: 5,
+      reason: `connect failed: ${String(error)}`,
+    })
+  }
+})
+```
+
+- During the wait, the service is `retrying`. It is not available, so its dependents stay `pending`. It still holds its dependencies.
+- `after: ms` sets a fixed delay. `backoff` doubles `initial` for each attempt, up to `max`. `jitter` is a fraction from 0 to 1 that takes a random part away from each delay.
+- The next attempt runs the `start` handler that requeued, then the handlers after it.
+- Changes during the wait merge into one attempt. A withdrawn required dependency, or `stop()`, cancels the wait and stops the service at once.
+- A dependency hook can requeue too. The service stays `running` with its current dependencies during the wait.
+- injeca has no built-in delay or limit. Without `maxAttempts`, the retries continue.
+
+`maxAttempts` limits the runs of one hook for one instance. It can come from the decision, the `provide` options, or the container options. The decision wins over the service, and the service wins over the container. A child container uses the value of its nearest ancestor.
+
+```ts
+const container = createContainer({ maxAttempts: 10, random: () => 0.5 }) // a fixed random source for deterministic tests
+injeca.provide('modules:device', { maxAttempts: 3, build: () => createDevice() })
+```
+
+When the attempts end, a running service stops first. Then it goes to `failed` with the last reason. `start()` again, `stop()` and `start()`, or `replace()` moves it out of `failed`.
+
+### Timeouts
+
+`start` and `stop` hooks wait until they settle. Set `timeouts` to limit them. A service value overrides the container value. injeca has no built-in timeout.
+
+```ts
+const container = createContainer({ timeouts: { stop: 5_000 } })
+
+provide(container, 'modules:camera', {
+  timeouts: { start: 10_000 },
+  onTimeout: (context) => {
+    if (context.hook === 'start')
+      return context.decide.requeue({ after: 1_000, maxAttempts: 3 })
+    return context.decide.fail(new Error('The camera did not close.'))
+  },
+  build: () => createCamera(),
+})
+```
+
+- The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
+- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
+- `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
+- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+
 ## Changes at run time
 
 Services can appear and disappear after `start()`. Dependents converge automatically.
@@ -318,7 +376,7 @@ const stopObserving = observe(container, (record) => {})
 ```
 
 - `watch` sends the current state at once, then each change, in order.
-- `observe` sends each phase change, status change, and decision in the container and its children.
+- `observe` sends each phase change, status change, decision, and hook timeout in the container and its children.
 
 ### Graph queries
 
@@ -387,10 +445,6 @@ Other differences:
 - `start()` waits for a missing provider. 0.2 threw an error. Use `start({ timeoutMs })` to fail after a time.
 - `resolve()` waits for a missing provider too. Before `start()`, it builds the services that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `withdraw()`. Its callback runs again when a required dependency gets a new instance.
-
-## Planned
-
-`start` retries with backoff, `maxAttempts`, and timeouts are not in this release yet. See [the 0.3 design](../../docs/design-0.3.md).
 
 ## License
 
