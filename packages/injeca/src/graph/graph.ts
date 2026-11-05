@@ -120,6 +120,8 @@ export interface ServiceDefinition {
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata
   readonly perConsumer: boolean
+  /** `true` when the registration is a candidate for consumers in the resolution area of the parent container. */
+  readonly exported: boolean
   readonly policy: Policy
 }
 
@@ -215,6 +217,11 @@ export interface ServiceNode {
   readonly policy: Policy
   /** `true` when the key of the service is exclusive. */
   readonly exclusive: boolean
+  /**
+   * `true` for an exported registration. It lives in its container, and it is also a candidate for consumers in the resolution area of the parent container.
+   * A consumer service of a `perConsumer` registration is never exported. It lives in the consumer container.
+   */
+  readonly exported: boolean
   /** `true` for the registration of a `perConsumer` service. It never builds. Each consumer container gets its own service. */
   readonly perConsumer: boolean
   /** The `perConsumer` registration that this consumer service belongs to. A replacement of the registration moves it. */
@@ -275,6 +282,8 @@ export interface TransactionEntry {
   /** The registration that `tx.provide` returned. */
   registration: RegistrationNode | undefined
   exclusive: boolean
+  /** `true` when `tx.provide` exports the key. The reservation of an exclusive key then counts in the resolution area of the parent container. */
+  exported: boolean
   /** The declaration that reserves an exclusive key until the commit or the abort. See `nodes/reservation.ts`. */
   reservation: ServiceNode | undefined
 }
@@ -297,6 +306,8 @@ export interface ContainerSignals {
   readonly started: WritableSignal<boolean>
   /** The current service for each key name. */
   readonly slots: Map<string, WritableSignal<ServiceNode | undefined>>
+  /** The current exported services of the child containers for each key name, in container creation order. */
+  readonly exports: Map<string, WritableSignal<readonly ServiceNode[]>>
 }
 
 export interface ContainerNode {

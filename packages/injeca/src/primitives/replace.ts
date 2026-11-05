@@ -32,6 +32,7 @@ export function createSuccessor(target: ServiceNode, definition: ServiceDefiniti
       metadata: definition.metadata,
       policy: definition.policy,
       exclusive: target.exclusive,
+      exported: target.exported,
       template,
       consumer: target.consumer,
       registration: target.registration,
@@ -92,6 +93,7 @@ export function replaceAtOnce(registration: RegistrationNode, target: ServiceNod
       metadata: definition.metadata,
       policy: definition.policy,
       exclusive: target.exclusive,
+      exported: target.exported,
       perConsumer: target.perConsumer,
       registration,
     })
@@ -113,7 +115,7 @@ export function replaceAtOnce(registration: RegistrationNode, target: ServiceNod
  * A newer `replace` or a withdrawal cancels the replacement.
  */
 export function replaceTemplate(registration: RegistrationNode, target: ServiceNode, template: ServiceNode): Promise<SwapOutcome> {
-  const definition: ServiceDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, perConsumer: true, policy: template.policy }
+  const definition: ServiceDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, perConsumer: true, exported: false, policy: template.policy }
   const outcome = createDeferred<SwapOutcome>()
   const waiting = new Set<ServiceNode>()
   const held = new Set<ServiceNode>()
@@ -230,6 +232,7 @@ async function replace(registration: RegistrationNode, option: unknown): Promise
           metadata: definition.metadata,
           policy: definition.policy,
           exclusive: target.exclusive,
+          exported: target.exported,
           perConsumer: true,
           registration,
         })

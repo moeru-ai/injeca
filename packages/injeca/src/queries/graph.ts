@@ -38,6 +38,7 @@ function entryOf(service: ServiceNode): GraphService {
     metadata: service.metadata,
     exclusive: service.exclusive,
     perConsumer: service.perConsumer,
+    exported: service.exported,
   })
 }
 
@@ -50,6 +51,7 @@ function declaredEntryOf(container: ContainerNode, entry: TransactionEntry): Gra
     metadata: entry.definition?.metadata ?? emptyMetadata,
     exclusive: entry.exclusive,
     perConsumer: entry.definition?.perConsumer ?? false,
+    exported: entry.exported,
   })
 }
 
@@ -217,7 +219,8 @@ function proposedChange(scope: ContainerNode, change: ImpactChange): ProposedCha
 /**
  * Returns the graph queries of `container`. They cover the container and its descendants. Each query is a pure read.
  *
- * A key resolves as for a consumer in the container: from the container, then from its ancestors. A key that only a descendant has resolves to the first such service.
+ * A key resolves as for a consumer in the container: from the container and the exports of its children, then from each ancestor and the exports of its children.
+ * A key that only a descendant has resolves to the first such service.
  */
 export function graph(container: Container): Graph {
   const scope = nodeOf(container)

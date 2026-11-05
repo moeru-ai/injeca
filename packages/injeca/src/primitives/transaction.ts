@@ -92,7 +92,7 @@ function createMembers(transaction: TransactionNode): Member[] {
       const registration = target.registration ?? createRegistration(container, entry.name, target.exclusive)
       const service = target.signals.phase() === 'running' && !target.perConsumer
         ? replaceRunning(registration, target, definition, extra).service
-        : serviceOf(container, entry.name, { ...definition, perConsumer: target.perConsumer }, target.exclusive, { ...extra, registration })
+        : serviceOf(container, entry.name, { ...definition, perConsumer: target.perConsumer, exported: target.exported }, target.exclusive, { ...extra, registration })
       members.push({ entry, service, target })
     }
   })
@@ -181,7 +181,7 @@ function assertOpen(transaction: TransactionNode, action: string): void {
 function entryOf(transaction: TransactionNode, name: string, exclusive: boolean): TransactionEntry {
   let entry = transaction.entries.get(name)
   if (!entry) {
-    entry = { name, declared: undefined, optional: false, definition: undefined, replace: false, target: undefined, registration: undefined, exclusive, reservation: undefined }
+    entry = { name, declared: undefined, optional: false, definition: undefined, replace: false, target: undefined, registration: undefined, exclusive, exported: false, reservation: undefined }
     transaction.entries.set(name, entry)
   }
 
@@ -234,10 +234,17 @@ export function transaction(container: Container): Transaction {
 
       entry.definition = undefined
       entry.registration = undefined
-      if (!entry.declared) {
-        state.entries.delete(entry.name)
-        untracked(() => releaseReservation(entry))
-      }
+      entry.exported = false
+      untracked(() => {
+        if (!entry.declared) {
+          state.entries.delete(entry.name)
+          releaseReservation(entry)
+        }
+        else {
+          // The declaration stays, in the resolution area of the container itself.
+          reserveKey(state, entry)
+        }
+      })
       return true
     }
     if (state.state === 'committing')
@@ -262,6 +269,7 @@ export function transaction(container: Container): Transaction {
     const registration: RegistrationNode = createRegistration(node, name, entry.exclusive)
     entry.definition = definition
     entry.registration = registration
+    entry.exported = definition.exported
     untracked(() => reserveKey(state, entry))
 
     return registrationApi(registration, { withdraw: () => withdrawEntry(entry, registration) })

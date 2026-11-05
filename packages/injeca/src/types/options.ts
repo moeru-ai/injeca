@@ -11,6 +11,12 @@ export interface RegistrationOptions extends PolicyOptions {
    * Each instance disposes with its consumer container.
    */
   perConsumer?: boolean
+  /**
+   * Exports the registration one level up. The registration stays in its container: its owner, its disposal, its dependencies, and its phases.
+   * It is also a candidate for consumers in the resolution area of the parent container: the parent and each descendant of the parent.
+   * For an exclusive key, it counts as a declaration in that area. On a root container, it has no effect.
+   */
+  export?: boolean
 }
 
 export type ProvideOptionObject<T, D extends DependencyMap | undefined = undefined> = { build: (context: BuildContext<D>) => T | Promise<T> } & RegistrationOptions & (D extends undefined ? { dependsOn?: Record<string, never> } : { dependsOn: { [K in keyof D]: string } })

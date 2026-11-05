@@ -77,6 +77,8 @@ export interface CreateServiceInput {
   /** The retry and timeout options of the registration. An invocation has none. */
   readonly policy?: Policy
   readonly exclusive?: boolean
+  /** `true` for an exported registration. A consumer service of a `perConsumer` registration is never exported. */
+  readonly exported?: boolean
   readonly perConsumer?: boolean
   readonly template?: ServiceNode
   readonly consumer?: OwnerRecord
@@ -122,6 +124,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
     metadata: input.metadata ?? emptyMetadata,
     policy: input.policy ?? emptyPolicy,
     exclusive: input.exclusive ?? false,
+    exported: input.template === undefined && (input.exported ?? false),
     perConsumer: input.perConsumer ?? false,
     template: input.template,
     consumer: input.consumer,

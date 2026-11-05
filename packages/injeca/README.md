@@ -173,6 +173,7 @@ provide(container, 'modules:camera', {
 - When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
 - `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
 - After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+- With `createContainer({ asyncContext })`, such a cleanup gets a `ReentrantDisposeError` at once and needs no timeout. See [Containers](#containers).
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 
 ## Changes at run time
@@ -272,6 +273,8 @@ const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: 
 
 If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges. `graph(container).explain()` lists the owner of each provider.
 
+An [exported registration](#exported-registrations) counts in the area of the parent container. So two sibling plugins that export one exclusive key conflict, and so do a host registration and a plugin export of that key.
+
 ### Resolution conditions
 
 `where(key, condition)` accepts a provider only when the condition returns `true`. The condition reads the key, the owner, and the `metadata` of the provider.
@@ -353,7 +356,46 @@ await dispose(plugin)
 - `start(container, { timeoutMs })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use `timeoutMs` to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
-- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors.
+- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
+- A dispose call from the synchronous part of a cleanup of the same container, or of a descendant, rejects with `ReentrantDisposeError` (`reentrant-dispose`). After an `await`, injeca detects it only with an `asyncContext`.
+
+### Async context
+
+injeca imports no runtime module. To detect a cleanup that awaits the disposal of its own container after an `await`, give the root container an async context. In Node, use `AsyncLocalStorage`:
+
+```ts
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+const storage = new AsyncLocalStorage<unknown>()
+const host = createContainer({
+  asyncContext: { run: (store, fn) => storage.run(store, fn), get: () => storage.getStore() },
+})
+```
+
+- Only a root container reads `asyncContext`. Its child containers use it too.
+- Without it, a cleanup that awaits its own disposal waits until a `stop` timeout ends it.
+
+### Exported registrations
+
+A registration in a child container is visible only in that container and its descendants. `export: true` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
+
+```ts
+const host = createContainer({ owner: { kind: 'host' } })
+const pluginA = createContainer({ parent: host, owner: { kind: 'plugin', id: 'a' } })
+const pluginB = createContainer({ parent: host, owner: { kind: 'plugin', id: 'b' } })
+
+provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
+provide(pluginB, 'b:session', { dependsOn: { memory: memoryKitKey }, build: ({ dependsOn }) => startSession(dependsOn.memory) })
+```
+
+- The registration stays in its container. That container owns it, and `dispose(pluginA)` withdraws it. Its own dependencies resolve from that container.
+- An export goes exactly one level up. A container that wants to reach the area of its grandparent exports from its own level.
+- A consumer looks in its own container, then in each ancestor. At each level, the registration of that container comes first, then the exports of its children in creation order.
+- Shadowing still has no gap. An export takes over from a provider of a farther ancestor only while it runs.
+- `perConsumer` and `export` combine. Each consumer instance lives in the consumer container.
+- `tx.provide(key, { export: true, ... })` reserves an exclusive key in the parent area at once, and the commit publishes the service there in one batch.
+- `replace()` keeps the export. On a root container, `export` has no effect.
+- `graph(parent)`, `peek`, `watch`, `waitFor`, and `observe` see the export. `graph().services()` marks it with `exported: true`, and its `owner` is the owner of the exporting container.
 
 ### Per-consumer services
 
