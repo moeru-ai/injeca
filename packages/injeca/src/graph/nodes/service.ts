@@ -105,6 +105,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
   const instance = signal<InstanceNode | undefined>(undefined)
   // A resolver always converges. It exists only while its `resolve` call waits.
   const demanded = signal(input.kind === 'resolver')
+  const subscribers = signal<ReadonlySet<object>>(new Set())
   const resolutions = new Map<string, () => Resolution>()
 
   const effective = createEffectiveStatus({ phase, instance, edges: input.edges, resolutions })
@@ -134,8 +135,9 @@ export function createService(input: CreateServiceInput): ServiceNode {
       phase,
       instance,
       demanded,
+      subscribers,
       // Only a service with a key can be demanded. An invocation waits for `start()`.
-      active: computed(() => container.signals.started() || (input.kind !== 'invocation' && demanded())),
+      active: computed(() => container.signals.started() || (input.kind !== 'invocation' && (demanded() || subscribers().size > 0))),
       serving: computed(() => present() && phase() === 'running'),
       resolutions,
       effective,
@@ -147,6 +149,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
     stopIntent: {},
     parkedEpoch: undefined,
     failure: undefined,
+    demanders: new Set(),
     teardownErrors: [],
     withdrawal: createDeferred<readonly unknown[]>(),
     reportedStatus: undefined,

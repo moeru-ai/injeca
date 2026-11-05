@@ -205,16 +205,18 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - A registration in a child container shadows an ancestor provider of the same key only while it is `running`. Until then, dependents keep the ancestor provider. When the child provider starts, dependents move to it, and they get `dependency-change`. When it stops, they move back to the ancestor provider. So shadowing never leaves a gap.
 - A container can isolate a key. Then the key does not resolve from the ancestors. `createContainer({ isolate: [key] })` sets the isolated keys. They do not change later. An isolated key also ends the resolution area of an exclusive key of an ancestor.
 - `watch(container, key)` reports the provider that a consumer in `container` resolves. With shadowing, that is the ancestor provider until the child provider runs.
-- `dispose(container)` withdraws the registrations and invocations of the container, disposes the child containers, and runs the effects of the container in reverse registration order.
+- `dispose(container)` disposes the child containers first, one after the other, in reverse creation order. Each child disposal completes, with its own effects, before the next one starts. Then the registrations and invocations of the container withdraw in one batch. Then the effects of the container run in reverse registration order.
+- The whole subtree enters disposal at once. No new registration, child container, or transaction can start in it.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
 - A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. The check is the same in every runtime, so injeca does not use `AsyncLocalStorage`.
 - A cleanup must not await the disposal of its own container or of an ancestor. injeca does not detect this after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
 - An outside caller that calls `dispose()` again during disposal gets the same promise.
-- `stop(container)` stops. `dispose(container)` cleans up. `stop()` stops all instances, dependents first, and keeps the registrations. The container stays usable, and a later `start()` builds the registrations again. `dispose()` also withdraws the registrations, disposes the child containers, and runs the container effects. A disposed container cannot be used again.
+- `stop(container)` stops. `dispose(container)` cleans up. `stop()` stops all instances, dependents first, and keeps the registrations. The container stays usable, and a later `start()` builds the registrations again. `stop()` also ends the demands of `resolve`, `watch`, and `waitFor` on the services of the container. `dispose()` also withdraws the registrations, disposes the child containers, and runs the container effects. A disposed container cannot be used again.
 - `start(container, { timeoutMs? })` has no built-in timeout. When a configured timeout passes, it rejects with the `explain()` result of each service that is not `running`.
 - A child container does not start when it is created. Its registrations and invocations wait until `start(child)` runs. This gives the caller time to register all services of the child first. `start(parent)` and `stop(parent)` apply to each child container that was started. A direct `stop(child)` removes the child from this set, so a later `start(parent)` leaves it stopped.
 - A service in `failed` tries again on the next `start()`.
 - `effect(container, setup)` adds an effect to a container. `dispose()` runs it.
+- `effect(container, setup)` on a container whose disposal started or ended runs `setup`, then runs its disposer at once. So a late resource does not leak. A disposer that throws throws to the caller. A disposer promise that rejects goes to the runtime as an unhandled error.
 - The global functions use one root container. `getContainer()` returns it.
 
 ### Keys
@@ -269,7 +271,10 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - A replacement before `start()` sends a `registration-replaced` record to the observe stream. No hook runs for it.
 - `options.perConsumer: true` makes `build` run once for each consumer container. Then the build context has `consumer`, the owner record of that consumer. The instance disposes with the consumer container.
   - The registration itself never builds and stays `pending`. `start()` does not wait for it. Each consumer container gets its own service in that container. Its observe records carry the owner of the consumer container.
-  - `replace()` on the registration replaces each running consumer service atomically. The other consumer services build again on demand.
+  - `replace()` on the registration is atomic for all consumers. Each running consumer service gets a successor that runs `build` and `start`. A successor that completes `start` waits. When every successor waits, one batch swaps the registration and all consumer services. The other consumer services leave and build again on demand.
+  - If one successor fails, all successors stop, and `replace()` rejects with that failure. The old registration and its consumer services do not change. A new consumer still builds from the old registration.
+  - A consumer service that leaves during the replacement, for example with its container, drops out of the batch. A newer `replace()` or a withdrawal cancels the replacement, and `replace()` resolves `false`.
+  - A consumer service in `failed` builds again on a new demand from its container: a new `resolve` call, a new `watch` or `waitFor` subscription, or a dependent that starts to wait for it. A demander gets one new build for each failure, so a waiting dependent cannot cause a retry loop. After the service reaches `running`, each demander gets a new build again after a later failure.
 - `options.metadata` is a frozen record that resolution conditions and graph queries can read.
 
 ### Build context
@@ -291,12 +296,14 @@ The 0.2 fields stay: `dependsOn`, `name`, and `container`. These fields are new:
 - `invoke({ dependsOn, callback })` registers an invocation. The callback gets the resolved dependencies, as in 0.2, and a second argument with `on`, `effect`, and `signal`.
 - The callback runs when the required dependencies are available. Before `start()`, it waits for `start()`.
 - When a required dependency gets a new instance, the invocation stops: its `stop` hooks and effects run. Then the callback runs again with the new values.
-- `invoke()` returns a handle with `withdraw()`.
+- `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`, for example `graph(container).dependencies(handle.key)`.
 
 ### resolve
 
 - `resolve(dependsOn)` waits until the dependencies are available and returns their values, as in 0.2. A missing provider makes it wait, not throw. Before `start()`, it builds and starts the services that it needs and their dependencies.
 - The values can become stale after a run-time change. Use `resolve` for one-time code. Code that keeps a dependency must be a service or an invocation, so that it converges.
+- `resolve(dependsOn, { signal, timeoutMs })` rejects with the abort reason when the signal aborts, and with `wait-timeout` after `timeoutMs` of the container clock. Each rejection removes the hidden resolver of the call. There is no default timeout.
+- `peek(container, dependency)` reads a dependency now, without a wait. See [Reading state](#reading-state).
 
 ### Phases
 
@@ -324,7 +331,7 @@ declared → pending → building → starting → running
 | `retrying` | A `start` hook returned `requeue`. The service waits for the next attempt. |
 | `running` | The instance serves calls. Only this phase has a status. |
 | `stopping` | The service waits until its holders release it. Then the `stop` hook and the effect disposers run. |
-| `failed` | A build failed, retries ended, a timeout failed, or a hook returned `fail`. A user or Host action moves the service out of `failed`: `start()` again, `stop()` and then `start()`, or `replace()` with a new configuration. |
+| `failed` | A build failed, retries ended, a timeout failed, or a hook returned `fail`. A user or Host action moves the service out of `failed`: `start()` again, `stop()` and then `start()`, or `replace()` with a new configuration. A consumer service of a `perConsumer` registration also builds again on a new demand from its container. |
 | `withdrawn` | The registration is withdrawn and the instance is disposed. |
 
 | Step | Rule |
@@ -362,6 +369,7 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - The old instance stays published with its status while the new instance runs `build` and `start`.
 - The swap occurs only after the new instance completes `start`. If the new `build` or `start` fails, the old instance does not change. The failure goes to the observe stream.
 - The swap is one batch. After it, the service has a new `instanceId`. Dependents follow the rule for a replaced required dependency in [dependency-change](#dependency-change).
+- For a `perConsumer` registration, the swap of all consumer services is one batch. See [Registrations](#registrations).
 - The old instance runs `stop` and dispose only after each holder releases it. A holder that calls an `unavailable` old instance gets the failure that `unavailable` means.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
 - `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
@@ -378,6 +386,9 @@ await tx.commit()
 ```
 
 - `tx.declare(key, { dependsOn })` adds a declared service. Graph queries can see it. Consumers cannot resolve it.
+- A `tx.declare` or a `tx.provide` reserves the key until the commit or the abort. In the same container, a `provide`, or a `tx.declare` or `tx.provide` of another transaction, fails with `duplicate-service`.
+- For an exclusive key, the reservation also counts as a declaration in the resolution area. A provider of the key in another container of the area goes to `conflict` and runs no code. After an abort, it converges. After the commit, the published service and that provider are both in `conflict`. This follows [Exclusive keys](#exclusive-keys): a conflict is a phase, not an error, so injeca does not throw for another container.
+- `withdraw()` on the result of `tx.provide` before the commit removes the provide from the transaction and resolves `true`. A declaration of the key stays. So the commit fails with `transaction-incomplete`, unless the declaration is optional. During the commit, `withdraw()` waits for the commit, then withdraws the published service.
 - `tx.provide(key, options)` fills a declared service, or adds a new service.
 - `tx.commit()` builds the services of the transaction in dependency order. A service in a transaction can depend on a built service of the same transaction.
 - A service whose required dependencies are not available goes to `pending` at commit. This is not a failure.
@@ -497,6 +508,7 @@ decide.fail(error, { reason? })
 - When a timeout passes, injeca records a `timeout` record in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail` with a `hook-timeout` error.
 - `onTimeout(context)` is a synchronous function. `context.hook` is `'start'` or `'stop'`, and `context.decide` has the methods of that hook. A value that is not a decision gives `fail`.
 - At a `start` timeout, the hook run signal aborts. The handlers after the stuck handler do not run. A decision that the stuck handler returns later is ignored and recorded.
+- When `stop()`, `dispose()`, a withdrawal, or a lost dependency aborts a `start` hook run, injeca does not wait for the handler in progress. The `stop` hooks and effects run at once, and the handlers after it do not run. A decision that the handler returns later is ignored and recorded. A configured `stop` timeout still applies to the `stop` hooks.
 - At a `stop` timeout, injeca stops waiting for the stuck callback. It still calls the remaining `stop` handlers and effect disposers, but it does not wait for them.
 - A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container. Then the disposal continues and rejects with the `hook-timeout` error.
 
@@ -506,6 +518,8 @@ decide.fail(error, { reason? })
 
 - `watch(container, key, callback)` sends the current phase and effective status at once, then each change. It returns a disposer. The container owns the subscription.
 - `waitFor(container, key, { status?, timeoutMs?, signal? })` resolves when the key is available, or has the given status. It rejects on a timeout or an abort. It has no built-in timeout.
+- `waitFor` rejects with `service-failed` when the service is in `failed`, or when it waits for a required provider in `failed`, directly or through pending providers. This is the same rule as for `resolve`. The error has `key`, and its `cause` is the failure.
+- For a `perConsumer` key, `watch` and `waitFor` demand the consumer service of the container, as `resolve` does. So they report the real availability for that container, also before `start()`. The demand ends with the subscription, or with `stop()`.
 - injeca delivers changes for one key in order. An earlier `withdrawn` never arrives after a later `running`.
 - A callback error does not stop a transition or the other callbacks. injeca records the error in the observe stream.
 - injeca does not call a callback after its container is disposed.
@@ -529,7 +543,18 @@ Graph queries are pure reads. They never change state.
 | `graph(container).order(keys?)` | Topological order |
 | `graph(container).cycles()` | All cycles |
 | `graph(container).impact(change)` | The services that a proposed change stops or rebuilds |
-| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue |
+| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue. A key without a service gives `phase: undefined` and a `missing-provider` blocker. |
+
+`peek(container, dependency)` is a pure read too. It does not demand, build, or start a service. It accepts a key, `where(key, condition)`, or `firstAvailable(...)`, and resolves as for a consumer in the container. The result is one of these:
+
+| `kind` | Meaning |
+| --- | --- |
+| `resolved` | A running provider serves the key. The result has `value`, `status` (`ready` or `degraded`), and `instanceId`. |
+| `unavailable` | A running provider has the effective status `unavailable`. The result has `reason` and `cause`. |
+| `not-running` | A provider exists, but it does not run. The result has `phase`, and `error` for a `failed` provider. A `perConsumer` key is `pending` until something demands its service for the container. |
+| `rejected` | A resolution condition rejected the provider. |
+| `conflict` | The exclusive key has more than one declaration. The result lists the `owners`. |
+| `missing` | No provider exists. |
 
 A user interface can preview an action before the user confirms it. An example: "Disabling Y also stops X, A, and B." For this, `graph(container).impact()` runs on a copy of the graph with the proposed change. The copy does not change the real graph. No action requires a preview.
 
@@ -550,7 +575,8 @@ The consumer defines the rules that run these listeners. For example, the AIRI h
 
 ## Errors
 
-- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
+- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `service-failed`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
+- `waitFor` and `resolve` with `timeoutMs` reject with `wait-timeout`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
 
 ## Implementation
@@ -578,11 +604,11 @@ The implementation has two layers. The interactive model uses the same split.
 | --- | --- |
 | Root | `index.ts` (public entry), `scoped.ts` (functions that take a container), `global.ts` (the global `injeca` object) |
 | `primitives/` | The public composition primitives: `provide`, `invoke`, `resolve`, `start` and `stop`, keys, containers, and decisions |
-| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, the graph queries, and `listeners` |
+| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, `peek`, the graph queries, and `listeners` |
 | `diagnostics/` | Errors, explanations, and the logger |
 | `types/` | Public types, by area |
 | `graph/` | `graph.ts` (the data model of the graph: the node types, `DependencyEdge`, `Resolution`, `StatusValue`, `Runtime`, `Reconciler`, and `Observer`), status, and observers |
-| `graph/nodes/` | The functions for each node kind: `container`, `service`, `edge`, `registration`, and `consumer` (the services of a `perConsumer` registration), with `definition` (the options of one registration). The types are in `graph.ts`, because they refer to each other |
+| `graph/nodes/` | The functions for each node kind: `container`, `service`, `edge`, `registration`, `reservation` (the key reservation of a transaction), and `consumer` (the services of a `perConsumer` registration), with `definition` (the options of one registration). The types are in `graph.ts`, because they refer to each other |
 | `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution and the shadowing rule. `plain.ts` and `fallback.ts` resolve each edge kind. `exclusive.ts` has the conflicts. `condition.ts` runs the resolution conditions |
 | `reconciler/` | The execution layer. `reconciler.ts` has the queue and the drain. Each transition has one file |
 | `helpers/` | Internal building blocks: signals, the delivery queue, the cleanup context, the clock, and small utilities |
@@ -616,6 +642,7 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
 3. Done. Composition: transactions, atomic replacement, exclusive keys, resolution conditions, `perConsumer`, key isolation, graph queries, and the listener registry.
 4. Done. Retries: requeue, backoff, `maxAttempts`, and timeouts.
 5. Done, except the publish. Release: the README, the injeca skill, and version 0.3.0.
+5a. Done in 0.3.1. Fixes from the plugin-sdk migration study: an atomic `perConsumer` replacement, demand and failure rules for `watch` and `waitFor`, `withdraw()` before a commit, key reservation, no wait for an aborted `start` hook, `peek` and bounded `resolve`, retries of failed consumer services, children-first disposal, and invocation keys.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
@@ -663,6 +690,16 @@ Each rule in this document needs a test. These cases are required:
 37. A cause chain from `setStatus` appears in `explain()` of a dependent.
 38. `firstAvailable` selects the first available provider, moves to the fallback when the first becomes unavailable, and moves back when it returns.
 39. Types: `decide` in a `stop` hook has no `requeue`, `rebuild`, or `stop`. A decision carries `service`, `instanceId`, `hook`, `attempt`, and `issuedAt`.
+40. A `perConsumer` replacement that fails for one consumer changes no consumer. A successful one swaps all consumers in one batch.
+41. `watch` and `waitFor` of a `perConsumer` key demand the consumer service, and the demand ends with the subscription.
+42. `waitFor` of a failed service, or of a service that waits for a failed provider, rejects with `service-failed`.
+43. `withdraw()` of a `tx.provide` before the commit removes the provide. A declared key without a provide fails the commit.
+44. A declared key fails another `provide` in the same container, and puts an exclusive provider in another container in `conflict` until the abort.
+45. `stop()` and `dispose()` do not wait for an aborted `start` hook.
+46. `resolve` with `timeoutMs` or `signal` rejects and removes its hidden resolver. `peek` does not create a service.
+47. A failed consumer service builds again on a new demand, once for each demander.
+48. `dispose(parent)` disposes the child containers first, in reverse creation order.
+49. `effect` after the disposal started runs its disposer at once. `invoke` returns a `key` that graph queries accept.
 
 ## Appendix: plugin-sdk
 

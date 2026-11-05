@@ -2,7 +2,7 @@ import type { Container, ContainerOptions, ObserveRecord, PolicyOptions } from '
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { createContainer, provide, start } from '../scoped'
+import { createContainer, dispose, provide, start, stop } from '../scoped'
 import { collectRecords, deferred, drained, manualClock, stateOf } from '../testing/helpers'
 
 async function tick(manual: { advance: (ms: number) => void }, app: Container, ms: number): Promise<void> {
@@ -126,5 +126,61 @@ describe('start timeouts', () => {
     const app = createContainer({ enabled: false })
     expect(() => provide(app, 'airi.bad', { timeouts: { start: -1 }, build: () => 1 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
     expect(() => createContainer({ enabled: false, timeouts: { stop: Number.NaN } })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
+  })
+})
+
+describe('a start hook that stop() or dispose() aborts (G2)', () => {
+  it('does not wait for the start hook. The stop hooks run at once, and the late decision is ignored', async () => {
+    const ctx = setup()
+    void start(ctx.app)
+    await drained(ctx.app)
+    expect(stateOf(ctx.app, 'airi.server').phase).toBe('starting')
+
+    // The gate never opens before the disposal settles.
+    await dispose(ctx.app)
+    expect(ctx.signals[0]?.aborted).toBe(true)
+    expect(ctx.stopHook).toHaveBeenCalledTimes(1)
+    expect(ctx.later).not.toHaveBeenCalled()
+
+    ctx.gate.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(ctx.later).not.toHaveBeenCalled()
+  })
+
+  it('lets stop() settle without the start hook, and a later start() builds again', async () => {
+    const ctx = setup()
+    void start(ctx.app)
+    await drained(ctx.app)
+
+    await stop(ctx.app)
+    expect(ctx.stopHook).toHaveBeenCalledTimes(1)
+    expect(stateOf(ctx.app, 'airi.server').phase).toBe('pending')
+
+    const restarted = start(ctx.app)
+    await drained(ctx.app)
+    expect(ctx.signals).toHaveLength(2)
+    ctx.gate.resolve()
+    await drained(ctx.app)
+    // The decision of the first run arrives late. It is ignored.
+    expect(ctx.records).toContainEqual(expect.objectContaining({ type: 'decision', hook: 'start', decision: 'handled', ignored: true }))
+    await restarted
+    expect(stateOf(ctx.app, 'airi.server').phase).toBe('running')
+  })
+
+  it('still applies a configured stop timeout to the stop hooks', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 100 } })
+    provide(app, 'airi.server', ({ on }) => {
+      on('start', () => new Promise(() => {}))
+      on('stop', () => new Promise(() => {}))
+      return 'server'
+    })
+    void start(app)
+    await drained(app)
+
+    const disposal = dispose(app).catch((error: unknown) => error)
+    await drained(app)
+    manual.advance(100)
+    expect(await disposal).toMatchObject({ code: 'hook-timeout', hook: 'stop' })
   })
 })

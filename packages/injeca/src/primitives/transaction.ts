@@ -3,13 +3,13 @@ import type { TransactionMembers } from '../reconciler/commit'
 import type { Container, DeclareOptions, KeyReference, Registration, Transaction, TransactionProvide, TransactionReplace } from '../types'
 
 import { DuplicateServiceError, InvalidArgumentError, ReplaceWhileStoppingError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
-import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, setPhase } from '../graph/nodes'
+import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase, withdrawRegistration } from '../graph/nodes'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { batch, untracked } from '../helpers/signals'
 import { abortTransaction, buildMembers, orderMembers, rollbackMembers, startMembers } from '../reconciler/commit'
 import { isExclusiveKey, normalizeName } from './keys'
 import { assertNoDuplicate, publishRegistration, serviceOf } from './provide'
-import { moveConsumers, registrationApi, registrationOf, replaceRunning, takeOver } from './replace'
+import { registrationApi, registrationOf, replaceRunning, replaceTemplate, takeOver } from './replace'
 
 function readName(key: unknown, action: string): string {
   let name: unknown
@@ -75,7 +75,7 @@ function createMembers(transaction: TransactionNode): Member[] {
     if (entry.replace)
       targets.set(entry, replaceTarget(container, entry))
     else
-      assertNoDuplicate(container, entry.name)
+      assertNoDuplicate(container, entry.name, transaction)
   }
 
   const members: Member[] = []
@@ -100,9 +100,10 @@ function createMembers(transaction: TransactionNode): Member[] {
   return members
 }
 
-/** Publishes the members in one batch. A built member goes to `starting`, the others to `pending`. */
-function publishMembers(members: readonly Member[], built: ReadonlySet<ServiceNode>): void {
+/** Publishes the members in one batch. A built member goes to `starting`, the others to `pending`. The reservations end in the same batch. */
+function publishMembers(transaction: TransactionNode, members: readonly Member[], built: ReadonlySet<ServiceNode>): void {
   batch(() => {
+    releaseReservations(transaction)
     for (const { service, target } of members) {
       service.transaction = undefined
       const registration = service.registration
@@ -112,7 +113,8 @@ function publishMembers(members: readonly Member[], built: ReadonlySet<ServiceNo
         registration.pending = service
       }
       else if (target && registration && target.perConsumer) {
-        moveConsumers(registration, target, service, { edges: service.edges, build: service.build, metadata: service.metadata, perConsumer: true, policy: service.policy })
+        // The commit does not wait for the swap, as for a running service.
+        void replaceTemplate(registration, target, service)
       }
       else if (target && registration) {
         takeOver(registration, target, service)
@@ -140,7 +142,7 @@ async function commit(transaction: TransactionNode): Promise<void> {
     throw outcome.kind === 'failed' ? outcome.error : transaction.abortError
   }
 
-  untracked(() => publishMembers(members, new Set(outcome.built.keys())))
+  untracked(() => publishMembers(transaction, members, new Set(outcome.built.keys())))
   transaction.state = 'done'
   transaction.container.transactions.delete(transaction)
   // The `start` hooks run after the publish. The commit does not wait for them.
@@ -156,12 +158,19 @@ function startCommit(transaction: TransactionNode): Promise<void> {
     if (transaction.state !== 'done') {
       transaction.state = 'aborted'
       transaction.container.transactions.delete(transaction)
+      untracked(() => releaseReservations(transaction))
     }
     throw error
   })
   transaction.settled = result.then(() => {}, () => {})
 
   return result
+}
+
+/** Throws `duplicate-service` when another open transaction of the container declares or provides `name`. */
+function assertNotReserved(transaction: TransactionNode, name: string): void {
+  if (reservedBy(transaction.container.transactions, name, transaction))
+    throw new DuplicateServiceError(`Another open transaction of the container reserves '${name}'.`)
 }
 
 function assertOpen(transaction: TransactionNode, action: string): void {
@@ -172,7 +181,7 @@ function assertOpen(transaction: TransactionNode, action: string): void {
 function entryOf(transaction: TransactionNode, name: string, exclusive: boolean): TransactionEntry {
   let entry = transaction.entries.get(name)
   if (!entry) {
-    entry = { name, declared: undefined, optional: false, definition: undefined, replace: false, target: undefined, registration: undefined, exclusive }
+    entry = { name, declared: undefined, optional: false, definition: undefined, replace: false, target: undefined, registration: undefined, exclusive, reservation: undefined }
     transaction.entries.set(name, entry)
   }
 
@@ -204,9 +213,37 @@ export function transaction(container: Container): Transaction {
     assertOpen(state, 'declare')
     const name = readName(key, 'declare')
     const { dependsOn, optional } = readDeclareOptions(name, options)
-    const entry = entryOf(state, name, isExclusiveKey(key))
-    entry.declared = readEdges(name, dependsOn)
+    assertNotReserved(state, name)
+    const declared = readEdges(name, dependsOn)
+    const entry = entryOf(state, name, false)
+    entry.exclusive ||= isExclusiveKey(key)
+    entry.declared = declared
     entry.optional = optional
+    untracked(() => reserveKey(state, entry))
+  }
+
+  /**
+   * The `withdraw()` of a registration from `tx.provide`. Before the commit, it removes the provide from the transaction and resolves `true`.
+   * A declaration of the key stays, so the commit fails with `transaction-incomplete` unless the declaration is optional.
+   * During the commit, it waits for the commit, then withdraws the published service.
+   */
+  const withdrawEntry = async (entry: TransactionEntry, registration: RegistrationNode): Promise<boolean> => {
+    if (state.state === 'open') {
+      if (entry.registration !== registration)
+        return false
+
+      entry.definition = undefined
+      entry.registration = undefined
+      if (!entry.declared) {
+        state.entries.delete(entry.name)
+        untracked(() => releaseReservation(entry))
+      }
+      return true
+    }
+    if (state.state === 'committing')
+      await state.settled
+
+    return withdrawRegistration(registration)
   }
 
   const provide = ((key: KeyReference, option: unknown): Registration<string, unknown, undefined> => {
@@ -216,15 +253,18 @@ export function transaction(container: Container): Transaction {
     if (existing?.definition)
       throw new DuplicateServiceError(`The transaction already provides '${name}'.`)
 
+    assertNotReserved(state, name)
     const read = readDefinition(name, option)
-    const entry = entryOf(state, name, isExclusiveKey(key) || existing?.exclusive === true)
+    const entry = entryOf(state, name, false)
+    entry.exclusive ||= isExclusiveKey(key)
     // A provide without its own edges uses the edges of the declaration.
     const definition: ServiceDefinition = read.edges.length === 0 && entry.declared ? { ...read, edges: entry.declared } : read
     const registration: RegistrationNode = createRegistration(node, name, entry.exclusive)
     entry.definition = definition
     entry.registration = registration
+    untracked(() => reserveKey(state, entry))
 
-    return registrationApi(registration)
+    return registrationApi(registration, { withdraw: () => withdrawEntry(entry, registration) })
   }) as TransactionProvide
 
   const replace = ((key: KeyReference, option: unknown): void => {
@@ -238,6 +278,8 @@ export function transaction(container: Container): Transaction {
     entry.definition = readDefinition(name, option, untracked(() => (target ? currentService(target) : slotOf(node, name)())))
     entry.replace = true
     entry.target = target
+    // A replacement keeps the current registration of the key, so it reserves nothing.
+    untracked(() => releaseReservation(entry))
   }) as TransactionReplace
 
   return Object.freeze({

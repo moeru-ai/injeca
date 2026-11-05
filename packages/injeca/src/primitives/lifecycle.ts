@@ -135,8 +135,10 @@ export async function stop(container: Container): Promise<void> {
     batch(() => {
       for (const current of containers)
         current.signals.started(false)
-      for (const service of presentServices(containers))
+      for (const service of presentServices(containers)) {
         service.signals.demanded(false)
+        service.signals.subscribers(new Set())
+      }
     })
 
     return waitUntilSettled(containers, services => services.every(service => service.signals.instance() === undefined && !transitionalPhases.has(service.signals.phase()))

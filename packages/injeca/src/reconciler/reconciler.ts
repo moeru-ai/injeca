@@ -9,7 +9,7 @@ import { reconcileConflict } from './conflict'
 import { reconcileRunning } from './dependency-hooks'
 import { reconcileRegistration } from './registration'
 import { reconcileRetrying } from './retry'
-import { finalize, reconcileStopping } from './stop'
+import { enterStopping, finalize, reconcileStopping } from './stop'
 import { checkSwap } from './swap'
 
 export interface ReconcilerOptions {
@@ -104,6 +104,11 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
       case 'failed':
         if (!service.signals.present())
           finalize(service)
+        return
+      case 'starting':
+        // A consumer service that waits for the batch swap of its replacement stops when the replacement is cancelled.
+        if (service.swap?.held && service.signals.targetLost())
+          enterStopping(service, { reason: 'The replacement was cancelled before the swap.' })
         return
       case 'running':
         reconcileRunning(service)

@@ -1,4 +1,4 @@
-import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode } from '../graph/graph'
+import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode, TransactionNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, DependencyMap, ProvidedKey, ProvideOption, ProvideOptionObject, ProvideOptionWithKeys, Registration, ResolveDependencyDeclaration } from '../types'
 
 import ErrorStackParser from 'error-stack-parser'
@@ -6,7 +6,7 @@ import ErrorStackParser from 'error-stack-parser'
 import { nanoid } from 'nanoid'
 
 import { DuplicateServiceError, InvalidArgumentError } from '../diagnostics/errors'
-import { assertActive, createRegistration, createService, nodeOf, publishService, readDefinition, releaseService } from '../graph/nodes'
+import { assertActive, createRegistration, createService, nodeOf, publishService, readDefinition, releaseService, reservedBy } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { batch, untracked } from '../helpers/signals'
@@ -63,10 +63,15 @@ function autoName(stackIndex: number, nameOrOption: ProvideNameOrOption, option:
   return `${parentFile?.fileName ?? `unknown-${nanoid()}`}:${parentFile?.lineNumber ?? 0}:${parentFile?.columnNumber ?? 0}`
 }
 
-/** Throws `duplicate-service` when a started container already has a registration for `name`. */
-export function assertNoDuplicate(container: ContainerNode, name: string): void {
+/**
+ * Throws `duplicate-service` when a started container already has a registration for `name`,
+ * or when an open transaction of the container, other than `except`, declares or provides `name`.
+ */
+export function assertNoDuplicate(container: ContainerNode, name: string, except?: TransactionNode): void {
   if (slotOf(container, name)() && container.signals.started())
     throw new DuplicateServiceError(`The started container already has a registration for '${name}'.`)
+  if (reservedBy(container.transactions, name, except))
+    throw new DuplicateServiceError(`An open transaction of the container reserves '${name}'.`)
 }
 
 /**

@@ -211,7 +211,7 @@ describe('call-site types', () => {
     const tx = transaction(app)
     expectTypeOf(tx.provide(defineKey<Tts>('airi.tts'), () => ({ speak: () => {} }))).toEqualTypeOf<Registration<string, Tts, undefined>>()
     // @ts-expect-error A transaction provide checks the type of the key too.
-    transaction(app).provide(defineKey<Tts>('airi.tts'), () => 1)
+    transaction(app).provide(defineKey<Tts>('airi.tts.other'), () => 1)
     tx.replace(llm, () => ({ chat: () => 'v3' }))
     expectTypeOf(tx.commit()).resolves.toEqualTypeOf<void>()
 

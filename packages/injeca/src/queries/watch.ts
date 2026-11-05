@@ -3,11 +3,12 @@ import type { Container, KeyReference, ServiceState, ServiceStatus } from '../ty
 
 import { effect } from 'alien-signals'
 
-import { BuildAfterDisposeError, InvalidArgumentError, WaitTimeoutError } from '../diagnostics/errors'
-import { assertActive, nodeOf } from '../graph/nodes'
+import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError, WaitTimeoutError } from '../diagnostics/errors'
+import { assertActive, demandConsumerService, nodeOf, releaseConsumerDemand } from '../graph/nodes'
 import { reportCallbackError } from '../graph/observers'
-import { findProvider } from '../graph/resolvers/resolvers'
-import { untracked, withOwner } from '../helpers/signals'
+import { blockingFailure, findProvider, selectProvider } from '../graph/resolvers/resolvers'
+import { batch, untracked, withOwner } from '../helpers/signals'
+import { armWaitBounds, readWaitBounds } from '../helpers/wait-bounds'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { normalizeName } from '../primitives/keys'
 
@@ -63,15 +64,43 @@ export function watch(container: Container, key: WatchKey, callback: (state: Ser
   return untracked(() => subscribe(node, name, callback))
 }
 
-/** The effect of one `watch` call. It tracks the provider of `name` and its state. The delivery queue calls the callback untracked. */
+/**
+ * The effect of one `watch` call. It tracks the provider of `name` and its state. The delivery queue calls the callback untracked.
+ *
+ * For a `perConsumer` registration, the subscription demands the consumer service of `node`, as `resolve` does. So the state is the real availability for `node`.
+ * The demand ends with the subscription.
+ */
 function subscribe(node: ContainerNode, name: string, callback: (state: ServiceState) => void): () => void {
   const { deliveries } = node.runtime
+  const subscription = {}
   let active = true
   let last: ServiceNode | undefined
   let delivered: ServiceState | undefined
+  let demand: ServiceNode | undefined
+  let demandQueued = false
+
+  const syncDemand = (): void => {
+    if (!active)
+      return
+
+    const registration = selectProvider(node, name)?.registration
+    const next = registration?.perConsumer ? demandConsumerService(registration, node, subscription) : undefined
+    if (demand && demand !== next)
+      releaseConsumerDemand(demand, subscription)
+    demand = next
+  }
+  batch(syncDemand)
 
   const stopEffect = withOwner(node.reactiveOwner, () => effect(() => {
     const current = findProvider(node, name)
+    // A `perConsumer` registration has no service for this container yet, for example after a replacement. Demand it after this run, outside the effect.
+    if (current?.perConsumer && !demandQueued) {
+      demandQueued = true
+      queueMicrotask(() => untracked(() => {
+        demandQueued = false
+        batch(syncDemand)
+      }))
+    }
     if (current)
       last = current
     const state = stateOf(current ?? last)
@@ -94,6 +123,8 @@ function subscribe(node: ContainerNode, name: string, callback: (state: ServiceS
 
     active = false
     stopEffect()
+    if (demand)
+      untracked(() => batch(() => releaseConsumerDemand(demand!, subscription)))
     node.disposedListeners.delete(stop)
   }
   node.disposedListeners.add(stop)
@@ -112,29 +143,34 @@ export interface WaitForOptions {
 
 function readWaitOptions(options: WaitForOptions | undefined): WaitForOptions {
   let status: unknown
-  let timeoutMs: unknown
-  let signal: unknown
   try {
     status = options?.status
-    timeoutMs = options?.timeoutMs
-    signal = options?.signal
   }
   catch (error) {
     throw new InvalidArgumentError('Cannot read the waitFor options.', { cause: error })
   }
   if (status !== undefined && (typeof status !== 'string' || !statuses.has(status)))
     throw new InvalidArgumentError(`The status option of waitFor must be 'ready', 'degraded', or 'unavailable'. Got ${String(status)}.`)
-  if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0))
-    throw new InvalidArgumentError(`The timeoutMs option of waitFor must be a finite number of 0 or more. Got ${String(timeoutMs)}.`)
-  if (signal !== undefined && !(signal instanceof AbortSignal))
-    throw new InvalidArgumentError('The signal option of waitFor must be an AbortSignal.')
 
-  return { status: status as ServiceStatus | undefined, timeoutMs: timeoutMs as number | undefined, signal: signal as AbortSignal | undefined }
+  return { status: status as ServiceStatus | undefined, ...readWaitBounds(options, 'waitFor') }
+}
+
+/** The failure that ends a wait for `name`: its service is in `failed`, or it waits for a required provider in `failed`. */
+function failureOf(node: ContainerNode, name: string): { readonly error: unknown } | undefined {
+  const provider = findProvider(node, name)
+  if (!provider)
+    return undefined
+
+  const phase = provider.signals.phase()
+  if (phase === 'failed')
+    return provider.failure ?? { error: undefined }
+  return phase === 'pending' ? blockingFailure(provider) : undefined
 }
 
 /**
  * Resolves with the state of `key` when it is available, or when it has `options.status`.
  *
+ * It rejects with `service-failed` when the service is in `failed`, or when it waits for a required provider in `failed`, as `resolve` does.
  * It rejects on a timeout or an abort, and when the container is disposed. It has no built-in timeout.
  */
 export function waitFor(container: Container, key: WatchKey, options?: WaitForOptions): Promise<ServiceState> {
@@ -151,9 +187,9 @@ export function waitFor(container: Container, key: WatchKey, options?: WaitForOp
   return new Promise((resolve, reject) => untracked(() => {
     let done = false
     let stopWatch: (() => void) | undefined
-    let cancelTimeout = () => {}
+    let disarm = () => {}
+    let stopListening = () => {}
 
-    const onAbort = (): void => finish(() => reject(signal?.reason))
     const onDisposed = (): void => finish(() => reject(new BuildAfterDisposeError(`The container was disposed before waitFor('${name}') matched.`)))
 
     function finish(outcome: () => void): void {
@@ -162,24 +198,32 @@ export function waitFor(container: Container, key: WatchKey, options?: WaitForOp
 
       done = true
       stopWatch?.()
-      cancelTimeout()
-      signal?.removeEventListener('abort', onAbort)
+      stopListening()
+      disarm()
       node.disposedListeners.delete(onDisposed)
       outcome()
     }
 
-    signal?.addEventListener('abort', onAbort, { once: true })
     node.disposedListeners.add(onDisposed)
-    if (timeoutMs !== undefined) {
-      cancelTimeout = node.runtime.clock.setTimeout(() => {
-        finish(() => reject(new WaitTimeoutError(`waitFor('${name}') timed out after ${timeoutMs}ms.`)))
-      }, timeoutMs)
+    disarm = armWaitBounds(node.runtime.clock, { timeoutMs, signal }, () => {
+      finish(() => reject(new WaitTimeoutError(`waitFor('${name}') timed out after ${timeoutMs}ms.`)))
+    }, reason => finish(() => reject(reason)))
+
+    const checkFailure = (): void => {
+      const failure = failureOf(node, name)
+      if (failure)
+        finish(() => reject(new ServiceFailedError(`waitFor('${name}') found a failed service.`, name, { cause: failure.error })))
     }
 
+    // A failure of a dependency does not change the state of `key`. The check runs after each drain, as for `resolve`.
+    stopListening = node.runtime.reconciler.onDrained(checkFailure)
     stopWatch = subscribe(node, name, (state) => {
       if (matches(state))
         finish(() => resolve(state))
+      else if (state.phase === 'failed')
+        checkFailure()
     })
+    node.runtime.reconciler.requestDrain()
     // The first state can match at once, before `stopWatch` was assigned.
     if (done)
       stopWatch()

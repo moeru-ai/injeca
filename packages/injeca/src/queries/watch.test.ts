@@ -2,9 +2,9 @@ import type { BuildContext, ObserveRecord, ServiceState } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { BuildAfterDisposeError, InvalidArgumentError, WaitTimeoutError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError, WaitTimeoutError } from '../diagnostics/errors'
 import { injeca } from '../index'
-import { dispose, firstAvailable, provide, start } from '../scoped'
+import { dispose, firstAvailable, graph, provide, start } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock } from '../testing/helpers'
 import { observe } from './observe'
 import { waitFor, watch } from './watch'
@@ -159,6 +159,75 @@ describe('waitFor', () => {
     const app = createTestContainer()
     expect(() => waitFor(app, 'airi.llm', { status: 'broken' as 'ready' })).toThrow(InvalidArgumentError)
     expect(() => waitFor(app, 'airi.llm', { timeoutMs: -1 })).toThrow(InvalidArgumentError)
+  })
+})
+
+describe('watch and waitFor of a perConsumer key (B2)', () => {
+  it('demands the consumer service of the container, so they report its real state', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const builds: unknown[] = []
+    provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => builds.push(consumer) })
+    await start(root)
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    await start(extension)
+
+    const seen: string[] = []
+    const stop = watch(extension, 'host.client', state => seen.push(brief(state)))
+    await drained(root)
+    expect(seen).toEqual(['pending/-', 'building/-', 'starting/-', 'running/ready'])
+    expect(builds).toEqual([{ kind: 'extension', id: 'e' }])
+    stop()
+
+    const other = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'other' } })
+    await start(other)
+    await expect(waitFor(other, 'host.client', { timeoutMs: 1_000 })).resolves.toMatchObject({ phase: 'running', status: 'ready' })
+    expect(builds).toEqual([{ kind: 'extension', id: 'e' }, { kind: 'extension', id: 'other' }])
+  })
+
+  it('ends the demand with the subscription in a container that is not started', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => consumer })
+    await start(root)
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+
+    const seen: string[] = []
+    const stop = watch(extension, 'host.client', state => seen.push(brief(state)))
+    await drained(root)
+    expect(seen.at(-1)).toBe('running/ready')
+
+    stop()
+    await drained(root)
+    // Nothing else demands the consumer service, and its container is not started. So it stops.
+    expect(graph(extension).services().map(service => `${service.key}:${service.phase}`)).toEqual(['host.client:pending'])
+  })
+})
+
+describe('waitFor of a failed service (B3)', () => {
+  it('rejects with service-failed and the failure as its cause', async () => {
+    const app = createTestContainer()
+    const error = new Error('build failed')
+    provide(app, 'broken', () => {
+      throw error
+    })
+    void start(app).catch(() => {})
+    await drained(app)
+
+    const failed = await waitFor(app, 'broken').catch((reason: unknown) => reason)
+    expect(failed).toBeInstanceOf(ServiceFailedError)
+    expect(failed).toMatchObject({ code: 'service-failed', key: 'broken', cause: error })
+  })
+
+  it('rejects when the service waits for a required provider that failed', async () => {
+    const app = createTestContainer()
+    const error = new Error('llm failed')
+    const llm = provide(app, 'airi.llm', () => {
+      throw error
+    })
+    provide(app, 'voice.speech', { dependsOn: { llm }, build: () => 'speech' })
+    const waiting = waitFor(app, 'voice.speech').catch((reason: unknown) => reason)
+    void start(app).catch(() => {})
+
+    expect(await waiting).toMatchObject({ code: 'service-failed', key: 'voice.speech', cause: error })
   })
 })
 

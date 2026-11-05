@@ -25,7 +25,7 @@ function demandProviders(service: ServiceNode): void {
   for (const edge of service.edges) {
     for (const keyName of edge.candidates) {
       const candidates = candidatesOf(service.container, keyName, service)
-      const providers = candidates.map(registration => registration.perConsumer ? ensureConsumerService(registration, service.container) : registration)
+      const providers = candidates.map(registration => registration.perConsumer ? ensureConsumerService(registration, service.container, service) : registration)
       const [nearest] = providers
       if (nearest && !nearest.signals.serving() && !nearest.signals.demanded())
         nearest.signals.demanded(true)

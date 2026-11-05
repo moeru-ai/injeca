@@ -107,7 +107,8 @@ export interface ServiceExplanation {
   readonly name: string
   readonly kind: 'service' | 'invocation'
   readonly owner: OwnerRecord
-  readonly phase: ServicePhase
+  /** The phase of the service. It is `undefined` for a key without a service. Then `owner` is the owner of the container of the query. */
+  readonly phase: ServicePhase | undefined
   /** The effective status of a running service. */
   readonly status?: ServiceStatus
   readonly reason?: string

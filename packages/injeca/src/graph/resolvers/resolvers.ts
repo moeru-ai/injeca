@@ -1,5 +1,5 @@
 import type { WritableSignal } from '../../helpers/signals'
-import type { ContainerNode, DependencyEdge, InstanceNode, Resolution, ServiceNode } from '../graph'
+import type { ContainerNode, DependencyEdge, InstanceNode, Resolution, ResolutionConsumer, ServiceNode } from '../graph'
 
 import { signal } from 'alien-signals'
 
@@ -18,7 +18,7 @@ export function slotOf(container: ContainerNode, keyName: string): WritableSigna
  * Lists the registrations of `keyName` that a consumer in `container` can see, nearest first.
  * The walk ends at a container that isolates the key. A service does not resolve itself.
  */
-export function candidatesOf(container: ContainerNode, keyName: string, consumer?: ServiceNode): ServiceNode[] {
+export function candidatesOf(container: ContainerNode, keyName: string, consumer?: ResolutionConsumer): ServiceNode[] {
   const candidates: ServiceNode[] = []
   for (let current: ContainerNode | undefined = container; current; current = current.parent) {
     const candidate = slotOf(current, keyName)()
@@ -49,7 +49,7 @@ export interface Selection {
  * A nearer registration shadows an ancestor only while it is `running`. Until then, the first serving registration wins.
  * If no registration serves, the nearest one is selected. So shadowing never leaves a gap.
  */
-export function selectProvider(container: ContainerNode, keyName: string, consumer?: ServiceNode): Selection | undefined {
+export function selectProvider(container: ContainerNode, keyName: string, consumer?: ResolutionConsumer): Selection | undefined {
   const candidates = candidatesOf(container, keyName, consumer)
   for (const registration of candidates) {
     const provider = serviceFor(registration, container)

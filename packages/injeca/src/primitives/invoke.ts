@@ -53,5 +53,5 @@ export function invokeIn(container: Container, option: InvokeAnyOption): Invocat
 
   container.logger.invoke(edges.map(edge => edge.keyName))
 
-  return Object.freeze({ withdraw: () => withdrawService(registered) })
+  return Object.freeze({ key: name, withdraw: () => withdrawService(registered) })
 }

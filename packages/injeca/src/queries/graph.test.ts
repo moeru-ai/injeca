@@ -104,6 +104,7 @@ describe('graph queries', () => {
     await drained(app)
 
     expect(graph(app).explain('voice.speech')).toMatchObject({ phase: 'pending', blockers: [{ kind: 'missing-provider', dependency: 'llm', key: 'airi.llm' }] })
-    expect(graph(app).explain('nothing')).toBeUndefined()
+    // G4: a key without a service explains the missing provider.
+    expect(graph(app).explain('nothing')).toEqual({ name: 'nothing', kind: 'service', owner: {}, phase: undefined, blockers: [{ kind: 'missing-provider', dependency: 'nothing', key: 'nothing' }] })
   })
 })

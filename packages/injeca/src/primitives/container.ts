@@ -171,24 +171,38 @@ export function createContainer(options: ContainerOptions = {}): Container {
 
 /**
  * Runs `setup` and stores the returned disposer on the container. `dispose(container)` runs the disposers in reverse order.
+ *
+ * When the disposal of the container started or ended, the disposer runs at once after `setup`, so that the resource does not leak.
+ * A disposer that throws throws to the caller. A disposer promise that rejects is reported outside the call, as an unhandled error.
  */
 export function effect(container: Container, setup: EffectSetup): void {
   const node = nodeOf(container)
-  assertActive(node, 'add an effect')
   if (typeof setup !== 'function')
     throw new InvalidArgumentError('The effect setup is not a function.')
 
   const disposer = untracked(setup)
-  if (typeof disposer === 'function')
+  if (typeof disposer !== 'function')
+    return
+  if (node.state === 'active') {
     node.effects.push(disposer)
+    return
+  }
+
+  const result = untracked(disposer)
+  if (result instanceof Promise) {
+    result.catch((error: unknown) => queueMicrotask(() => {
+      throw error
+    }))
+  }
 }
 
 /**
- * Starts the disposal of `container` and of its descendants.
+ * Starts the disposal of `container` and of its descendants. The whole subtree enters `disposing` at once, so nothing new registers in it.
  *
- * The synchronous part withdraws all services of the subtree in the caller's batch, so that dependents stop without a rebuild.
+ * The child containers dispose first, one after the other, in reverse creation order. Then the services of the container withdraw in one batch, so that dependents stop without a rebuild.
+ * Then the effects of the container run in reverse order. `after` delays the work until an earlier sibling completed its disposal.
  */
-function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['frame']): Promise<void> {
+function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['frame'], after?: Promise<unknown>): Promise<void> {
   if (container.disposal)
     return container.disposal
 
@@ -201,30 +215,34 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
   for (const transaction of [...container.transactions])
     void abortTransaction(transaction, new BuildAfterDisposeError('The container was disposed before the transaction committed.'))
 
-  const withdrawn = new Set<ServiceNode>()
-  for (const service of container.services) {
-    if (service.signals.present()) {
-      releaseService(service)
-      withdrawn.add(service)
-    }
-  }
-
+  let previous = after
   const children = [...container.children].reverse().map((child) => {
-    const disposal = beginDisposal(child, frame)
+    const disposal = beginDisposal(child, frame, previous)
     // The parent awaits each child later. This branch only stops an early rejection from being reported as unhandled.
     disposal.catch(() => {})
+    previous = disposal.then(() => {}, () => {})
     return disposal
   })
+
+  const withdrawn = new Set<ServiceNode>()
+  const withdrawServices = (): void => untracked(() => batch(() => {
+    for (const service of container.services) {
+      if (service.signals.present()) {
+        releaseService(service)
+        withdrawn.add(service)
+      }
+    }
+  }))
+  // Without a child or an earlier sibling, the services withdraw in the caller's batch.
+  const immediate = after === undefined && children.length === 0
+  if (immediate)
+    withdrawServices()
 
   container.disposal = context.run(frame, async () => {
     const errors: unknown[] = []
 
-    for (const service of [...container.services]) {
-      const serviceErrors = await service.withdrawal.promise
-      if (withdrawn.has(service))
-        errors.push(...serviceErrors)
-    }
-
+    if (after)
+      await after
     for (const child of children) {
       try {
         await child
@@ -232,6 +250,14 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
       catch (error) {
         errors.push(error)
       }
+    }
+    if (!immediate)
+      withdrawServices()
+
+    for (const service of [...container.services]) {
+      const serviceErrors = await service.withdrawal.promise
+      if (withdrawn.has(service))
+        errors.push(...serviceErrors)
     }
 
     for (const disposer of container.effects.splice(0).reverse()) {

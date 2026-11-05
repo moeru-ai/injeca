@@ -1,5 +1,5 @@
 import type { Logger } from './diagnostics/logger'
-import type { InvokeAnyOption, ProvideNameOrOption, ProvideSecondOption, StartOptions } from './scoped'
+import type { InvokeAnyOption, ProvideNameOrOption, ProvideSecondOption, ResolveOptions, StartOptions } from './scoped'
 import type {
   Container,
   DependencyDeclarations,
@@ -49,8 +49,8 @@ export function invoke(option: InvokeAnyOption): InvocationHandle {
   return invokeIn(globalContainer, option)
 }
 
-export function resolve<Deps extends DependencyDeclarations>(dependsOn: Deps): Promise<ResolveDependencyDeclaration<Deps>> {
-  return scopedResolve(globalContainer, dependsOn)
+export function resolve<Deps extends DependencyDeclarations>(dependsOn: Deps, options?: ResolveOptions): Promise<ResolveDependencyDeclaration<Deps>> {
+  return scopedResolve(globalContainer, dependsOn, options)
 }
 
 export function start(options?: StartOptions): Promise<void> {
