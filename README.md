@@ -1,135 +1,51 @@
-# Injeca
+# injeca
 
-Pure functional programming (means no `class` and extra wrappers and containers) based dependency injection with application lifecycle management.
-
-> Heavily inspired by [uber/fig](https://go.uber.org/fig) and [uber/dig](https://go.uber.org/dig) in Golang ecosystem.
-
-[![npm version][npm-version-src]][npm-version-href]
-[![npm downloads][npm-downloads-src]][npm-downloads-href]
-[![bundle][bundle-src]][bundle-href]
-[![JSDocs][jsdocs-src]][jsdocs-href]
-[![License][license-src]][license-href]
-
-## Installation
-
-```sh
-npm install injeca
-pnpm add injeca
-bun add injeca
-ni injeca
-yarn add injeca
-```
-
-### Agent Skills
-
-Install the [injeca skill](https://skills.sh) to your AI coding agent:
-
-```sh
-npx skills add moeru-ai/injeca
-```
-
-## Basic usage
-
-`injeca` ships with a global singleton container exposed as `injeca`. You can register
-providers, declare their dependencies, and run invocations once everything is ready.
+Pure functional dependency injection for TypeScript. Services declare their dependencies, own their lifecycle, and converge when the graph changes at run time. No classes and no decorators.
 
 ```ts
-import { createServer } from 'node:http'
+import { injeca } from 'injeca'
 
-import { injeca, lifecycle } from 'injeca'
-
-// Providers return a value once and are cached inside the container.
 const config = injeca.provide('config', () => ({ port: 3000 }))
 
 const server = injeca.provide({
-  dependsOn: { config, lifecycle },
-  async build({ dependsOn }) {
-    const { config, lifecycle } = dependsOn
+  dependsOn: { config },
+  build({ dependsOn, on }) {
     const app = createServer()
-
-    lifecycle.appHooks.onStart(() => app.listen(config.port))
-    lifecycle.appHooks.onStop(() => app.close())
-
+    on('start', () => app.listen(dependsOn.config.port))
+    on('stop', () => app.close())
     return app
   },
 })
 
-injeca.invoke({
-  dependsOn: { server },
-  async callback({ server }) {
-    // eslint-disable-next-line no-console
-    console.log('HTTP server ready:', await server.address())
-  },
-})
-
 await injeca.start()
-
-process.once('SIGINT', async () => {
-  await injeca.stop()
-})
 ```
 
-> [!WARNING]
->
-> **`injeca` implements singleton / cached dependencies by default**
->
-> This means every value returned by `build` will be stored and `build` will only
-> got called once.
->
-> If `build` returns a function, that function is cached (not the result of calling
-> it). This is useful for lazy dependencies, "getters", or wrappers for singleton,
-> but it also means any side effects inside the returned function will run on every call.
->
-> If you want the returned function to be reusable (e.g. a single window), create
-> the reusable closure once inside `build`, and return a wrapper that calls it:
->
-> ```ts
-> const settingsWindow = injeca.provide('windows:settings', {
->   dependsOn: { widgetsManager },
->   build: ({ dependsOn }) => {
->     const getWindow = setupReusableSettingsWindow(dependsOn) // created once
->     return async () => await getWindow() // can be called many times
->   },
-> })
-> ```
+## Packages
 
-Avoid recreating the reusable function inside the returned function, otherwise
-each call starts from a fresh cache and can create duplicate resources.
+| Package | Description | Status |
+| --- | --- | --- |
+| [`injeca`](./packages/injeca) | The container: services, lifecycle hooks, run-time changes, status propagation, and child containers | Published |
+| [`@injeca/bridge`](./packages/bridge) | Connects an eventa channel to a child container, so that plugins in other processes and languages can export and use services | Planned |
 
-### Manual containers
+Transport packages that open a channel and report it as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
-If you need multiple containers (for tests or per-request scopes), create them
-explicitly and pass the container reference into `provide`, `invoke`, `start`, and
-`stop`.
+## Documentation
 
-```ts
-import { createContainer, invoke, provide, start, stop } from 'injeca'
+- [injeca README](./packages/injeca/README.md): installation, usage, and migration from 0.2
+- [The injeca agent skill](./skills/injeca/SKILL.md): `npx skills add moeru-ai/injeca`
 
-const container = createContainer()
+## Development
 
-const token = provide(container, 'token', () => crypto.randomUUID())
+This repository is a pnpm workspace.
 
-invoke(container, {
-  dependsOn: { token },
-  // eslint-disable-next-line no-console
-  callback: ({ token }) => console.log('token', token),
-})
-
-await start(container)
-await stop(container)
+```sh
+pnpm install
+pnpm typecheck
+pnpm test:run
+pnpm lint
+pnpm build
 ```
 
 ## License
 
-MIT
-
-[npm-version-src]: https://img.shields.io/npm/v/injeca?style=flat&colorA=080f12&colorB=1fa669
-[npm-version-href]: https://npmjs.com/package/injeca
-[npm-downloads-src]: https://img.shields.io/npm/dm/injeca?style=flat&colorA=080f12&colorB=1fa669
-[npm-downloads-href]: https://npmjs.com/package/injeca
-[bundle-src]: https://img.shields.io/bundlephobia/minzip/injeca?style=flat&colorA=080f12&colorB=1fa669&label=minzip
-[bundle-href]: https://bundlephobia.com/result?p=injeca
-[license-src]: https://img.shields.io/github/license/moeru-ai/injeca.svg?style=flat&colorA=080f12&colorB=1fa669
-[license-href]: https://github.com/moeru-ai/injeca/blob/main/LICENSE
-[jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
-[jsdocs-href]: https://www.jsdocs.io/package/injeca
+[MIT](./LICENSE)

@@ -1,0 +1,155 @@
+import type { ServiceExplanation } from '../types/service'
+
+export type InjecaErrorCode
+  = | 'build-after-dispose'
+    | 'duplicate-service'
+    | 'exclusive-conflict'
+    | 'hook-outside-build'
+    | 'invalid-argument'
+    | 'invalid-decision'
+    | 'reentrant-dispose'
+    | 'replace-while-stopping'
+    | 'stale-registration'
+    | 'start-timeout'
+    | 'transaction-incomplete'
+    | 'wait-timeout'
+
+export interface InjecaErrorOptions {
+  cause?: unknown
+}
+
+/**
+ * The base class of all injeca errors. Use `code` to identify an error. The message text is not stable.
+ */
+export class InjecaError extends Error {
+  readonly code: InjecaErrorCode
+
+  constructor(code: InjecaErrorCode, message: string, options?: InjecaErrorOptions) {
+    super(message, options)
+    this.name = 'InjecaError'
+    this.code = code
+  }
+}
+
+/** A started container already has a current registration for the key. */
+export class DuplicateServiceError extends InjecaError {
+  declare readonly code: 'duplicate-service'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('duplicate-service', message, options)
+    this.name = 'DuplicateServiceError'
+  }
+}
+
+/** A registration is no longer the current registration of its service. */
+export class StaleRegistrationError extends InjecaError {
+  declare readonly code: 'stale-registration'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('stale-registration', message, options)
+    this.name = 'StaleRegistrationError'
+  }
+}
+
+/** A hook returned a decision from another run, or a kind that the hook does not accept. */
+export class InvalidDecisionError extends InjecaError {
+  declare readonly code: 'invalid-decision'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('invalid-decision', message, options)
+    this.name = 'InvalidDecisionError'
+  }
+}
+
+/** A caller used a container or an instance after its disposal started. */
+export class BuildAfterDisposeError extends InjecaError {
+  declare readonly code: 'build-after-dispose'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('build-after-dispose', message, options)
+    this.name = 'BuildAfterDisposeError'
+  }
+}
+
+/** `on` was called after `build` settled. */
+export class HookOutsideBuildError extends InjecaError {
+  declare readonly code: 'hook-outside-build'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('hook-outside-build', message, options)
+    this.name = 'HookOutsideBuildError'
+  }
+}
+
+/** A transaction commit found a declared service without `provide`. */
+export class TransactionIncompleteError extends InjecaError {
+  declare readonly code: 'transaction-incomplete'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('transaction-incomplete', message, options)
+    this.name = 'TransactionIncompleteError'
+  }
+}
+
+/** `dispose()` was called from the cleanup chain of the same container. */
+export class ReentrantDisposeError extends InjecaError {
+  declare readonly code: 'reentrant-dispose'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('reentrant-dispose', message, options)
+    this.name = 'ReentrantDisposeError'
+  }
+}
+
+/** An exclusive key has more than one declaration in one resolution area. */
+export class ExclusiveConflictError extends InjecaError {
+  declare readonly code: 'exclusive-conflict'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('exclusive-conflict', message, options)
+    this.name = 'ExclusiveConflictError'
+  }
+}
+
+/** `replace` was called on a service in `stopping`. */
+export class ReplaceWhileStoppingError extends InjecaError {
+  declare readonly code: 'replace-while-stopping'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('replace-while-stopping', message, options)
+    this.name = 'ReplaceWhileStoppingError'
+  }
+}
+
+/** `start()` did not reach `running` for every service before its configured timeout. */
+export class StartTimeoutError extends InjecaError {
+  declare readonly code: 'start-timeout'
+  /** One entry for each service or invocation that is not `running`. */
+  readonly explanations: readonly ServiceExplanation[]
+
+  constructor(message: string, explanations: readonly ServiceExplanation[], options?: InjecaErrorOptions) {
+    super('start-timeout', message, options)
+    this.name = 'StartTimeoutError'
+    this.explanations = explanations
+  }
+}
+
+/** `waitFor()` did not match before its configured timeout. */
+export class WaitTimeoutError extends InjecaError {
+  declare readonly code: 'wait-timeout'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('wait-timeout', message, options)
+    this.name = 'WaitTimeoutError'
+  }
+}
+
+/** A caller passed a value with the wrong shape, or reading a caller-owned property failed. */
+export class InvalidArgumentError extends InjecaError {
+  declare readonly code: 'invalid-argument'
+
+  constructor(message: string, options?: InjecaErrorOptions) {
+    super('invalid-argument', message, options)
+    this.name = 'InvalidArgumentError'
+  }
+}
