@@ -23,6 +23,10 @@
     "./global": {
       "type": "./dist/global.d.mts",
       "default": "./dist/global.mjs"
+    },
+    "./testing": {
+      "type": "./dist/testing.d.mts",
+      "default": "./dist/testing.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -46,5 +50,9 @@
     "@guiiai/logg": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "alien-signals": "^3.2.1",
+    "es-toolkit": "^1.53.1"
   }
 }

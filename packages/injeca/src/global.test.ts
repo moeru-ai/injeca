@@ -1,53 +1,60 @@
-import type { Lifecycle } from './builtin'
-
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { invoke, provide, resetContainer, start, stop } from './global'
-import { lifecycle } from './scoped'
+import { getContainer, invoke, provide, resetContainer, start, stop } from './global'
+import { createContainer, resolve as resolveIn } from './scoped'
 
 beforeEach(() => {
   resetContainer()
 })
 
-describe('workflow with named', () => {
+// The 0.2 workflow cases used the removed `lifecycle` key. These cases port them to `on('start')` and `on('stop')`.
+
+interface Database {
+  connect: () => Promise<void>
+  close: () => Promise<void>
+}
+
+interface WebSocketServer {
+  start: () => Promise<void>
+  stop: () => Promise<void>
+}
+
+function createSpies() {
+  return {
+    databaseConnect: vi.fn(),
+    databaseClose: vi.fn(),
+    webSocketServerStart: vi.fn(),
+    webSocketServerStop: vi.fn(),
+  }
+}
+
+function expectEachCalledOnce(spies: ReturnType<typeof createSpies>) {
+  expect(spies.databaseConnect).toHaveBeenCalledTimes(1)
+  expect(spies.databaseClose).toHaveBeenCalledTimes(1)
+  expect(spies.webSocketServerStart).toHaveBeenCalledTimes(1)
+  expect(spies.webSocketServerStop).toHaveBeenCalledTimes(1)
+}
+
+describe('workflow with named and on hooks', () => {
   it('should work with named pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
+    const spies = createSpies()
 
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
-
-    provide<{ lifecycle: Lifecycle }>('db', {
-      dependsOn: { lifecycle: 'lifecycle' },
-      build: async ({ dependsOn }) => createDatabase({ lifecycle: dependsOn.lifecycle }),
+    provide('db', {
+      build: ({ on }) => {
+        const database: Database = { connect: spies.databaseConnect, close: spies.databaseClose }
+        on('stop', async () => await database.close())
+        return database
+      },
     })
 
-    provide<{ database: Database, lifecycle: Lifecycle }>('ws', {
-      dependsOn: { database: 'db', lifecycle: 'lifecycle' },
-      build: async ({ dependsOn }) => createWebSocketServer({ database: dependsOn.database, lifecycle: dependsOn.lifecycle }),
+    provide<{ database: Database }>('ws', {
+      dependsOn: { database: 'db' },
+      build: async ({ dependsOn, on }) => {
+        await dependsOn.database.connect()
+        const server: WebSocketServer = { start: spies.webSocketServerStart, stop: spies.webSocketServerStop }
+        on('stop', async () => await server.stop())
+        return server
+      },
     })
 
     invoke<{ webSocketServer: WebSocketServer }>({
@@ -58,114 +65,65 @@ describe('workflow with named', () => {
     await start()
     await stop()
 
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
+    expectEachCalledOnce(spies)
   })
 })
 
-describe('workflow with typed', () => {
+describe('workflow with typed and on hooks', () => {
   it('should work with typed named pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
-
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
+    const spies = createSpies()
 
     const database = provide('db', {
-      dependsOn: { lifecycle },
-      build: async ({ dependsOn }) => createDatabase(dependsOn),
+      build: ({ on }) => {
+        const database: Database = { connect: spies.databaseConnect, close: spies.databaseClose }
+        on('stop', async () => await database.close())
+        return database
+      },
     })
 
     const webSocketServer = provide('ws', {
-      dependsOn: { database, lifecycle },
-      build: async ({ dependsOn }) => createWebSocketServer(dependsOn),
+      dependsOn: { database },
+      build: async ({ dependsOn, on }) => {
+        await dependsOn.database.connect()
+        const server: WebSocketServer = { start: spies.webSocketServerStart, stop: spies.webSocketServerStop }
+        on('start', async () => await server.start())
+        on('stop', async () => await server.stop())
+        return server
+      },
     })
 
     invoke({
       dependsOn: { webSocketServer },
-      callback: async ({ webSocketServer }) => await webSocketServer.start(),
+      callback: () => {},
     })
 
     await start()
     await stop()
 
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
+    expectEachCalledOnce(spies)
   })
 })
 
-describe('workflow with auto name', () => {
+describe('workflow with auto name and on hooks', () => {
   it('should work with auto name pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
-
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
+    const spies = createSpies()
 
     const database = provide({
-      dependsOn: { lifecycle },
-      build: async ({ dependsOn }) => createDatabase(dependsOn),
+      build: ({ on }) => {
+        const database: Database = { connect: spies.databaseConnect, close: spies.databaseClose }
+        on('stop', async () => await database.close())
+        return database
+      },
     })
 
     const webSocketServer = provide({
-      dependsOn: { database, lifecycle },
-      build: async ({ dependsOn }) => createWebSocketServer(dependsOn),
+      dependsOn: { database },
+      build: async ({ dependsOn, on }) => {
+        await dependsOn.database.connect()
+        const server: WebSocketServer = { start: spies.webSocketServerStart, stop: spies.webSocketServerStop }
+        on('stop', async () => await server.stop())
+        return server
+      },
     })
 
     invoke({
@@ -176,12 +134,25 @@ describe('workflow with auto name', () => {
     await start()
     await stop()
 
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
+    expectEachCalledOnce(spies)
+    expect(database.key).toMatch(/global\.test\.ts:\d+:\d+$/)
+    expect(webSocketServer.key).not.toBe(database.key)
+  })
+})
+
+describe('getContainer', () => {
+  it('returns the root container of the global functions, and resetContainer replaces it', async () => {
+    const before = getContainer()
+    provide('config', () => 'config')
+    await expect(resolveIn(before, { config: 'config' })).resolves.toEqual({ config: 'config' })
+
+    const child = createContainer({ parent: before, enabled: false })
+    expect(child.parent).toBe(before)
+
+    resetContainer()
+    const after = getContainer()
+    expect(after).not.toBe(before)
+    provide('other', () => 'other')
+    await expect(resolveIn(after, { other: 'other' })).resolves.toEqual({ other: 'other' })
   })
 })

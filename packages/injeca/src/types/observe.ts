@@ -1,0 +1,64 @@
+import type { DecisionKind, ServiceHook } from '../primitives/decision'
+import type { OwnerRecord, ServicePhase, ServiceStatus, StatusCause } from './service'
+
+export interface ObserveRecordBase {
+  /** The key name of the service, or the name of the invocation. */
+  readonly key: string
+  /** The owner record of the container of the service. */
+  readonly owner: OwnerRecord
+  readonly instanceId: string | undefined
+  readonly reason?: string
+}
+
+/** A service moved to another phase. A replayed record has no `from`. */
+export interface PhaseObserveRecord extends ObserveRecordBase {
+  readonly type: 'phase'
+  readonly from: ServicePhase | undefined
+  readonly to: ServicePhase
+  /** The decision that caused the move, when a decision caused it. */
+  readonly decision?: DecisionKind
+}
+
+/** The effective status of a running instance changed. A replayed record, or the first status of an instance, has no `from`. */
+export interface StatusObserveRecord extends ObserveRecordBase {
+  readonly type: 'status'
+  readonly from: ServiceStatus | undefined
+  readonly to: ServiceStatus
+  readonly cause?: StatusCause
+}
+
+/** A hook returned a decision. `ignored` is `true` when injeca did not apply it. */
+export interface DecisionObserveRecord extends ObserveRecordBase {
+  readonly type: 'decision'
+  readonly hook: ServiceHook
+  readonly decision: DecisionKind
+  readonly attempt: number
+  readonly ignored: boolean
+}
+
+/** A call that had no effect, for example `setStatus` after the instance was disposed. */
+export interface IgnoredObserveRecord extends ObserveRecordBase {
+  readonly type: 'ignored'
+  readonly call: 'setStatus'
+}
+
+/** A second `provide` of the same key before `start()` replaced the current registration. No hook runs for it. */
+export interface RegistrationReplacedObserveRecord extends ObserveRecordBase {
+  readonly type: 'registration-replaced'
+  readonly reason: string
+}
+
+/** A `watch` or `observe` callback threw. The error did not stop a transition or the other callbacks. */
+export interface ErrorObserveRecord extends ObserveRecordBase {
+  readonly type: 'error'
+  readonly error: unknown
+}
+
+/** One record of the observe stream. */
+export type ObserveRecord
+  = | PhaseObserveRecord
+    | StatusObserveRecord
+    | DecisionObserveRecord
+    | IgnoredObserveRecord
+    | RegistrationReplacedObserveRecord
+    | ErrorObserveRecord

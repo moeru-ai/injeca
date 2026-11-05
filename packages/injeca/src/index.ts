@@ -1,4 +1,5 @@
 import {
+  getContainer as globalGetContainer,
   invoke as globalInvoke,
   provide as globalProvide,
   resolve as globalResolve,
@@ -7,35 +8,111 @@ import {
   stop as globalStop,
 } from './global'
 
-export type { Lifecycle } from './builtin'
+export type { InjecaErrorCode, InjecaErrorOptions } from './diagnostics/errors'
+export {
+  BuildAfterDisposeError,
+  DuplicateServiceError,
+  ExclusiveConflictError,
+  HookOutsideBuildError,
+  InjecaError,
+  InvalidArgumentError,
+  InvalidDecisionError,
+  ReentrantDisposeError,
+  ReplaceWhileStoppingError,
+  StaleRegistrationError,
+  StartTimeoutError,
+  TransactionIncompleteError,
+  WaitTimeoutError,
+} from './diagnostics/errors'
 
-export type { Logger, LoggerOptions } from './logger'
+export type { Logger, LoggerOptions } from './diagnostics/logger'
 
 export {
   createDefaultLogger,
   createLoggLogger,
   createNoopLogger,
-} from './logger'
+} from './diagnostics/logger'
+export type { Clock } from './helpers/clock'
+
+export { systemClock } from './helpers/clock'
+export type {
+  Decide,
+  DecideFor,
+  Decision,
+  DecisionFor,
+  DecisionKind,
+  DecisionOptions,
+  DecisionSource,
+  DependencyHook,
+  ExponentialBackoff,
+  FailDecision,
+  HandledDecision,
+  HookDecisionKind,
+  HookResult,
+  RebuildDecision,
+  RequeueDecision,
+  RequeueOptions,
+  ServiceHook,
+  StopDecision,
+} from './primitives/decision'
+
+export { observe } from './queries/observe'
+
+export { waitFor, watch } from './queries/watch'
+export type { WaitForOptions, WatchKey } from './queries/watch'
 
 export {
   createContainer,
+  defineKey,
+  dispose,
+  effect,
+  firstAvailable,
   invoke,
-  lifecycle,
+  optional,
   provide,
   resolve,
   start,
   stop,
 } from './scoped'
+
+export type { StartOptions } from './scoped'
 export type {
   BuildContext,
   Container,
+  ContainerOptions,
+  DecisionObserveRecord,
+  DependencyChange,
+  DependencyDeclaration,
+  DependencyDeclarations,
+  DependencyHookContext,
   DependencyMap,
+  DependencySnapshot,
+  DependencyState,
+  Disposer,
+  EffectSetup,
+  ErrorObserveRecord,
+  FallbackDependency,
+  HookContext,
+  HookContextFor,
+  HookDependencies,
+  HookHandler,
+  IgnoredObserveRecord,
   InferProvided,
+  InvocationContext,
+  InvocationHandle,
   InvokeOption,
   InvokeOptionFunc,
   InvokeOptionObject,
   InvokeOptionObjectWithKeys,
   InvokeOptionWithKeys,
+  LifecycleContext,
+  ObserveRecord,
+  ObserveRecordBase,
+  OptionalDependency,
+  OptionalValue,
+  OwnerRecord,
+  OwnerValue,
+  PhaseObserveRecord,
   ProvidedBy,
   ProvidedKey,
   ProvideOption,
@@ -43,8 +120,18 @@ export type {
   ProvideOptionObject,
   ProvideOptionObjectWithKeys,
   ProvideOptionWithKeys,
+  Registration,
+  RegistrationReplacedObserveRecord,
   ResolveDependencyDeclaration,
-} from './scoped'
+  ServiceBlocker,
+  ServiceExplanation,
+  ServicePhase,
+  ServiceState,
+  ServiceStatus,
+  SetStatusOptions,
+  StatusCause,
+  StatusObserveRecord,
+} from './types'
 
 export const injeca = {
   provide: globalProvide,
@@ -53,4 +140,5 @@ export const injeca = {
   start: globalStart,
   stop: globalStop,
   setLogger: globalSetLogger,
+  getContainer: globalGetContainer,
 }

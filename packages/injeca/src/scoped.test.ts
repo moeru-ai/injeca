@@ -1,4 +1,3 @@
-import type { Lifecycle } from './builtin'
 import type { InferProvided, ProvidedBy } from './scoped'
 
 import { sleep } from '@moeru/std/sleep'
@@ -6,14 +5,10 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import {
   createContainer,
-  invoke,
-  lifecycle,
   normalizeName,
   normalizeProvideOption,
   provide,
   resolve,
-  start,
-  stop,
 } from './scoped'
 
 describe('normalizeName', () => {
@@ -45,222 +40,7 @@ describe('normalizeProvideOption', () => {
   })
 })
 
-describe('workflow with named', () => {
-  it('should work with named pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
-
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
-
-    const app = createContainer()
-
-    provide<{ lifecycle: Lifecycle }>(app, 'db', {
-      dependsOn: { lifecycle: 'lifecycle' },
-      build: async ({ dependsOn }) => createDatabase({ lifecycle: dependsOn.lifecycle }),
-    })
-
-    provide<{ database: Database, lifecycle: Lifecycle }>(app, 'ws', {
-      dependsOn: { database: 'db', lifecycle: 'lifecycle' },
-      build: async ({ dependsOn }) => createWebSocketServer({ database: dependsOn.database, lifecycle: dependsOn.lifecycle }),
-    })
-
-    invoke<{ webSocketServer: WebSocketServer }>(app, {
-      dependsOn: { webSocketServer: 'ws' },
-      callback: async ({ webSocketServer }) => await webSocketServer.start(),
-    })
-
-    await start(app)
-    await stop(app)
-
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
-  })
-})
-
-describe('workflow with typed', () => {
-  it('should work with typed named pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
-
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStart(async () => await server.start())
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
-
-    const app = createContainer()
-
-    const database = provide(app, 'db', {
-      dependsOn: { lifecycle },
-      build: async ({ dependsOn }) => createDatabase(dependsOn),
-    })
-
-    const webSocketServer = provide(app, 'ws', {
-      dependsOn: { database, lifecycle },
-      build: async ({ dependsOn }) => createWebSocketServer(dependsOn),
-    })
-
-    invoke(app, {
-      dependsOn: { webSocketServer },
-      callback: () => {},
-    })
-
-    await start(app)
-    await stop(app)
-
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
-  })
-})
-
-describe('workflow with auto name', () => {
-  it('should work with auto name pattern', async () => {
-    interface Database {
-      connect: () => Promise<void>
-      close: () => Promise<void>
-    }
-
-    const databaseConnectSpy = vi.fn()
-    const databaseCloseSpy = vi.fn()
-
-    function createDatabase(params: { lifecycle?: Lifecycle }): Database {
-      const database: Database = { connect: databaseConnectSpy, close: databaseCloseSpy }
-      params.lifecycle?.appHooks.onStop(async () => await database.close())
-      return database
-    }
-
-    interface WebSocketServer {
-      start: () => Promise<void>
-      stop: () => Promise<void>
-    }
-
-    const webSocketServerStartSpy = vi.fn()
-    const webSocketServerStopSpy = vi.fn()
-
-    async function createWebSocketServer(params: { database: Database, lifecycle?: Lifecycle }): Promise<WebSocketServer> {
-      await params.database.connect()
-      const server: WebSocketServer = { start: webSocketServerStartSpy, stop: webSocketServerStopSpy }
-      params.lifecycle?.appHooks.onStop(async () => await server.stop())
-      return server
-    }
-
-    const app = createContainer()
-
-    const database = provide(app, {
-      dependsOn: { lifecycle },
-      build: async ({ dependsOn }) => createDatabase(dependsOn),
-    })
-
-    const webSocketServer = provide(app, {
-      dependsOn: { database, lifecycle },
-      build: async ({ dependsOn }) => createWebSocketServer(dependsOn),
-    })
-
-    invoke(app, {
-      dependsOn: { webSocketServer },
-      callback: async ({ webSocketServer }) => await webSocketServer.start(),
-    })
-
-    await start(app)
-    await stop(app)
-
-    // eslint-disable-next-line no-lone-blocks
-    {
-      expect(databaseConnectSpy).toHaveBeenCalledTimes(1)
-      expect(databaseCloseSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStartSpy).toHaveBeenCalledTimes(1)
-      expect(webSocketServerStopSpy).toHaveBeenCalledTimes(1)
-    }
-  })
-})
-
 describe('resolve', () => {
-  it('should resolve dependencies directly without invoking start', async () => {
-    const app = createContainer()
-
-    const database = provide(app, 'database', () => ({ url: 'memory://' }))
-
-    const modelBuild = vi.fn().mockImplementation(async ({ dependsOn }) => ({ dbUrl: dependsOn.database.url, name: 'User' }))
-    const model = provide(app, 'model', {
-      dependsOn: { database },
-      build: modelBuild,
-    })
-
-    const controllerBuild = vi.fn().mockImplementation(async ({ dependsOn }) => `handling ${dependsOn.model.name} from ${dependsOn.model.dbUrl}`)
-    const controller = provide(app, 'controller', {
-      dependsOn: { model },
-      build: controllerBuild,
-    })
-
-    const resolved = await resolve(app, { controller })
-
-    expect(resolved.controller).toBe('handling User from memory://')
-    expect(app.lifecycleHooks.size).toBe(0)
-
-    expect(modelBuild).toHaveBeenCalledTimes(1)
-    expect(Object.keys(modelBuild.mock.calls[0][0].dependsOn)).toHaveLength(1)
-    expect(modelBuild.mock.calls[0][0].dependsOn.database).toStrictEqual({ url: 'memory://' })
-
-    expect(controllerBuild).toHaveBeenCalledTimes(1)
-    expect(Object.keys(controllerBuild.mock.calls[0][0].dependsOn)).toHaveLength(1)
-    expect(controllerBuild.mock.calls[0][0].dependsOn.model).toStrictEqual({ dbUrl: 'memory://', name: 'User' })
-  })
-
   it('should allow forced types for string dependency keys', async () => {
     interface Database {
       url: string
@@ -286,37 +66,6 @@ describe('resolve', () => {
 
     expectTypeOf<InferProvided<typeof database>>().toEqualTypeOf<Database>()
     expectTypeOf<InferProvided<ProvidedBy<Database>>>().toEqualTypeOf<Database>()
-  })
-
-  it('should wire lifecycle while resolving dependencies', async () => {
-    const app = createContainer()
-    const onStopSpy = vi.fn()
-
-    const database = provide(app, 'database', {
-      dependsOn: { lifecycle },
-      build: ({ dependsOn }) => {
-        dependsOn.lifecycle.appHooks.onStop(onStopSpy)
-        return { url: 'memory://' }
-      },
-    })
-
-    const model = provide(app, 'model', {
-      dependsOn: { database },
-      build: ({ dependsOn }) => ({ dbUrl: dependsOn.database.url, name: 'Account' }),
-    })
-
-    const controller = provide(app, 'controller', {
-      dependsOn: { model },
-      build: ({ dependsOn }) => `handling ${dependsOn.model.name} from ${dependsOn.model.dbUrl}`,
-    })
-
-    const resolved = await resolve(app, { controller })
-
-    expect(resolved.controller).toBe('handling Account from memory://')
-    expect(app.lifecycleHooks.size).toBe(1)
-
-    await stop(app)
-    expect(onStopSpy).toHaveBeenCalledTimes(1)
   })
 
   it('should reuse in-progress builds to avoid duplicate construction', async () => {

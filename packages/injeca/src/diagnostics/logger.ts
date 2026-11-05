@@ -1,6 +1,6 @@
 import type { Logg as LoggLogger } from '@guiiai/logg'
 
-import { name } from '../package.json'
+import { name } from '../../package.json'
 
 export interface Logger {
   provide: (name: string, dependencies: string[]) => void
