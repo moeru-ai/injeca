@@ -1,12 +1,14 @@
 import type { ServiceNode } from '../graph/graph'
-import type { Container, DependencyMap, ProvidedKey, ServiceBlocker, ServiceExplanation, StatusCause } from '../types'
+import type { OwnerRecord, ServiceBlocker, ServiceExplanation, StatusCause } from '../types'
 
-import { nodeOf } from '../graph/nodes'
-import { resolutionOf, slotOf } from '../graph/resolvers/resolvers'
+import { resolutionOf } from '../graph/resolvers/resolvers'
 import { causeOf } from '../graph/status'
-import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
-import { normalizeName } from '../primitives/keys'
+
+/** The owners of conflicting declarations, in container order. The order of the registrations has no effect. */
+function ownersOf(declarations: readonly ServiceNode[]): readonly OwnerRecord[] {
+  return Object.freeze([...declarations].sort((a, b) => a.container.seq - b.container.seq).map(declaration => declaration.container.owner))
+}
 
 /** Explains one service from its current resolution data. It is a pure read. */
 export function explainService(service: ServiceNode): ServiceExplanation {
@@ -15,7 +17,16 @@ export function explainService(service: ServiceNode): ServiceExplanation {
 
   if (phase === 'failed')
     blockers.push({ kind: 'failed', error: service.failure?.error })
-  if (!service.signals.active())
+  if (phase === 'retrying') {
+    const previous = service.signals.instance()?.hookStates.get('start')?.previous
+    blockers.push({ kind: 'retrying', attempt: previous?.attempt ?? 1, ...withoutUndefined({ reason: previous?.reason }) })
+  }
+  const rivals = service.signals.rivals()
+  if (rivals.length > 0) {
+    const registration = service.template ?? service
+    blockers.push({ kind: 'conflict', key: service.name, owners: ownersOf([registration, ...rivals]) })
+  }
+  if (!service.signals.active() && !service.perConsumer)
     blockers.push({ kind: 'not-started' })
 
   for (const edge of service.edges) {
@@ -23,22 +34,30 @@ export function explainService(service: ServiceNode): ServiceExplanation {
       continue
 
     const resolution = resolutionOf(service, edge)
-    if (resolution.kind === 'missing') {
-      blockers.push({ kind: 'missing-provider', dependency: edge.name, key: edge.keyName })
-      continue
+    switch (resolution.kind) {
+      case 'missing':
+        blockers.push({ kind: 'missing-provider', dependency: edge.name, key: edge.keyName })
+        continue
+      case 'rejected':
+        blockers.push({ kind: 'rejected-provider', dependency: edge.name, key: resolution.provider.name, owner: resolution.provider.container.owner, metadata: resolution.provider.metadata })
+        continue
+      case 'conflict':
+        blockers.push({ kind: 'conflicting-dependency', dependency: edge.name, key: resolution.provider.name, owners: ownersOf([resolution.provider, ...resolution.rivals]) })
+        continue
+      case 'resolved': {
+        const status = resolution.provider.signals.effective()
+        // A running service keeps an unavailable dependency. Its own status reports it. Only a waiting service lists it as a blocker.
+        if (phase !== 'running' && status?.status === 'unavailable')
+          blockers.push({ kind: 'unavailable-dependency', dependency: edge.name, key: resolution.provider.name, cause: causeOf(resolution.provider, status) })
+        continue
+      }
+      case 'not-running': {
+        const providerPhase = resolution.provider.signals.phase()
+        blockers.push(providerPhase === 'failed'
+          ? { kind: 'failed-dependency', dependency: edge.name, key: edge.keyName, error: resolution.provider.failure?.error }
+          : { kind: 'pending-dependency', dependency: edge.name, key: edge.keyName, phase: providerPhase })
+      }
     }
-    if (resolution.kind === 'resolved') {
-      const status = resolution.provider.signals.effective()
-      // A running service keeps an unavailable dependency. Its own status reports it. Only a waiting service lists it as a blocker.
-      if (phase !== 'running' && status?.status === 'unavailable')
-        blockers.push({ kind: 'unavailable-dependency', dependency: edge.name, key: resolution.provider.name, cause: causeOf(resolution.provider, status) })
-      continue
-    }
-
-    const providerPhase = resolution.provider.signals.phase()
-    blockers.push(providerPhase === 'failed'
-      ? { kind: 'failed-dependency', dependency: edge.name, key: edge.keyName, error: resolution.provider.failure?.error }
-      : { kind: 'pending-dependency', dependency: edge.name, key: edge.keyName, phase: providerPhase })
   }
 
   const status = service.signals.effective()
@@ -52,18 +71,6 @@ export function explainService(service: ServiceNode): ServiceExplanation {
   })
 }
 
-/**
- * Explains the current service of `key` in `container`. Tests use it. Step 3 replaces it with `graph(container).explain()`.
- *
- * @internal
- */
-export function explainKey(container: Container, key: string | ProvidedKey<string, unknown, DependencyMap | undefined>): ServiceExplanation | undefined {
-  return untracked(() => {
-    const service = slotOf(nodeOf(container), normalizeName(key))()
-    return service ? explainService(service) : undefined
-  })
-}
-
 /** Formats a cause chain, for example `'airi.llm' is unavailable (reason), because 'gateway/store' is unavailable`. */
 export function describeCause(cause: StatusCause): string {
   const parts: string[] = []
@@ -71,6 +78,10 @@ export function describeCause(cause: StatusCause): string {
     parts.push(`'${current.key}' is ${current.status}${current.reason === undefined ? '' : ` (${current.reason})`}`)
 
   return parts.join(', because ')
+}
+
+function describeOwners(owners: readonly OwnerRecord[]): string {
+  return owners.map(owner => JSON.stringify(owner)).join(', ')
 }
 
 function describeBlocker(blocker: ServiceBlocker): string {
@@ -83,8 +94,16 @@ function describeBlocker(blocker: ServiceBlocker): string {
       return `'${blocker.key}' (${blocker.dependency}) is ${blocker.phase}`
     case 'unavailable-dependency':
       return `${describeCause(blocker.cause)} (${blocker.dependency})`
+    case 'rejected-provider':
+      return `a resolution condition rejected the provider of '${blocker.key}' from ${JSON.stringify(blocker.owner)} (${blocker.dependency})`
+    case 'conflicting-dependency':
+      return `the exclusive key '${blocker.key}' (${blocker.dependency}) has more than one declaration: ${describeOwners(blocker.owners)}`
+    case 'conflict':
+      return `the exclusive key '${blocker.key}' has more than one declaration: ${describeOwners(blocker.owners)}`
     case 'failed':
       return 'the service failed'
+    case 'retrying':
+      return `its start hook requeued after attempt ${blocker.attempt}${blocker.reason === undefined ? '' : ` (${blocker.reason})`}`
     case 'not-started':
       return 'its container is not started'
   }

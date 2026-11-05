@@ -42,6 +42,14 @@ export interface IgnoredObserveRecord extends ObserveRecordBase {
   readonly call: 'setStatus'
 }
 
+/** A `start` or `stop` hook did not settle before its configured timeout. The `onTimeout` decision follows as a `decision` record. */
+export interface TimeoutObserveRecord extends ObserveRecordBase {
+  readonly type: 'timeout'
+  readonly hook: 'start' | 'stop'
+  readonly timeoutMs: number
+  readonly attempt: number
+}
+
 /** A second `provide` of the same key before `start()` replaced the current registration. No hook runs for it. */
 export interface RegistrationReplacedObserveRecord extends ObserveRecordBase {
   readonly type: 'registration-replaced'
@@ -60,5 +68,6 @@ export type ObserveRecord
     | StatusObserveRecord
     | DecisionObserveRecord
     | IgnoredObserveRecord
+    | TimeoutObserveRecord
     | RegistrationReplacedObserveRecord
     | ErrorObserveRecord

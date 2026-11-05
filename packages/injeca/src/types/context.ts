@@ -1,7 +1,7 @@
 import type { DecideFor, DecisionFor, DependencyHook, HookResult, ServiceHook } from '../primitives/decision'
 import type { Container } from './container'
 import type { DependencyMap, OptionalValue } from './keys'
-import type { DependencyChange, DependencySnapshot, ServiceStatus, SetStatusOptions } from './service'
+import type { DependencyChange, DependencySnapshot, OwnerRecord, ServiceStatus, SetStatusOptions } from './service'
 
 type HookDependency<V> = [Exclude<V, undefined>] extends [OptionalValue<infer T>] ? DependencySnapshot<T> | undefined : DependencySnapshot<V>
 
@@ -53,6 +53,8 @@ export type BuildContext<D extends DependencyMap | undefined = undefined> = {
   name: string
   /** The id of the instance that this build creates. */
   instanceId: string
+  /** The owner record of the consumer container, when the service has `perConsumer: true`. */
+  consumer?: OwnerRecord
   /**
    * Sets the own status of the instance. It stays valid after `build` returns.
    * After the instance is disposed, a call has no effect and goes to the observe stream.

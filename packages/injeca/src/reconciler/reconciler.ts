@@ -5,8 +5,12 @@ import { buildLost } from '../graph/resolvers/resolvers'
 import { untracked } from '../helpers/signals'
 import { reconcilePending } from './build'
 import { callListeners } from './calls'
+import { reconcileConflict } from './conflict'
 import { reconcileRunning } from './dependency-hooks'
+import { reconcileRegistration } from './registration'
+import { reconcileRetrying } from './retry'
 import { finalize, reconcileStopping } from './stop'
+import { checkSwap } from './swap'
 
 export interface ReconcilerOptions {
   /** The cleanup context of the runtime. A drain starts outside all of its frames. */
@@ -62,9 +66,18 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
   }
 
   function reconcile(service: ServiceNode): void {
+    // A service of an open transaction belongs to the transaction.
+    if (service.transaction)
+      return
     const phase = service.signals.phase()
     if (phase === 'withdrawn')
       return
+    if (service.perConsumer) {
+      reconcileRegistration(service)
+      return
+    }
+
+    checkSwap(service)
 
     if (service.busy) {
       // A transition is in progress. Do not interrupt it. Only abort the signal of a superseded build or hook run.
@@ -85,12 +98,18 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
       case 'pending':
         reconcilePending(service)
         return
+      case 'conflict':
+        reconcileConflict(service)
+        return
       case 'failed':
         if (!service.signals.present())
           finalize(service)
         return
       case 'running':
         reconcileRunning(service)
+        return
+      case 'retrying':
+        reconcileRetrying(service)
         return
       case 'stopping':
         reconcileStopping(service)

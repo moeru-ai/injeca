@@ -4,7 +4,7 @@ import type { Deferred } from '../helpers/deferred'
 import type { DeliveryQueue } from '../helpers/delivery-queue'
 import type { ReactiveOwner, WritableSignal } from '../helpers/signals'
 import type { Decision, DecisionKind, ServiceHook } from '../primitives/decision'
-import type { Container, DependencyState, Disposer, EffectSetup, ObserveRecord, OwnerRecord, ServicePhase, ServiceStatus, SetStatusOptions, StatusCause } from '../types'
+import type { Container, DependencyState, Disposer, EffectSetup, HookTimeouts, ListenerMetadata, ObserveRecord, OwnerRecord, ResolutionCondition, ServiceMetadata, ServicePhase, ServiceStatus, SetStatusOptions, StatusCause, TimeoutHandler } from '../types'
 
 // The data model of the graph. The node types refer to each other, so they are in one file.
 // The functions for each node kind are in `nodes/`. Resolution is in `resolvers/`. Status is in `status.ts`.
@@ -18,6 +18,15 @@ export interface DependencyEdge {
   readonly candidates: readonly string[]
   readonly optional: boolean
   readonly fallback: boolean
+  /** The resolution condition from `where`. */
+  readonly condition?: ResolutionCondition
+}
+
+/** The retry and timeout options of one registration or one container, read once from the caller. */
+export interface Policy {
+  readonly maxAttempts?: number
+  readonly timeouts?: Readonly<HookTimeouts>
+  readonly onTimeout?: TimeoutHandler
 }
 
 /** An own status or an effective status, with its reason and cause. */
@@ -27,10 +36,17 @@ export interface StatusValue {
   readonly cause?: StatusCause
 }
 
-/** The resolution of one declared edge. Only a `running` provider resolves. */
+/**
+ * The resolution of one declared edge. Only a `running` provider resolves.
+ *
+ * - `rejected`: a resolution condition rejected the provider.
+ * - `conflict`: the provider is an exclusive key with more than one declaration. `rivals` are the other declarations.
+ */
 export type Resolution
   = | { readonly kind: 'missing' }
     | { readonly kind: 'not-running', readonly provider: ServiceNode }
+    | { readonly kind: 'rejected', readonly provider: ServiceNode }
+    | { readonly kind: 'conflict', readonly provider: ServiceNode, readonly rivals: readonly ServiceNode[] }
     | { readonly kind: 'resolved', readonly provider: ServiceNode, readonly instance: InstanceNode }
 
 /** A hook handler as the reconciler stores it. The public `on` overloads check the types. */
@@ -69,8 +85,10 @@ export interface InstanceNode {
   readonly signals: InstanceSignals
   /** The controller of the hook run in progress. It aborts when a newer target supersedes the run. */
   hookRun: AbortController | undefined
-  /** The waiting run of a dependency hook requeue. A service never has more than one. */
+  /** The waiting run of a requeue, of a `start` hook or of a dependency hook. A service never has more than one. */
   requeueWait: { readonly cancel: () => void } | undefined
+  /** The index of the `start` handler that the next attempt runs first. A requeue keeps the handlers before it as done. */
+  startFrom: number
   value: unknown
   /** `true` while `build` runs. `on` is valid only then. */
   building: boolean
@@ -87,9 +105,52 @@ export interface RawBuildContext {
   readonly effect: (setup: EffectSetup) => void
   readonly signal: AbortSignal
   readonly setStatus: (status: ServiceStatus, reasonOrOptions?: string | SetStatusOptions) => void
+  /** The owner record of the consumer container of a `perConsumer` instance. */
+  readonly consumer?: OwnerRecord
 }
 
 export type BuildFunction = (context: RawBuildContext) => unknown
+
+/** The options of one registration, read once from the caller. `provide`, `replace`, and transactions share it. */
+export interface ServiceDefinition {
+  readonly edges: readonly DependencyEdge[]
+  readonly build: BuildFunction
+  readonly metadata: ServiceMetadata
+  readonly perConsumer: boolean
+  readonly policy: Policy
+}
+
+/** The state behind the result of one `provide` call. */
+export interface RegistrationNode {
+  readonly container: ContainerNode
+  readonly name: string
+  readonly exclusive: boolean
+  /** The published service. It is `undefined` before a transaction commits. */
+  current: ServiceNode | undefined
+  /** The new service of a `replace` call that waits for its swap. */
+  pending: ServiceNode | undefined
+}
+
+/**
+ * How a replacement ended.
+ *
+ * - `swapped`: the new instance took over.
+ * - `failed`: the build or the start of the new instance failed. The old instance did not change.
+ * - `stopping`: the service started to stop before the swap.
+ * - `cancelled`: a newer `replace` or a withdrawal superseded the replacement.
+ */
+export type SwapOutcome
+  = | { readonly kind: 'swapped' }
+    | { readonly kind: 'failed', readonly error: unknown }
+    | { readonly kind: 'stopping' }
+    | { readonly kind: 'cancelled' }
+
+/** The state of a new service that replaces `target` after it completes `start`. */
+export interface SwapState {
+  readonly target: ServiceNode
+  /** Settles the `replace` call. Only the first call has an effect. */
+  readonly settle: (outcome: SwapOutcome) => void
+}
 
 /**
  * - `service`: one `provide` call. It has a value and a key.
@@ -123,7 +184,11 @@ export interface ServiceSignals {
   readonly resolutions: ReadonlyMap<string, () => Resolution>
   /** The effective status. It is `undefined` outside `running`. */
   readonly effective: () => StatusValue | undefined
-  /** `true` when a newer target supersedes the current run: the service is withdrawn or stopped, or a required dependency is withdrawn. */
+  /** The other declarations of an exclusive key in the resolution area. The service is in conflict when the list is not empty. */
+  readonly rivals: () => readonly ServiceNode[]
+  /** The instances of a `perConsumer` service, by consumer container. Only the reconciler writes it. */
+  readonly consumers: WritableSignal<ReadonlyMap<ContainerNode, ServiceNode>>
+  /** `true` when a newer target supersedes the current run: the service is withdrawn or stopped, a required dependency is withdrawn, or the key is in conflict. */
   readonly targetLost: () => boolean
 }
 
@@ -134,6 +199,24 @@ export interface ServiceNode {
   readonly container: ContainerNode
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
+  readonly metadata: ServiceMetadata
+  readonly policy: Policy
+  /** `true` when the key of the service is exclusive. */
+  readonly exclusive: boolean
+  /** `true` for the registration of a `perConsumer` service. It never builds. Each consumer container gets its own service. */
+  readonly perConsumer: boolean
+  /** The `perConsumer` registration that this consumer service belongs to. A replacement of the registration moves it. */
+  template: ServiceNode | undefined
+  /** The owner record of the consumer container of a `perConsumer` service. */
+  readonly consumer: OwnerRecord | undefined
+  /** The registration of a service with a key. A replacement keeps it. */
+  registration: RegistrationNode | undefined
+  /** Set while this service waits to replace another service. */
+  swap: SwapState | undefined
+  /** The service that replaced this one. */
+  replacedBy: ServiceNode | undefined
+  /** The transaction that builds this service. The reconciler does not touch the service until the transaction ends. */
+  transaction: TransactionNode | undefined
   /** Increments when the service gets new options. Part of the epoch. */
   revision: number
   readonly signals: ServiceSignals
@@ -151,6 +234,42 @@ export interface ServiceNode {
   /** The effective status that the observe stream reported last. */
   reportedStatus: StatusValue | undefined
   disposeEffects: () => void
+}
+
+/** One listener of the listener registry. */
+export interface ListenerRecord {
+  readonly seq: number
+  readonly handler: unknown
+  readonly metadata: ListenerMetadata
+}
+
+/** One key of an open transaction. */
+export interface TransactionEntry {
+  readonly name: string
+  /** The edges of `tx.declare`. */
+  declared: readonly DependencyEdge[] | undefined
+  optional: boolean
+  /** The definition of `tx.provide` or `tx.replace`. */
+  definition: ServiceDefinition | undefined
+  /** `true` for `tx.replace`. */
+  replace: boolean
+  /** The registration that `tx.replace` names, when it got a registration and not a name. */
+  target: RegistrationNode | undefined
+  /** The registration that `tx.provide` returned. */
+  registration: RegistrationNode | undefined
+  readonly exclusive: boolean
+}
+
+export interface TransactionNode {
+  readonly container: ContainerNode
+  state: 'open' | 'committing' | 'done' | 'aborted'
+  readonly entries: Map<string, TransactionEntry>
+  /** The error that a commit rejects with after an abort. */
+  abortError: unknown
+  /** The controllers of the builds in progress. An abort aborts them. */
+  readonly controllers: Set<AbortController>
+  /** Settles when the commit or the abort ends. */
+  settled: Promise<void> | undefined
 }
 
 /** The reactive state of a container. */
@@ -171,6 +290,14 @@ export interface ContainerNode {
   /** All services and invocations of the container that are not `withdrawn`, with the services that leave. */
   readonly services: Set<ServiceNode>
   readonly signals: ContainerSignals
+  /** The key names that do not resolve from the ancestors. */
+  readonly isolated: ReadonlySet<string>
+  /** The retry and timeout options of `createContainer`. */
+  readonly policy: Policy
+  /** The listener registry, by event id. */
+  readonly listeners: Map<string, ListenerRecord[]>
+  /** The transactions that did not end. A disposal aborts them. */
+  readonly transactions: Set<TransactionNode>
   readonly effects: Disposer[]
   readonly reactiveOwner: ReactiveOwner
   readonly stopReactive: () => void
@@ -206,10 +333,14 @@ export interface Observer {
 /** The state that all containers of one tree share. The transitions read it from `service.container.runtime`. */
 export interface Runtime {
   readonly clock: Clock
+  /** The random source for the backoff jitter. It returns a number from 0 up to, but not including, 1. */
+  readonly random: () => number
   readonly context: CleanupContext
   /** Delivers observe records and watch states in order. */
   readonly deliveries: DeliveryQueue
   readonly observers: Set<Observer>
+  /** The published services with a key, by key name, in all containers. Exclusive conflicts read it. */
+  readonly declarations: Map<string, WritableSignal<ReadonlySet<ServiceNode>>>
   readonly reconciler: Reconciler
   nextSeq: () => number
   nextInstanceId: () => string

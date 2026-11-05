@@ -202,7 +202,9 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 
 - `createContainer(options?)` returns a container. `options.parent` makes a child container. `options.owner` is a serializable owner record. injeca does not interpret its fields.
 - A container resolves keys from its own registrations and from those of its ancestors.
-- A container can isolate a key. Then the key does not resolve from the ancestors.
+- A registration in a child container shadows an ancestor provider of the same key only while it is `running`. Until then, dependents keep the ancestor provider. When the child provider starts, dependents move to it, and they get `dependency-change`. When it stops, they move back to the ancestor provider. So shadowing never leaves a gap.
+- A container can isolate a key. Then the key does not resolve from the ancestors. `createContainer({ isolate: [key] })` sets the isolated keys. They do not change later. An isolated key also ends the resolution area of an exclusive key of an ancestor.
+- `watch(container, key)` reports the provider that a consumer in `container` resolves. With shadowing, that is the ancestor provider until the child provider runs.
 - `dispose(container)` withdraws the registrations and invocations of the container, disposes the child containers, and runs the effects of the container in reverse registration order.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
 - A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. The check is the same in every runtime, so injeca does not use `AsyncLocalStorage`.
@@ -233,7 +235,10 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - injeca decides the conflict from the set of registrations. The order has no effect.
 - A service in `conflict` runs no code. Its dependents stay `pending`.
 - When only one registration remains, that service leaves `conflict` and converges.
-- `explain()` lists the owners of all conflicting registrations.
+- `explain()` lists the owners of all conflicting registrations, in container order.
+- A registration of the same name without the exclusive marker counts as a declaration. A conflict needs only one exclusive declaration.
+- A `running` service stops when a second declaration appears. Then it goes to `conflict`.
+- The conflict is a phase, not an error. No call throws an error for it.
 
 ### Resolution conditions
 
@@ -241,6 +246,9 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - If the condition returns `false`, the dependency is not resolved. A required dependency keeps the service `pending`. An optional dependency is `undefined`.
 - The condition must be pure and synchronous. A thrown error counts as `false` and goes to the observe stream.
 - `explain()` names the provider that the condition rejected.
+- The condition checks the provider that the shadowing rule selects. A rejection does not fall back to an ancestor provider.
+- The input of a condition is frozen, so injeca calls each condition once for each provider registration and keeps the result.
+- `where(optional(key), condition)` and `optional(where(key, condition))` are the same.
 - plugin-sdk uses conditions for semantic version ranges. injeca does not know semantic versions.
 
 ### Fallback dependencies
@@ -260,6 +268,8 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - A container has one current registration for each key. Before `start()`, a second `provide` of the same name replaces the first registration, as in 0.2. After `start()`, use `replace()`. A second `provide` fails with `duplicate-service`.
 - A replacement before `start()` sends a `registration-replaced` record to the observe stream. No hook runs for it.
 - `options.perConsumer: true` makes `build` run once for each consumer container. Then the build context has `consumer`, the owner record of that consumer. The instance disposes with the consumer container.
+  - The registration itself never builds and stays `pending`. `start()` does not wait for it. Each consumer container gets its own service in that container. Its observe records carry the owner of the consumer container.
+  - `replace()` on the registration replaces each running consumer service atomically. The other consumer services build again on demand.
 - `options.metadata` is a frozen record that resolution conditions and graph queries can read.
 
 ### Build context
@@ -314,7 +324,7 @@ declared → pending → building → starting → running
 | `retrying` | A `start` hook returned `requeue`. The service waits for the next attempt. |
 | `running` | The instance serves calls. Only this phase has a status. |
 | `stopping` | The service waits until its holders release it. Then the `stop` hook and the effect disposers run. |
-| `failed` | Retries ended, or a hook returned `fail`. A user or Host action can move the service out of `failed`. |
+| `failed` | A build failed, retries ended, a timeout failed, or a hook returned `fail`. A user or Host action moves the service out of `failed`: `start()` again, `stop()` and then `start()`, or `replace()` with a new configuration. |
 | `withdrawn` | The registration is withdrawn and the instance is disposed. |
 
 | Step | Rule |
@@ -354,6 +364,9 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - The swap is one batch. After it, the service has a new `instanceId`. Dependents follow the rule for a replaced required dependency in [dependency-change](#dependency-change).
 - The old instance runs `stop` and dispose only after each holder releases it. A holder that calls an `unavailable` old instance gets the failure that `unavailable` means.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
+- `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
+- A service without a serving instance (`pending`, `conflict`, `failed`, `building`, `starting`, or `retrying`) has no old instance to keep. The new registration takes the slot at once.
+- An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
 
 ### Transactions
 
@@ -373,6 +386,11 @@ await tx.commit()
 - `tx.abort()` removes all declared services and built services of the transaction.
 - A commit fails with `transaction-incomplete` if a declared service has no `provide`, unless the declaration is optional.
 - Container disposal during a pending transaction aborts the transaction. A build that settles after the abort cannot publish.
+- `commit()` resolves after the publish. It does not wait for the `start` hooks. They run in dependency order, so a service starts after the services of the same transaction that it requires.
+- In a container that is not started, `commit()` builds nothing and publishes all services as `pending`. `start()` builds them.
+- `tx.provide` without `dependsOn` uses the edges of `tx.declare`. A second `tx.provide` or `tx.replace` of one key fails with `duplicate-service`.
+- At the commit, `tx.provide` of a key that a started container already has fails with `duplicate-service`. `tx.replace` of a key without a current registration fails with `stale-registration`.
+- After a disposal, `commit()` rejects with `build-after-dispose`. After `tx.abort()`, it rejects with `transaction-incomplete`.
 
 ## Convergence
 
@@ -456,13 +474,17 @@ decide.fail(error, { reason? })
 
 ### Requeue
 
-- `after` sets a fixed delay in milliseconds.
-- `backoff: { kind: 'exponential', initial, max, jitter? }` sets an exponential delay. The caller gives all values.
+- `after` sets a fixed delay in milliseconds. When a decision has `after` and `backoff`, `after` wins.
+- `backoff: { kind: 'exponential', initial, max, jitter? }` sets an exponential delay. The caller gives all values. The delay is `initial * 2 ** (attempt - 1)`, and at most `max`.
+- `jitter` is a fraction from 0 to 1. The delay becomes a random value between `delay * (1 - jitter)` and `delay`. The random source is `createContainer({ random })` of the root container. It defaults to `Math.random`. Tests inject it, so the delays are deterministic.
 - `maxAttempts` on the decision, the service, or the container limits the attempts. Without a limit, the requeue continues until the dependency or the container changes.
+- A `maxAttempts` on the decision overrides the `provide` option. The `provide` option overrides the `createContainer` option. A container without a value uses the value of its nearest ancestor that has one.
+- The attempt count is for each hook of each instance. A run that returns `requeue` at attempt `maxAttempts` ends the retries. So `maxAttempts: 3` allows three runs.
 - A requeued run reads the latest snapshot.
 - Changes that arrive while a run waits merge into that run. A service never has more than one waiting run.
 - A requeue cannot keep a service alive. If a required dependency is withdrawn during any wait, the service cancels the wait and stops at once.
 - A `start` requeue keeps the instance. It runs `start` again, not `build`. The service is `retrying` and not available. It still holds its dependencies.
+- With more than one `start` handler, the next attempt runs the handler that requeued, then the handlers after it. The handlers before it do not run again.
 - A dependency hook requeue keeps the service `running` with its current bindings.
 - A requeue for a replaced required dependency delays the release of the old instance. Set `maxAttempts` for this case.
 - When attempts end, a running service stops first. Then it goes to `failed` with the last reason.
@@ -470,9 +492,13 @@ decide.fail(error, { reason? })
 ### Timeouts
 
 - `start` and `stop` wait until they settle, unless the service or the container sets a timeout.
-- A service sets `timeouts: { start, stop }` in its `provide` options. Container options can set values for all services. A service value overrides a container value.
-- When a timeout passes, injeca records it in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail`.
-- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container.
+- A service sets `timeouts: { start, stop }` in its `provide` options. Container options can set values for all services. A service value overrides a container value, field by field. A container without a value uses the value of its nearest ancestor that has one.
+- The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
+- When a timeout passes, injeca records a `timeout` record in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail` with a `hook-timeout` error.
+- `onTimeout(context)` is a synchronous function. `context.hook` is `'start'` or `'stop'`, and `context.decide` has the methods of that hook. A value that is not a decision gives `fail`.
+- At a `start` timeout, the hook run signal aborts. The handlers after the stuck handler do not run. A decision that the stuck handler returns later is ignored and recorded.
+- At a `stop` timeout, injeca stops waiting for the stuck callback. It still calls the remaining `stop` handlers and effect disposers, but it does not wait for them.
+- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container. Then the disposal continues and rejects with the `hook-timeout` error.
 
 ## Reading state
 
@@ -489,6 +515,7 @@ decide.fail(error, { reason? })
 - `observe(container, callback)` is a read-only view of all transitions in the container. It replays the current state of all services at once.
 - Each record has the key, the owner, the `instanceId`, the from and to phase or status, the decision kind, and the reason.
 - A `registration-replaced` record tells that a second `provide` before `start()` replaced a registration. Its reason names the replacement.
+- A `timeout` record tells that a `start` or `stop` hook did not settle before its timeout. It has the hook, the timeout, and the attempt. A `decision` record with the `onTimeout` decision follows it.
 - An inspector or a trace exporter uses this stream. A consumer can send it to another process with eventa.
 
 ### Graph queries
@@ -502,9 +529,13 @@ Graph queries are pure reads. They never change state.
 | `graph(container).order(keys?)` | Topological order |
 | `graph(container).cycles()` | All cycles |
 | `graph(container).impact(change)` | The services that a proposed change stops or rebuilds |
-| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies |
+| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue |
 
 A user interface can preview an action before the user confirms it. An example: "Disabling Y also stops X, A, and B." For this, `graph(container).impact()` runs on a copy of the graph with the proposed change. The copy does not change the real graph. No action requires a preview.
+
+- The queries cover the container and its descendants. A key resolves as for a consumer in the container. A key that only a descendant has resolves to the first such service.
+- `order()` keeps the members of one cycle together, in registration order.
+- A change for `impact()` is `{ kind: 'withdraw', key }`, `{ kind: 'replace', key }`, or `{ kind: 'dispose', container }`. The result has `stopped`, `rebuilt`, and `notified`. `notified` lists the dependents with a `dependency-change` handler, because the handler decides. An ancestor provider that serves counts as an alternative, so its dependents rebuild and do not stop.
 
 ### Listener registry
 
@@ -513,12 +544,13 @@ injeca does not dispatch events. It gives consumers a place to store listeners t
 - `listen(container, eventKey, handler, metadata?)` stores a listener. The container owns it.
 - `listeners(container, eventKey)` returns the current listeners, with owner and metadata. Metadata examples are priority, timeout, and failure policy.
 - An event key is any object with a string `id`. eventa definitions have this shape. injeca does not import eventa.
+- `listen()` returns a function that removes the listener. `listeners()` covers the container and its descendants, in registration order.
 
 The consumer defines the rules that run these listeners. For example, the AIRI harness combines gate decisions, runs transform hooks in a declared order, and collects inject hooks in parallel.
 
 ## Errors
 
-- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `exclusive-conflict`, `replace-while-stopping`, `start-timeout`, `invalid-argument`.
+- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
 
 ## Implementation
@@ -546,12 +578,12 @@ The implementation has two layers. The interactive model uses the same split.
 | --- | --- |
 | Root | `index.ts` (public entry), `scoped.ts` (functions that take a container), `global.ts` (the global `injeca` object) |
 | `primitives/` | The public composition primitives: `provide`, `invoke`, `resolve`, `start` and `stop`, keys, containers, and decisions |
-| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, and later the graph queries |
+| `queries/` | Read-only functions: `watch`, `waitFor`, `observe`, the graph queries, and `listeners` |
 | `diagnostics/` | Errors, explanations, and the logger |
 | `types/` | Public types, by area |
 | `graph/` | `graph.ts` (the data model of the graph: the node types, `DependencyEdge`, `Resolution`, `StatusValue`, `Runtime`, `Reconciler`, and `Observer`), status, and observers |
-| `graph/nodes/` | The functions for each node kind: `container`, `service`, and `edge`. The types are in `graph.ts`, because they refer to each other |
-| `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution. `plain.ts` and `fallback.ts` resolve each edge kind |
+| `graph/nodes/` | The functions for each node kind: `container`, `service`, `edge`, `registration`, and `consumer` (the services of a `perConsumer` registration), with `definition` (the options of one registration). The types are in `graph.ts`, because they refer to each other |
+| `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution and the shadowing rule. `plain.ts` and `fallback.ts` resolve each edge kind. `exclusive.ts` has the conflicts. `condition.ts` runs the resolution conditions |
 | `reconciler/` | The execution layer. `reconciler.ts` has the queue and the drain. Each transition has one file |
 | `helpers/` | Internal building blocks: signals, the delivery queue, the cleanup context, the clock, and small utilities |
 | `testing/` | The `injeca/testing` entry (`testing.ts`) and test helpers |
@@ -577,12 +609,14 @@ The reconciler owns async work.
 
 Each step is one pull request in `moeru-ai/injeca` with its tests. The 0.2 tests must pass at each step without changes, except the tests of `lifecycle`.
 
-1. Core: the new engine under the 0.2 API. Keys with `withdraw()`, `defineKey`, `optional`, the build context (`on('start')`, `on('stop')`, `effect`, `signal`), invocations, `resolve`, `start`, `stop`, child containers, `dispose`, decisions, and errors. The `lifecycle` key is removed.
-2. Convergence: run-time `provide` and withdrawal, epochs, holder waits, `dependency-change`, status and effective status, `setStatus` after `build`, cause chains, `firstAvailable`, `dependency-status-change`, `watch`, `waitFor`, and `observe`.
-3. Composition: transactions, atomic replacement, exclusive keys, resolution conditions, `perConsumer`, key isolation, graph queries, and the listener registry.
-4. Retries: requeue, backoff, `maxAttempts`, and timeouts.
-5. Release: the README, the injeca skill, and version 0.3.0.
-6. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
+Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The maintainer releases it with `bumpp` after the merge. Step 6 is the next work.
+
+1. Done. Core: the new engine under the 0.2 API. Keys with `withdraw()`, `defineKey`, `optional`, the build context (`on('start')`, `on('stop')`, `effect`, `signal`), invocations, `resolve`, `start`, `stop`, child containers, `dispose`, decisions, and errors. The `lifecycle` key is removed.
+2. Done. Convergence: run-time `provide` and withdrawal, epochs, holder waits, `dependency-change`, status and effective status, `setStatus` after `build`, cause chains, `firstAvailable`, `dependency-status-change`, `watch`, `waitFor`, and `observe`.
+3. Done. Composition: transactions, atomic replacement, exclusive keys, resolution conditions, `perConsumer`, key isolation, graph queries, and the listener registry.
+4. Done. Retries: requeue, backoff, `maxAttempts`, and timeouts.
+5. Done, except the publish. Release: the README, the injeca skill, and version 0.3.0.
+6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
 

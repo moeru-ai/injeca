@@ -1,44 +1,54 @@
 import type { InstanceNode, ServiceNode, StopIntent } from '../graph/graph'
 import type { RequeueDecision } from '../primitives/decision'
 
-/** The delay of a dependency hook requeue in milliseconds. */
-function requeueDelay(decision: RequeueDecision): number {
+import { maxAttemptsOf } from '../graph/nodes'
+
+/**
+ * The delay of a requeue in milliseconds.
+ *
+ * `after` is a fixed delay. An exponential backoff doubles `initial` for each attempt, up to `max`.
+ * `jitter` is a fraction from 0 to 1. It takes a random part of that size away from the delay, so the delay is between `delay * (1 - jitter)` and `delay`.
+ */
+export function requeueDelay(decision: RequeueDecision, random: () => number): number {
   if (decision.after !== undefined)
     return Math.max(0, decision.after)
   if (decision.backoff) {
-    // NOTICE:
-    // `jitter` is not applied. The design does not define its unit yet.
-    // Backoff details belong to design step 4 ("Requeue", "Delivery" step 4 in docs/design-0.3.md).
-    // Removal condition: step 4 defines and applies jitter.
-    const { initial, max } = decision.backoff
-    return Math.max(0, Math.min(max, initial * 2 ** (decision.attempt - 1)))
+    const { initial, max, jitter } = decision.backoff
+    const delay = Math.max(0, Math.min(max, initial * 2 ** (decision.attempt - 1)))
+    if (jitter === undefined)
+      return delay
+
+    const fraction = Math.min(1, Math.max(0, jitter))
+    return delay * (1 - fraction * random())
   }
 
   return 0
 }
 
 /**
- * The stop intent of a requeue that reached `maxAttempts`. The service stops, then goes to `failed` with the last reason.
- * It is `undefined` when the requeue can wait.
+ * The stop intent of a requeue that reached its attempt limit. The service stops, then goes to `failed` with the last reason.
+ * The limit comes from the decision, then the service, then the containers. It is `undefined` when the requeue can wait.
  */
 export function exhaustedIntent(service: ServiceNode, decision: RequeueDecision): StopIntent | undefined {
-  if (decision.maxAttempts === undefined || decision.attempt < decision.maxAttempts)
+  const maxAttempts = maxAttemptsOf(service, decision.maxAttempts)
+  if (maxAttempts === undefined || decision.attempt < maxAttempts)
     return undefined
 
-  const message = decision.reason ?? `The '${decision.hook}' hook of '${service.name}' reached maxAttempts (${decision.maxAttempts}).`
+  const message = decision.reason ?? `The '${decision.hook}' hook of '${service.name}' reached maxAttempts (${maxAttempts}).`
   return { failure: { error: new Error(message, { cause: decision }) }, reason: message, decision: 'requeue' }
 }
 
-/** Waits before the next run of a dependency hook. The service stays `running` with its current bindings. */
+/** Waits before the next run of a requeued hook. When the wait ends, the service goes back to the work queue. */
 export function scheduleRequeue(service: ServiceNode, instance: InstanceNode, decision: RequeueDecision): void {
+  const { clock, random, reconciler } = service.container.runtime
   const wait: { cancel: () => void } = { cancel: () => {} }
-  wait.cancel = service.container.runtime.clock.setTimeout(() => {
+  wait.cancel = clock.setTimeout(() => {
     if (instance.requeueWait !== wait)
       return
 
     instance.requeueWait = undefined
-    service.container.runtime.reconciler.markDirty(service)
-  }, requeueDelay(decision))
+    reconciler.markDirty(service)
+  }, requeueDelay(decision, random))
   instance.requeueWait = wait
 }
 

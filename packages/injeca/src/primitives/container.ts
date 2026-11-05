@@ -1,17 +1,19 @@
-import type { ContainerNode, Runtime, ServiceNode } from '../graph/graph'
+import type { ContainerNode, Policy, Runtime, ServiceNode } from '../graph/graph'
 import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../types'
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
-import { InvalidArgumentError, ReentrantDisposeError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, InvalidArgumentError, ReentrantDisposeError } from '../diagnostics/errors'
 import { createDefaultLogger, createNoopLogger } from '../diagnostics/logger'
-import { assertActive, nodeOf, registerNode, releaseService } from '../graph/nodes'
+import { assertActive, nodeOf, readPolicy, registerNode, releaseService } from '../graph/nodes'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
 import { createDeliveryQueue } from '../helpers/delivery-queue'
 import { errorFrom } from '../helpers/error-from'
 import { batch, untracked, withOwner } from '../helpers/signals'
+import { abortTransaction } from '../reconciler/commit'
 import { createReconciler } from '../reconciler/reconciler'
+import { normalizeName } from './keys'
 
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
@@ -40,6 +42,60 @@ function readOwner(owner: unknown): OwnerRecord {
   return deepFreeze(copy as OwnerRecord)
 }
 
+function readIsolated(options: ContainerOptions): ReadonlySet<string> {
+  let isolate: unknown
+  try {
+    isolate = options.isolate
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the isolate option.', { cause: error })
+  }
+  if (isolate === undefined)
+    return new Set()
+  if (!Array.isArray(isolate))
+    throw new InvalidArgumentError('The isolate option must be a list of keys or names.')
+
+  return new Set(isolate.map((key: unknown) => {
+    let name: unknown
+    try {
+      name = normalizeName(key as string)
+    }
+    catch (error) {
+      throw new InvalidArgumentError('Cannot read a key of the isolate option.', { cause: error })
+    }
+    if (typeof name !== 'string' || name.length === 0)
+      throw new InvalidArgumentError('Each entry of the isolate option must be a key or a non-empty name.')
+
+    return name
+  }))
+}
+
+function readContainerPolicy(options: ContainerOptions): Policy {
+  let fields: { maxAttempts: unknown, timeouts: unknown, onTimeout: unknown }
+  try {
+    fields = { maxAttempts: options.maxAttempts, timeouts: options.timeouts, onTimeout: options.onTimeout }
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the container options.', { cause: error })
+  }
+
+  return readPolicy('the container', fields)
+}
+
+function readRandom(options: ContainerOptions): () => number {
+  let random: unknown
+  try {
+    random = options.random
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the random option.', { cause: error })
+  }
+  if (random !== undefined && typeof random !== 'function')
+    throw new InvalidArgumentError('The random option must be a function.')
+
+  return (random as (() => number) | undefined) ?? Math.random
+}
+
 function createRuntime(options: ContainerOptions): Runtime {
   let seq = 0
   let instanceSeq = 0
@@ -47,9 +103,11 @@ function createRuntime(options: ContainerOptions): Runtime {
 
   return {
     clock: options.clock ?? systemClock,
+    random: readRandom(options),
     context,
     deliveries: createDeliveryQueue(),
     observers: new Set(),
+    declarations: new Map(),
     reconciler: createReconciler({ context }),
     nextSeq: () => ++seq,
     nextInstanceId: () => `i${++instanceSeq}`,
@@ -67,6 +125,8 @@ export function createContainer(options: ContainerOptions = {}): Container {
     assertActive(parent, 'create a child container')
 
   const owner = readOwner(options.owner)
+  const isolated = readIsolated(options)
+  const policy = readContainerPolicy(options)
   const logger = options.enabled === false
     ? createNoopLogger()
     : (options.logger ?? parent?.api.logger ?? createDefaultLogger())
@@ -90,6 +150,10 @@ export function createContainer(options: ContainerOptions = {}): Container {
       started: signal(false),
       slots: new Map(),
     },
+    isolated,
+    policy,
+    listeners: new Map(),
+    transactions: new Set(),
     effects: [],
     reactiveOwner: reactiveOwner!,
     stopReactive,
@@ -132,6 +196,10 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
   const frame = { owner: container, parent: parentFrame, active: true }
   container.state = 'disposing'
   container.frame = frame
+
+  // A pending transaction aborts. A build that settles later cannot publish.
+  for (const transaction of [...container.transactions])
+    void abortTransaction(transaction, new BuildAfterDisposeError('The container was disposed before the transaction committed.'))
 
   const withdrawn = new Set<ServiceNode>()
   for (const service of container.services) {
@@ -181,6 +249,7 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
   }).finally(() => {
     frame.active = false
     container.state = 'disposed'
+    container.listeners.clear()
     container.stopReactive()
     container.parent?.children.delete(container)
     for (const listener of [...container.disposedListeners]) {

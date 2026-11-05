@@ -1,5 +1,5 @@
 import type { ContainerNode, ServiceNode } from '../graph/graph'
-import type { Container, DependencyMap, ProvidedKey, ServiceState, ServiceStatus } from '../types'
+import type { Container, KeyReference, ServiceState, ServiceStatus } from '../types'
 
 import { effect } from 'alien-signals'
 
@@ -12,7 +12,7 @@ import { withoutUndefined } from '../helpers/without-undefined'
 import { normalizeName } from '../primitives/keys'
 
 /** A key name, a key from `defineKey`, or the result of `provide`. */
-export type WatchKey = string | ProvidedKey<string, unknown, DependencyMap | undefined>
+export type WatchKey = KeyReference
 
 const statuses: ReadonlySet<string> = new Set<ServiceStatus>(['ready', 'degraded', 'unavailable'])
 

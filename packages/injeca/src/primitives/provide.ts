@@ -1,4 +1,4 @@
-import type { BuildFunction, ContainerNode, RawBuildContext, ServiceNode } from '../graph/graph'
+import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, DependencyMap, ProvidedKey, ProvideOption, ProvideOptionObject, ProvideOptionWithKeys, Registration, ResolveDependencyDeclaration } from '../types'
 
 import ErrorStackParser from 'error-stack-parser'
@@ -6,11 +6,12 @@ import ErrorStackParser from 'error-stack-parser'
 import { nanoid } from 'nanoid'
 
 import { DuplicateServiceError, InvalidArgumentError } from '../diagnostics/errors'
-import { assertActive, createService, nodeOf, readEdges, releaseService, withdrawService } from '../graph/nodes'
+import { assertActive, createRegistration, createService, nodeOf, publishService, readDefinition, releaseService } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { batch, untracked } from '../helpers/signals'
-import { normalizeName } from './keys'
+import { isExclusiveKey, normalizeName } from './keys'
+import { registrationApi } from './replace'
 
 export function normalizeProvideOption<D extends DependencyMap | undefined, T = any, Key extends string = string>(nameOrOption: Key | ProvidedKey<Key, T, D> | ProvideOption<T, D> | ProvideOptionWithKeys<T, any>, option?: (ProvideOption<T, D> | ProvideOptionWithKeys<T, any>) & { autoNameStackIndex?: number }): ProvideOptionObject<T, D> {
   if (typeof nameOrOption === 'string') {
@@ -62,33 +63,63 @@ function autoName(stackIndex: number, nameOrOption: ProvideNameOrOption, option:
   return `${parentFile?.fileName ?? `unknown-${nanoid()}`}:${parentFile?.lineNumber ?? 0}:${parentFile?.columnNumber ?? 0}`
 }
 
-/** Makes the service of one `provide` call the current registration of its key. */
-function register(container: ContainerNode, name: string, edges: ServiceNode['edges'], build: BuildFunction): ServiceNode {
-  const slot = slotOf(container, name)
-  const previous = slot()
-  if (previous && container.signals.started())
+/** Throws `duplicate-service` when a started container already has a registration for `name`. */
+export function assertNoDuplicate(container: ContainerNode, name: string): void {
+  if (slotOf(container, name)() && container.signals.started())
     throw new DuplicateServiceError(`The started container already has a registration for '${name}'.`)
+}
 
-  let service: ServiceNode | undefined
+/**
+ * Publishes `service` as the current registration of its key. Call it inside a batch.
+ * Before `start()`, a second provide of the same name replaces the first registration, as in 0.2.
+ */
+export function publishRegistration(container: ContainerNode, service: ServiceNode): void {
+  const previous = slotOf(container, service.name)()
+  if (previous) {
+    releaseService(previous)
+    emitRecord(container, {
+      type: 'registration-replaced',
+      key: service.name,
+      owner: container.owner,
+      instanceId: previous.signals.instance()?.id,
+      reason: `A second provide of '${service.name}' replaced the registration before start().`,
+    })
+  }
+
+  publishService(service)
+}
+
+/** Creates the service of one registration. It is not published yet. */
+export function serviceOf(container: ContainerNode, name: string, definition: ServiceDefinition, exclusive: boolean, extra: Pick<Parameters<typeof createService>[0], 'phase' | 'transaction' | 'registration'> = {}): ServiceNode {
+  const service = createService({
+    container,
+    kind: 'service',
+    name,
+    edges: definition.edges,
+    build: definition.build,
+    metadata: definition.metadata,
+    policy: definition.policy,
+    exclusive,
+    perConsumer: definition.perConsumer,
+    ...extra,
+  })
+  container.services.add(service)
+
+  return service
+}
+
+/** Makes the service of one `provide` call the current registration of its key. */
+function register(container: ContainerNode, name: string, definition: ServiceDefinition, exclusive: boolean): RegistrationNode {
+  assertNoDuplicate(container, name)
+
+  const registration = createRegistration(container, name, exclusive)
   batch(() => {
-    // Before `start()`, a second provide of the same name replaces the first registration, as in 0.2.
-    if (previous) {
-      releaseService(previous)
-      emitRecord(container, {
-        type: 'registration-replaced',
-        key: name,
-        owner: container.owner,
-        instanceId: previous.signals.instance()?.id,
-        reason: `A second provide of '${name}' replaced the registration before start().`,
-      })
-    }
-
-    service = createService({ container, kind: 'service', name, edges, build })
-    container.services.add(service)
-    slot(service)
+    const service = serviceOf(container, name, definition, exclusive, { registration })
+    publishRegistration(container, service)
+    registration.current = service
   })
 
-  return service!
+  return registration
 }
 
 /**
@@ -105,33 +136,18 @@ export function provideIn(container: Container, stackIndex: number, nameOrOption
     throw new InvalidArgumentError('A provider name must be a non-empty string.')
 
   const providerObject = normalizeProvideOption(nameOrOption as Parameters<typeof normalizeProvideOption>[0], option as Parameters<typeof normalizeProvideOption>[1])
-  let build: unknown
-  let dependsOn: unknown
-  try {
-    build = providerObject.build
-    dependsOn = providerObject.dependsOn
-  }
-  catch (error) {
-    throw new InvalidArgumentError(`Cannot read the provide options of '${name}'.`, { cause: error })
-  }
-  if (typeof build !== 'function')
-    throw new InvalidArgumentError(`The build option of '${name}' is not a function.`)
-
-  const edges = readEdges(name, dependsOn)
-  const userBuild = build as (context: RawBuildContext) => unknown
+  const definition = readDefinition(name, providerObject)
+  const exclusive = isExclusiveKey(nameOrOption)
   // The name is read above, outside this entry point, so that the stack index of `autoName` stays the same.
-  const registered = untracked(() => register(node, name, edges, userBuild))
+  const registration = untracked(() => register(node, name, definition, exclusive))
 
-  container.logger.provide(name, edges.map(edge => edge.keyName))
+  container.logger.provide(name, definition.edges.map(edge => edge.keyName))
 
-  return Object.freeze({
-    key: name,
-    withdraw: () => withdrawService(registered),
-  })
+  return registrationApi(registration)
 }
 
 /**
- * Registers a provider and returns its typed key with `withdraw()`.
+ * Registers a provider and returns its typed key with `withdraw()` and `replace()`.
  *
  * Before `start()`, a second provide of the same name replaces the first registration. After `start()`, it throws `duplicate-service`.
  * After `start()`, a new service builds and starts when its dependencies are available.

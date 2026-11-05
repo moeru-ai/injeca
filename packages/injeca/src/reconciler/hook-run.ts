@@ -1,7 +1,11 @@
 import type { HookState, InstanceNode, RawHookHandler, ServiceNode } from '../graph/graph'
 import type { Decision, HookRun, ServiceHook } from '../primitives/decision'
+import type { TimeoutContext } from '../types'
 
+import { HookTimeoutError } from '../diagnostics/errors'
+import { timeoutHandlerOf } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
+import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { createDecide, defaultDecision, validateDecision } from '../primitives/decision'
 import { invokeUser } from './calls'
@@ -37,8 +41,8 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
   })
 }
 
-/** Starts a hook run. Its signal aborts when a newer target supersedes it, or when the instance is disposed. */
-export function beginHookRun(instance: InstanceNode): { readonly signal: AbortSignal, readonly end: () => void } {
+/** Starts a hook run. Its signal aborts when a newer target supersedes it, when it times out, or when the instance is disposed. */
+export function beginHookRun(instance: InstanceNode): { readonly signal: AbortSignal, readonly abort: (reason: unknown) => void, readonly end: () => void } {
   const controller = new AbortController()
   const parent = instance.controller.signal
   const forward = () => controller.abort(parent.reason)
@@ -50,6 +54,7 @@ export function beginHookRun(instance: InstanceNode): { readonly signal: AbortSi
 
   return {
     signal: controller.signal,
+    abort: reason => controller.abort(reason),
     end: () => {
       parent.removeEventListener('abort', forward)
       if (instance.hookRun === controller)
@@ -87,15 +92,66 @@ export async function callHandler(
   }
 }
 
+export interface RunHandlersOptions {
+  /** Runs every handler, also after a decision that is not `handled`. */
+  readonly all?: boolean
+  /** The index of the first handler to run. */
+  readonly from?: number
+  /** Gets the index of the handler that runs now, or that gave the last decision. */
+  readonly progress?: { index: number }
+  /** Ends the run before the next handler when it returns `true`. */
+  readonly stopped?: () => boolean
+}
+
 /** Runs the handlers of `hook` in order. It stops at the first decision that is not `handled`, unless `all` is set. */
-export async function runHandlers(service: ServiceNode, instance: InstanceNode, hook: ServiceHook, runSignal: AbortSignal, extras: object, all = false): Promise<Decision[]> {
+export async function runHandlers(service: ServiceNode, instance: InstanceNode, hook: ServiceHook, runSignal: AbortSignal, extras: object, options: RunHandlersOptions = {}): Promise<Decision[]> {
   const decisions: Decision[] = []
-  for (const handler of [...instance.hooks[hook]]) {
-    const decision = await callHandler(service, instance, hook, handler, runSignal, extras)
+  const handlers = [...instance.hooks[hook]]
+  for (let index = options.from ?? 0; index < handlers.length; index++) {
+    if (options.stopped?.())
+      break
+    if (options.progress)
+      options.progress.index = index
+
+    const decision = await callHandler(service, instance, hook, handlers[index]!, runSignal, extras)
     decisions.push(decision)
-    if (!all && decision.kind !== 'handled')
+    if (!options.all && decision.kind !== 'handled')
       break
   }
 
   return decisions
+}
+
+/**
+ * Records a timeout of a `start` or `stop` hook in the observe stream, and returns the decision of the `onTimeout` handler.
+ *
+ * The handler runs synchronously. A value that is not a decision of this hook, a promise, a throw, or no handler gives `fail` with `hook-timeout`.
+ */
+export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook: 'start' | 'stop', timeoutMs: number): Decision {
+  const state = hookStateOf(instance, hook)
+  const run: HookRun = { service: service.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => service.container.runtime.clock.now() }
+  const decide = createDecide(run)
+  const error = new HookTimeoutError(`The '${hook}' hook of '${service.name}' did not settle within ${timeoutMs}ms.`, hook, timeoutMs)
+  emitRecord(service.container, {
+    type: 'timeout',
+    key: service.name,
+    owner: service.container.owner,
+    instanceId: instance.id,
+    hook,
+    timeoutMs,
+    attempt: state.attempt,
+    reason: error.message,
+  })
+
+  const handler = timeoutHandlerOf(service)
+  if (!handler)
+    return decide.fail(error, { reason: error.message })
+
+  try {
+    const value = untracked(() => handler(Object.freeze({ hook, timeoutMs, attempt: state.attempt, previous: state.previous, decide }) as TimeoutContext))
+    return validateDecision(run, value) ?? decide.fail(error, { reason: error.message })
+  }
+  catch (handlerError) {
+    return decide.fail(handlerError, { reason: `The onTimeout handler of '${service.name}' threw.` })
+  }
 }

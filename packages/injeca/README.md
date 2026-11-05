@@ -116,6 +116,64 @@ on('start', async ({ decide, attempt }) => {
 })
 ```
 
+### Retries
+
+A `start` hook can return `decide.requeue()` to try again later. The service keeps its instance, so `build` does not run again.
+
+```ts
+on('start', async ({ decide }) => {
+  try {
+    await device.connect()
+  }
+  catch (error) {
+    return decide.requeue({
+      backoff: { kind: 'exponential', initial: 500, max: 30_000, jitter: 0.2 },
+      maxAttempts: 5,
+      reason: `connect failed: ${String(error)}`,
+    })
+  }
+})
+```
+
+- During the wait, the service is `retrying`. It is not available, so its dependents stay `pending`. It still holds its dependencies.
+- `after: ms` sets a fixed delay. `backoff` doubles `initial` for each attempt, up to `max`. `jitter` is a fraction from 0 to 1 that takes a random part away from each delay.
+- The next attempt runs the `start` handler that requeued, then the handlers after it.
+- Changes during the wait merge into one attempt. A withdrawn required dependency, or `stop()`, cancels the wait and stops the service at once.
+- A dependency hook can requeue too. The service stays `running` with its current dependencies during the wait.
+- injeca has no built-in delay or limit. Without `maxAttempts`, the retries continue.
+
+`maxAttempts` limits the runs of one hook for one instance. It can come from the decision, the `provide` options, or the container options. The decision wins over the service, and the service wins over the container. A child container uses the value of its nearest ancestor.
+
+```ts
+const container = createContainer({ maxAttempts: 10, random: () => 0.5 }) // a fixed random source for deterministic tests
+injeca.provide('modules:device', { maxAttempts: 3, build: () => createDevice() })
+```
+
+When the attempts end, a running service stops first. Then it goes to `failed` with the last reason. `start()` again, `stop()` and `start()`, or `replace()` moves it out of `failed`.
+
+### Timeouts
+
+`start` and `stop` hooks wait until they settle. Set `timeouts` to limit them. A service value overrides the container value. injeca has no built-in timeout.
+
+```ts
+const container = createContainer({ timeouts: { stop: 5_000 } })
+
+provide(container, 'modules:camera', {
+  timeouts: { start: 10_000 },
+  onTimeout: (context) => {
+    if (context.hook === 'start')
+      return context.decide.requeue({ after: 1_000, maxAttempts: 3 })
+    return context.decide.fail(new Error('The camera did not close.'))
+  },
+  build: () => createCamera(),
+})
+```
+
+- The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
+- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
+- `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
+- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+
 ## Changes at run time
 
 Services can appear and disappear after `start()`. Dependents converge automatically.
@@ -142,6 +200,43 @@ on('dependency-change', ({ dependsOn, decide }) => {
 })
 ```
 
+### Atomic replacement
+
+A withdrawal followed by a new `provide` leaves a gap: all dependents stop. `replace()` has no gap. A hot reload tool uses it.
+
+```ts
+const tts = injeca.provide(ttsKey, () => createTts())
+
+// The old instance keeps serving while the new one runs `build` and `start`.
+await tts.replace(() => createTtsV2())
+```
+
+- The swap is one batch. It occurs only after the new instance completes `start`. The new instance is `ready`.
+- If the new `build` or `start` fails, `replace()` rejects and the old instance does not change. This is also the usual fix for an `unavailable` provider.
+- The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild.
+- A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A service in `stopping` rejects with `ReplaceWhileStoppingError`.
+
+### Transactions
+
+A transaction publishes many services together, for example all exports of one plugin.
+
+```ts
+import { transaction } from 'injeca'
+
+const tx = transaction(container)
+tx.declare(statusKitKey, { dependsOn: { character: characterKey } })
+tx.provide(statusKitKey, { build: ({ dependsOn }) => createStatusKit(dependsOn) })
+tx.provide(characterKey, () => createCharacter())
+await tx.commit()
+```
+
+- Nothing is visible to consumers before `commit()`. Graph queries show the declared services.
+- `commit()` builds in dependency order. A service can use another service of the same transaction.
+- If all builds succeed, the services publish in one batch, then their `start` hooks run. If one build fails, nothing publishes and `commit()` rejects.
+- A service whose dependencies are not available goes to `pending`. That is not a failure.
+- A declared service without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
+- `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
+
 ## Keys without a provider
 
 `defineKey` creates a typed key. A consumer can depend on it before any provider exists. It stays `pending` and runs no code until a provider registers.
@@ -162,6 +257,38 @@ injeca.provide('voice:speech', {
 // A plugin provides it later. The build result must match LlmClient.
 injeca.provide(llmKey, () => createLocalLlm())
 ```
+
+### Exclusive keys
+
+An exclusive key can have only one provider in its resolution area: the container that has the key, with its descendants.
+
+```ts
+const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: true })
+```
+
+If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges. `graph(container).explain()` lists the owner of each provider.
+
+### Resolution conditions
+
+`where(key, condition)` accepts a provider only when the condition returns `true`. The condition reads the key, the owner, and the `metadata` of the provider.
+
+```ts
+import { defineKey, optional, where } from 'injeca'
+
+const panelKey = injeca.provide('whiteboard:panel', { metadata: { version: '2.1.0' }, build: () => createPanel() })
+const themeKey = defineKey<Theme>('ui:theme')
+
+injeca.provide('whiteboard:view', {
+  dependsOn: {
+    panel: where(panelKey, ({ metadata }) => String(metadata.version).startsWith('2.')),
+    theme: optional(where(themeKey, ({ owner }) => owner.kind === 'host')),
+  },
+  build: ({ dependsOn }) => createView(dependsOn.panel, dependsOn.theme?.value),
+})
+```
+
+- A rejected required dependency keeps the dependent `pending`. A rejected optional dependency is `undefined`.
+- The condition must be pure and synchronous. A thrown error counts as `false` and goes to the observe stream.
 
 ## Status
 
@@ -219,6 +346,22 @@ await dispose(plugin)
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects. A disposed container cannot be used again.
 - `start(container, { timeoutMs })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use `timeoutMs` to find it.
+- A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
+- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors.
+
+### Per-consumer services
+
+`perConsumer: true` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container. The instance disposes with the consumer container.
+
+```ts
+const hostClient = injeca.provide('host:client', {
+  perConsumer: true,
+  metadata: { api: 'v1' },
+  build: ({ consumer }) => createHostClient(consumer),
+})
+```
+
+`metadata` is a frozen record on any registration. Resolution conditions and graph queries read it.
 
 ## Reading state
 
@@ -233,7 +376,42 @@ const stopObserving = observe(container, (record) => {})
 ```
 
 - `watch` sends the current state at once, then each change, in order.
-- `observe` sends each phase change, status change, and decision in the container and its children.
+- `observe` sends each phase change, status change, decision, and hook timeout in the container and its children.
+
+### Graph queries
+
+`graph(container)` reads the graph of the container and its children. It never changes state.
+
+```ts
+import { graph } from 'injeca'
+
+const queries = graph(container)
+
+queries.services() // all services, with the declared services of open transactions
+queries.dependencies(server) // the direct edges of a service
+queries.dependents(config) // the services that use a service now
+queries.order() // providers before their dependents
+queries.cycles() // each dependency cycle
+queries.explain(server) // why a service is not running
+queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }
+```
+
+`impact()` runs on a copy of the graph, so a user interface can preview an action: "Disabling the plugin also stops X and Y." The change can be `withdraw`, `replace`, or `dispose`.
+
+### Listener registry
+
+injeca does not dispatch events. It stores listeners that a container owns, so that a consumer can run them by its own rules.
+
+```ts
+import { listen, listeners } from 'injeca'
+
+const gate = { id: 'airi.harness.gate' } // any object with a string id, for example an eventa definition
+
+const remove = listen(plugin, gate, handler, { priority: 10 })
+const entries = listeners(container, gate) // [{ handler, owner, metadata }]
+```
+
+`listeners()` returns the listeners of the container and its children, in registration order. `dispose(container)` removes the listeners of the container.
 
 ## Migration from 0.2
 
@@ -267,10 +445,6 @@ Other differences:
 - `start()` waits for a missing provider. 0.2 threw an error. Use `start({ timeoutMs })` to fail after a time.
 - `resolve()` waits for a missing provider too. Before `start()`, it builds the services that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `withdraw()`. Its callback runs again when a required dependency gets a new instance.
-
-## Planned
-
-Atomic replacement (`replace()`), transactions, exclusive keys, resolution conditions, graph queries, and `start` retries with backoff are not in this release yet. See [the 0.3 design](../../docs/design-0.3.md).
 
 ## License
 

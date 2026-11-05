@@ -1,10 +1,10 @@
 import type { Decision, FailDecision, HandledDecision, ServiceHook } from '../primitives/decision'
-import type { BuildContext, DependencyChange, DependencySnapshot, LifecycleContext, OptionalValue, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
+import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
 
 import { describe, expectTypeOf, it } from 'vitest'
 
 import { waitFor, watch } from '../queries/watch'
-import { createContainer, defineKey, firstAvailable, invoke, optional, provide, resolve } from '../scoped'
+import { createContainer, defineKey, firstAvailable, graph, invoke, listeners, optional, provide, resolve, transaction, where } from '../scoped'
 import { createHookContext } from '../testing/testing'
 
 // Design test 35. The checks run in `pnpm typecheck`. The cases do not start the container.
@@ -177,5 +177,65 @@ describe('call-site types', () => {
       expectTypeOf(state).toEqualTypeOf<ServiceState>()
     })).toEqualTypeOf<() => void>()
     expectTypeOf(waitFor(app, 'airi.llm.remote', { status: 'ready' })).resolves.toEqualTypeOf<ServiceState>()
+  })
+
+  it('types where, replace, transactions, perConsumer, and the step 3 readers', () => {
+    const app = createContainer({ enabled: false })
+    const llmKey = defineKey<Llm>('airi.llm', { exclusive: true })
+    const llm = provide(app, llmKey, { metadata: { version: '1.0.0' }, build: () => ({ chat: () => 'hi' }) })
+
+    provide(app, 'voice.speech', {
+      dependsOn: { llm: where(llmKey, (provider) => {
+        expectTypeOf(provider).toEqualTypeOf<ProviderInfo>()
+        return provider.metadata.version === '1.0.0'
+      }), tts: optional(where(defineKey<Tts>('airi.tts'), () => true)) },
+      build: ({ dependsOn }) => {
+        expectTypeOf(dependsOn.llm).toEqualTypeOf<Llm>()
+        expectTypeOf(dependsOn.tts).toEqualTypeOf<OptionalValue<Tts> | undefined>()
+        return 'speech'
+      },
+    })
+    provide(app, 'host.client', {
+      perConsumer: true,
+      build: ({ consumer }) => {
+        expectTypeOf(consumer).toEqualTypeOf<OwnerRecord | undefined>()
+        return consumer
+      },
+    })
+
+    expectTypeOf(llm.replace(() => ({ chat: () => 'v2' }))).resolves.toEqualTypeOf<boolean>()
+    expectTypeOf(llm.replace({ dependsOn: { other: 'airi.other' }, build: ({ dependsOn }) => ({ chat: () => String(dependsOn.other) }) })).resolves.toEqualTypeOf<boolean>()
+    // @ts-expect-error A replacement must build the type of the key.
+    void llm.replace(() => 42)
+
+    const tx = transaction(app)
+    expectTypeOf(tx.provide(defineKey<Tts>('airi.tts'), () => ({ speak: () => {} }))).toEqualTypeOf<Registration<string, Tts, undefined>>()
+    // @ts-expect-error A transaction provide checks the type of the key too.
+    transaction(app).provide(defineKey<Tts>('airi.tts'), () => 1)
+    tx.replace(llm, () => ({ chat: () => 'v3' }))
+    expectTypeOf(tx.commit()).resolves.toEqualTypeOf<void>()
+
+    expectTypeOf(graph(app).services()).toEqualTypeOf<readonly GraphService[]>()
+    expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()
+  })
+  it('types the retry and timeout options', () => {
+    const app = createContainer({ enabled: false, maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
+    provide(app, 'airi.device', {
+      maxAttempts: 3,
+      timeouts: { start: 2_000 },
+      onTimeout: (context) => {
+        expectTypeOf(context.timeoutMs).toEqualTypeOf<number>()
+        if (context.hook === 'start')
+          return context.decide.requeue({ backoff: { kind: 'exponential', initial: 100, max: 1_000, jitter: 0.2 } })
+        // @ts-expect-error A stop timeout cannot requeue.
+        void context.decide.requeue
+        return context.decide.handled()
+      },
+      build: () => 'device',
+    })
+
+    // @ts-expect-error A timeout is a number of milliseconds.
+    const wrong: PolicyOptions = { timeouts: { start: '1s' } }
+    void wrong
   })
 })

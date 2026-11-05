@@ -1,3 +1,7 @@
+export * from './consumer'
 export * from './container'
+export * from './definition'
 export * from './edge'
+export * from './policy'
+export * from './registration'
 export * from './service'

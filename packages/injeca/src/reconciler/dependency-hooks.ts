@@ -3,6 +3,7 @@ import type { ServiceHook } from '../primitives/decision'
 import type { DependencyChange } from '../types'
 import type { Snapshot } from './snapshot'
 
+import { inConflict } from '../graph/resolvers/exclusive'
 import { epochOf, requiredWithdrawn } from '../graph/resolvers/resolvers'
 import { batch } from '../helpers/signals'
 import { releaseExtraHolds, syncHolds } from './holds'
@@ -20,7 +21,12 @@ export function reconcileRunning(service: ServiceNode): void {
   }
   if (!service.signals.present() || !service.signals.active()) {
     cancelRequeueWait(instance)
-    enterStopping(service, { reason: service.signals.present() ? 'The container stopped.' : 'The service was withdrawn.' })
+    enterStopping(service, { reason: service.signals.present() ? 'The container stopped.' : service.replacedBy ? 'The service was replaced.' : 'The service was withdrawn.' })
+    return
+  }
+  if (inConflict(service)) {
+    cancelRequeueWait(instance)
+    enterStopping(service, { reason: `The exclusive key '${service.name}' got another declaration.` })
     return
   }
 
@@ -67,7 +73,7 @@ async function runNotice(service: ServiceNode, instance: InstanceNode, snapshot:
   const decisions = await runHandlers(service, instance, 'dependency-change', instance.controller.signal, {
     dependsOn: hookDependsOn(service, view),
     changes: Object.freeze(changes),
-  }, true)
+  }, { all: true })
   service.busy = false
 
   for (const decision of decisions)
