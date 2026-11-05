@@ -4,5 +4,8 @@ trustPolicyExclude:
   - chokidar@4.0.3
   - semver@6.3.1
 
+packages:
+  - packages/*
+
 allowBuilds:
   esbuild: true

@@ -1,0 +1,50 @@
+{
+  "name": "injeca",
+  "type": "module",
+  "version": "0.2.0",
+  "description": "Pure functional programming based dependency injection library inspired by go.uber.org/fig and go.uber.org/dig.",
+  "author": {
+    "name": "Moeru AI Project AIRI Team",
+    "email": "airi@moeru.ai",
+    "url": "https://github.com/moeru-ai"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/moeru-ai/injeca",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moeru-ai/injeca.git",
+    "directory": "packages/injeca"
+  },
+  "exports": {
+    ".": {
+      "type": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./global": {
+      "type": "./dist/global.d.mts",
+      "default": "./dist/global.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.mts",
+  "files": [
+    "README.md",
+    "dist",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json"
+  },
+  "peerDependencies": {
+    "@guiiai/logg": ">= 1",
+    "error-stack-parser": "^2.1.4",
+    "nanoid": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "@guiiai/logg": {
+      "optional": true
+    }
+  }
+}

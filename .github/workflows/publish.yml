@@ -36,4 +36,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm build
-      - run: pnpm publish --no-git-checks --access public
+      - run: pnpm -r publish --no-git-checks --access public
