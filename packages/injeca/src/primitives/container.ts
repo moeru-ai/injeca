@@ -1,11 +1,11 @@
-import type { ContainerNode, Runtime, ServiceNode } from '../graph/graph'
+import type { ContainerNode, Policy, Runtime, ServiceNode } from '../graph/graph'
 import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../types'
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
 import { BuildAfterDisposeError, InvalidArgumentError, ReentrantDisposeError } from '../diagnostics/errors'
 import { createDefaultLogger, createNoopLogger } from '../diagnostics/logger'
-import { assertActive, nodeOf, registerNode, releaseService } from '../graph/nodes'
+import { assertActive, nodeOf, readPolicy, registerNode, releaseService } from '../graph/nodes'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
 import { createDeliveryQueue } from '../helpers/delivery-queue'
@@ -70,6 +70,32 @@ function readIsolated(options: ContainerOptions): ReadonlySet<string> {
   }))
 }
 
+function readContainerPolicy(options: ContainerOptions): Policy {
+  let fields: { maxAttempts: unknown, timeouts: unknown, onTimeout: unknown }
+  try {
+    fields = { maxAttempts: options.maxAttempts, timeouts: options.timeouts, onTimeout: options.onTimeout }
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the container options.', { cause: error })
+  }
+
+  return readPolicy('the container', fields)
+}
+
+function readRandom(options: ContainerOptions): () => number {
+  let random: unknown
+  try {
+    random = options.random
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the random option.', { cause: error })
+  }
+  if (random !== undefined && typeof random !== 'function')
+    throw new InvalidArgumentError('The random option must be a function.')
+
+  return (random as (() => number) | undefined) ?? Math.random
+}
+
 function createRuntime(options: ContainerOptions): Runtime {
   let seq = 0
   let instanceSeq = 0
@@ -77,6 +103,7 @@ function createRuntime(options: ContainerOptions): Runtime {
 
   return {
     clock: options.clock ?? systemClock,
+    random: readRandom(options),
     context,
     deliveries: createDeliveryQueue(),
     observers: new Set(),
@@ -99,6 +126,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
 
   const owner = readOwner(options.owner)
   const isolated = readIsolated(options)
+  const policy = readContainerPolicy(options)
   const logger = options.enabled === false
     ? createNoopLogger()
     : (options.logger ?? parent?.api.logger ?? createDefaultLogger())
@@ -123,6 +151,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
       slots: new Map(),
     },
     isolated,
+    policy,
     listeners: new Map(),
     transactions: new Set(),
     effects: [],

@@ -26,6 +26,7 @@ export function ensureConsumerService(registration: ServiceNode, container: Cont
       edges: registration.edges,
       build: registration.build,
       metadata: registration.metadata,
+      policy: registration.policy,
       exclusive: registration.exclusive,
       template: registration,
       consumer: container.owner,

@@ -8,6 +8,7 @@ import { callListeners } from './calls'
 import { reconcileConflict } from './conflict'
 import { reconcileRunning } from './dependency-hooks'
 import { reconcileRegistration } from './registration'
+import { reconcileRetrying } from './retry'
 import { finalize, reconcileStopping } from './stop'
 import { checkSwap } from './swap'
 
@@ -106,6 +107,9 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
         return
       case 'running':
         reconcileRunning(service)
+        return
+      case 'retrying':
+        reconcileRetrying(service)
         return
       case 'stopping':
         reconcileStopping(service)

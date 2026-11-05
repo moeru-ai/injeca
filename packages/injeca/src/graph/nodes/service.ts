@@ -1,6 +1,6 @@
 import type { DecisionKind } from '../../primitives/decision'
 import type { OwnerRecord, ServiceMetadata, ServicePhase } from '../../types'
-import type { BuildFunction, ContainerNode, DependencyEdge, InstanceNode, RegistrationNode, Resolution, ServiceKind, ServiceNode, SwapState, TransactionNode } from '../graph'
+import type { BuildFunction, ContainerNode, DependencyEdge, InstanceNode, Policy, RegistrationNode, Resolution, ServiceKind, ServiceNode, SwapState, TransactionNode } from '../graph'
 
 import { computed, effect, signal } from 'alien-signals'
 
@@ -74,6 +74,8 @@ export interface CreateServiceInput {
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
   readonly metadata?: ServiceMetadata
+  /** The retry and timeout options of the registration. An invocation has none. */
+  readonly policy?: Policy
   readonly exclusive?: boolean
   readonly perConsumer?: boolean
   readonly template?: ServiceNode
@@ -87,6 +89,7 @@ export interface CreateServiceInput {
 }
 
 const emptyMetadata = Object.freeze({})
+const emptyPolicy: Policy = Object.freeze({})
 
 /**
  * Creates a service with its signals, its derived values, and its effects.
@@ -116,6 +119,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
     edges: input.edges,
     build: input.build,
     metadata: input.metadata ?? emptyMetadata,
+    policy: input.policy ?? emptyPolicy,
     exclusive: input.exclusive ?? false,
     perConsumer: input.perConsumer ?? false,
     template: input.template,

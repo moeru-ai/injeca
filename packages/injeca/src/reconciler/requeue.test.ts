@@ -115,4 +115,83 @@ describe('dependency hook requeue', () => {
     expect(pending()).toBe(0)
     expect(stateOf(app, 'voice.speech').phase).toBe('pending')
   })
+
+  it('applies the jitter through the injected random source, so the delays are deterministic', async () => {
+    const manual = manualClock()
+    const random = vi.fn(() => 0.5)
+    const app = createContainer({ enabled: false, clock: manual.clock, random })
+    const llm = provideWithStatus(app, 'airi.llm')
+    const runs: number[] = []
+    provide(app, 'voice.speech', {
+      dependsOn: { llm: llm.registration },
+      build: ({ on }) => {
+        on('dependency-status-change', ({ decide }) => {
+          runs.push(manual.clock.now())
+          return decide.requeue({ backoff: { kind: 'exponential', initial: 100, max: 1_000, jitter: 0.5 } })
+        })
+        return 'speech'
+      },
+    })
+    await start(app)
+
+    llm.setStatus('degraded')
+    await drained(app)
+    // Each delay is `delay * (1 - 0.5 * 0.5)`: 75, 150, then 300.
+    for (const delay of [75, 150, 300]) {
+      manual.advance(delay - 1)
+      await drained(app)
+      manual.advance(1)
+      await drained(app)
+    }
+
+    expect(runs).toEqual([0, 75, 225, 525])
+    expect(random).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not read the random source without jitter', async () => {
+    const random = vi.fn(() => 0.5)
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock, random })
+    const llm = provideWithStatus(app, 'airi.llm')
+    provide(app, 'voice.speech', {
+      dependsOn: { llm: llm.registration },
+      build: ({ on }) => {
+        on('dependency-status-change', ({ decide }) => decide.requeue({ backoff: { kind: 'exponential', initial: 10, max: 10 } }))
+        return 'speech'
+      },
+    })
+    await start(app)
+    llm.setStatus('degraded')
+    await drained(app)
+    manual.advance(10)
+    await drained(app)
+
+    expect(random).not.toHaveBeenCalled()
+  })
+
+  it('uses the maxAttempts of the service for a dependency hook requeue', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock, maxAttempts: 10 })
+    const llm = provideWithStatus(app, 'airi.llm')
+    const attempts: number[] = []
+    provide(app, 'voice.speech', {
+      dependsOn: { llm: llm.registration },
+      maxAttempts: 2,
+      build: ({ on }) => {
+        on('dependency-status-change', ({ decide, attempt }) => {
+          attempts.push(attempt)
+          return decide.requeue({ after: 10 })
+        })
+        return 'speech'
+      },
+    })
+    await start(app)
+    llm.setStatus('degraded')
+    await drained(app)
+    manual.advance(10)
+    await drained(app)
+
+    expect(attempts).toEqual([1, 2])
+    expect(stateOf(app, 'voice.speech').phase).toBe('failed')
+  })
 })

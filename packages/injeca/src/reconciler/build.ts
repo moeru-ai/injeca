@@ -104,6 +104,7 @@ export function prepareInstance(service: ServiceNode, snapshot: Snapshot): Insta
     },
     hookRun: undefined,
     requeueWait: undefined,
+    startFrom: 0,
     value: undefined,
     building: true,
     disposed: false,

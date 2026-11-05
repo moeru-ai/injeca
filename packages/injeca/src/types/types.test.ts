@@ -1,5 +1,5 @@
 import type { Decision, FailDecision, HandledDecision, ServiceHook } from '../primitives/decision'
-import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
+import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
 
 import { describe, expectTypeOf, it } from 'vitest'
 
@@ -217,5 +217,25 @@ describe('call-site types', () => {
 
     expectTypeOf(graph(app).services()).toEqualTypeOf<readonly GraphService[]>()
     expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()
+  })
+  it('types the retry and timeout options', () => {
+    const app = createContainer({ enabled: false, maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
+    provide(app, 'airi.device', {
+      maxAttempts: 3,
+      timeouts: { start: 2_000 },
+      onTimeout: (context) => {
+        expectTypeOf(context.timeoutMs).toEqualTypeOf<number>()
+        if (context.hook === 'start')
+          return context.decide.requeue({ backoff: { kind: 'exponential', initial: 100, max: 1_000, jitter: 0.2 } })
+        // @ts-expect-error A stop timeout cannot requeue.
+        void context.decide.requeue
+        return context.decide.handled()
+      },
+      build: () => 'device',
+    })
+
+    // @ts-expect-error A timeout is a number of milliseconds.
+    const wrong: PolicyOptions = { timeouts: { start: '1s' } }
+    void wrong
   })
 })

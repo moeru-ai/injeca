@@ -3,8 +3,8 @@ import type { ServiceExplanation } from '../types/service'
 export type InjecaErrorCode
   = | 'build-after-dispose'
     | 'duplicate-service'
-    | 'exclusive-conflict'
     | 'hook-outside-build'
+    | 'hook-timeout'
     | 'invalid-argument'
     | 'invalid-decision'
     | 'reentrant-dispose'
@@ -101,13 +101,17 @@ export class ReentrantDisposeError extends InjecaError {
   }
 }
 
-/** An exclusive key has more than one declaration in one resolution area. */
-export class ExclusiveConflictError extends InjecaError {
-  declare readonly code: 'exclusive-conflict'
+/** A `start` or `stop` hook did not settle before its configured timeout. */
+export class HookTimeoutError extends InjecaError {
+  declare readonly code: 'hook-timeout'
+  readonly hook: 'start' | 'stop'
+  readonly timeoutMs: number
 
-  constructor(message: string, options?: InjecaErrorOptions) {
-    super('exclusive-conflict', message, options)
-    this.name = 'ExclusiveConflictError'
+  constructor(message: string, hook: 'start' | 'stop', timeoutMs: number, options?: InjecaErrorOptions) {
+    super('hook-timeout', message, options)
+    this.name = 'HookTimeoutError'
+    this.hook = hook
+    this.timeoutMs = timeoutMs
   }
 }
 

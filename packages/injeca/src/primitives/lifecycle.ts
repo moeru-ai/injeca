@@ -9,7 +9,7 @@ import { batch, untracked } from '../helpers/signals'
 
 const visibleKinds: ReadonlySet<ServiceNode['kind']> = new Set(['service', 'invocation'])
 
-const transitionalPhases: ReadonlySet<string> = new Set(['building', 'starting', 'stopping'])
+const transitionalPhases: ReadonlySet<string> = new Set(['building', 'starting', 'retrying', 'stopping'])
 
 /** The result of one settle check. `'waiting'` checks again at the next drain. */
 type SettleCheck = 'waiting' | { readonly kind: 'done' } | { readonly kind: 'failed', readonly errors: readonly unknown[] }

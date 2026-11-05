@@ -17,6 +17,10 @@ export function explainService(service: ServiceNode): ServiceExplanation {
 
   if (phase === 'failed')
     blockers.push({ kind: 'failed', error: service.failure?.error })
+  if (phase === 'retrying') {
+    const previous = service.signals.instance()?.hookStates.get('start')?.previous
+    blockers.push({ kind: 'retrying', attempt: previous?.attempt ?? 1, ...withoutUndefined({ reason: previous?.reason }) })
+  }
   const rivals = service.signals.rivals()
   if (rivals.length > 0) {
     const registration = service.template ?? service
@@ -98,6 +102,8 @@ function describeBlocker(blocker: ServiceBlocker): string {
       return `the exclusive key '${blocker.key}' has more than one declaration: ${describeOwners(blocker.owners)}`
     case 'failed':
       return 'the service failed'
+    case 'retrying':
+      return `its start hook requeued after attempt ${blocker.attempt}${blocker.reason === undefined ? '' : ` (${blocker.reason})`}`
     case 'not-started':
       return 'its container is not started'
   }

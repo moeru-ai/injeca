@@ -112,7 +112,7 @@ function publishMembers(members: readonly Member[], built: ReadonlySet<ServiceNo
         registration.pending = service
       }
       else if (target && registration && target.perConsumer) {
-        moveConsumers(registration, target, service, { edges: service.edges, build: service.build, metadata: service.metadata, perConsumer: true })
+        moveConsumers(registration, target, service, { edges: service.edges, build: service.build, metadata: service.metadata, perConsumer: true, policy: service.policy })
       }
       else if (target && registration) {
         takeOver(registration, target, service)

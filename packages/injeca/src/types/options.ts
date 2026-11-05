@@ -1,8 +1,9 @@
 import type { BuildContext, InvocationContext } from './context'
 import type { DependencyDeclarations, DependencyMap, ProvidedKey, ResolveDependencyDeclaration, ServiceMetadata } from './keys'
+import type { PolicyOptions } from './policy'
 
 /** The registration options that each object form of `provide` accepts. */
-export interface RegistrationOptions {
+export interface RegistrationOptions extends PolicyOptions {
   /** A record that resolution conditions and graph queries read. injeca freezes a copy. */
   metadata?: ServiceMetadata
   /**
@@ -34,7 +35,7 @@ export type InvokeOptionWithKeys<Deps extends DependencyDeclarations> = InvokeOp
 
 /**
  * The `replace()` of a registration. It takes the function shorthand, or the object form with or without `dependsOn`.
- * An option without `metadata` keeps the metadata of the registration. `perConsumer` does not change.
+ * An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
  */
 export interface ReplaceFunction<T> {
   <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>): Promise<boolean>

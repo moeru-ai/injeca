@@ -4,7 +4,7 @@ import type { Deferred } from '../helpers/deferred'
 import type { DeliveryQueue } from '../helpers/delivery-queue'
 import type { ReactiveOwner, WritableSignal } from '../helpers/signals'
 import type { Decision, DecisionKind, ServiceHook } from '../primitives/decision'
-import type { Container, DependencyState, Disposer, EffectSetup, ListenerMetadata, ObserveRecord, OwnerRecord, ResolutionCondition, ServiceMetadata, ServicePhase, ServiceStatus, SetStatusOptions, StatusCause } from '../types'
+import type { Container, DependencyState, Disposer, EffectSetup, HookTimeouts, ListenerMetadata, ObserveRecord, OwnerRecord, ResolutionCondition, ServiceMetadata, ServicePhase, ServiceStatus, SetStatusOptions, StatusCause, TimeoutHandler } from '../types'
 
 // The data model of the graph. The node types refer to each other, so they are in one file.
 // The functions for each node kind are in `nodes/`. Resolution is in `resolvers/`. Status is in `status.ts`.
@@ -20,6 +20,13 @@ export interface DependencyEdge {
   readonly fallback: boolean
   /** The resolution condition from `where`. */
   readonly condition?: ResolutionCondition
+}
+
+/** The retry and timeout options of one registration or one container, read once from the caller. */
+export interface Policy {
+  readonly maxAttempts?: number
+  readonly timeouts?: Readonly<HookTimeouts>
+  readonly onTimeout?: TimeoutHandler
 }
 
 /** An own status or an effective status, with its reason and cause. */
@@ -78,8 +85,10 @@ export interface InstanceNode {
   readonly signals: InstanceSignals
   /** The controller of the hook run in progress. It aborts when a newer target supersedes the run. */
   hookRun: AbortController | undefined
-  /** The waiting run of a dependency hook requeue. A service never has more than one. */
+  /** The waiting run of a requeue, of a `start` hook or of a dependency hook. A service never has more than one. */
   requeueWait: { readonly cancel: () => void } | undefined
+  /** The index of the `start` handler that the next attempt runs first. A requeue keeps the handlers before it as done. */
+  startFrom: number
   value: unknown
   /** `true` while `build` runs. `on` is valid only then. */
   building: boolean
@@ -108,6 +117,7 @@ export interface ServiceDefinition {
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata
   readonly perConsumer: boolean
+  readonly policy: Policy
 }
 
 /** The state behind the result of one `provide` call. */
@@ -190,6 +200,7 @@ export interface ServiceNode {
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata
+  readonly policy: Policy
   /** `true` when the key of the service is exclusive. */
   readonly exclusive: boolean
   /** `true` for the registration of a `perConsumer` service. It never builds. Each consumer container gets its own service. */
@@ -281,6 +292,8 @@ export interface ContainerNode {
   readonly signals: ContainerSignals
   /** The key names that do not resolve from the ancestors. */
   readonly isolated: ReadonlySet<string>
+  /** The retry and timeout options of `createContainer`. */
+  readonly policy: Policy
   /** The listener registry, by event id. */
   readonly listeners: Map<string, ListenerRecord[]>
   /** The transactions that did not end. A disposal aborts them. */
@@ -320,6 +333,8 @@ export interface Observer {
 /** The state that all containers of one tree share. The transitions read it from `service.container.runtime`. */
 export interface Runtime {
   readonly clock: Clock
+  /** The random source for the backoff jitter. It returns a number from 0 up to, but not including, 1. */
+  readonly random: () => number
   readonly context: CleanupContext
   /** Delivers observe records and watch states in order. */
   readonly deliveries: DeliveryQueue

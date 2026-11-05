@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { provide, start } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, stateOf } from '../testing/helpers'
+import { createContainer, dispose, provide, start, stop } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf } from '../testing/helpers'
 
 describe('serial transitions', () => {
   // Design test 6.
@@ -71,5 +71,81 @@ describe('superseded runs', () => {
     // The fail decision is ignored. The service waits for a provider again. It is not failed.
     expect(stateOf(app, 'voice.speech').phase).toBe('pending')
     expect(records).toContainEqual(expect.objectContaining({ type: 'decision', key: 'voice.speech', hook: 'start', decision: 'fail', ignored: true }))
+  })
+})
+
+describe('stop timeouts', () => {
+  it('ends a cleanup that awaits the disposal of its own container, and the disposal continues', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 100 } })
+    const later = vi.fn()
+    let cleanupDone = false
+    provide(app, 'airi.window', ({ effect }) => {
+      effect(() => later)
+      effect(() => async () => {
+        // A dispose after an await is not detected as re-entrant. It gets the promise of the disposal that waits for this cleanup.
+        await Promise.resolve()
+        await dispose(app).catch(() => {})
+        cleanupDone = true
+      })
+      return 'window'
+    })
+    await start(app)
+    const { records } = collectRecords(app)
+
+    const disposal = dispose(app)
+    await drained(app)
+    expect(records.filter(record => record.type === 'phase').at(-1)).toMatchObject({ key: 'airi.window', to: 'stopping' })
+    expect(later).not.toHaveBeenCalled()
+
+    manual.advance(100)
+    await expect(disposal).rejects.toMatchObject({ code: 'hook-timeout', hook: 'stop', timeoutMs: 100 })
+    // The remaining disposers still run after the timeout.
+    expect(later).toHaveBeenCalledTimes(1)
+    expect(records).toContainEqual(expect.objectContaining({ type: 'timeout', key: 'airi.window', hook: 'stop', timeoutMs: 100 }))
+    expect(records).toContainEqual(expect.objectContaining({ type: 'phase', key: 'airi.window', to: 'withdrawn' }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(cleanupDone).toBe(true)
+  })
+
+  it('applies a handled onTimeout decision, so the stop has no error', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock })
+    const gate = deferred()
+    provide(app, 'airi.tray', {
+      timeouts: { stop: 20 },
+      onTimeout: context => context.hook === 'stop' ? context.decide.handled({ reason: 'the tray closes with the process' }) : undefined,
+      build: ({ on }) => {
+        on('stop', () => gate.promise)
+        return 'tray'
+      },
+    })
+    await start(app)
+
+    const stopped = stop(app)
+    await drained(app)
+    manual.advance(20)
+    await expect(stopped).resolves.toBeUndefined()
+    expect(stateOf(app, 'airi.tray').phase).toBe('pending')
+  })
+
+  it('waits for a stop without a configured timeout', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock })
+    const gate = deferred()
+    provide(app, 'airi.tray', ({ on }) => {
+      on('stop', () => gate.promise)
+      return 'tray'
+    })
+    await start(app)
+
+    const stopped = stop(app)
+    await drained(app)
+    manual.advance(1_000_000)
+    await drained(app)
+    expect(stateOf(app, 'airi.tray').phase).toBe('stopping')
+    gate.resolve()
+    await stopped
+    expect(stateOf(app, 'airi.tray').phase).toBe('pending')
   })
 })

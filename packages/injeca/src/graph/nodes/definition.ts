@@ -1,8 +1,9 @@
 import type { ServiceMetadata } from '../../types'
-import type { BuildFunction, ServiceDefinition } from '../graph'
+import type { BuildFunction, Policy, ServiceDefinition } from '../graph'
 
 import { InvalidArgumentError } from '../../diagnostics/errors'
 import { readEdges } from './edge'
+import { readPolicy } from './policy'
 
 const emptyMetadata: ServiceMetadata = Object.freeze({})
 
@@ -22,21 +23,23 @@ function readMetadata(name: string, metadata: unknown, fallback: ServiceMetadata
 
 /**
  * Reads the options of one registration once: the function shorthand, or the object form.
- * Reading caller-owned properties happens inside a narrow `try`. `inherit` gives the metadata when the options have none.
+ * Reading caller-owned properties happens inside a narrow `try`. `inherit` gives the metadata and each policy field when the options have none.
  */
-export function readDefinition(name: string, option: unknown, inherit?: { readonly metadata: ServiceMetadata }): ServiceDefinition {
+export function readDefinition(name: string, option: unknown, inherit?: { readonly metadata: ServiceMetadata, readonly policy: Policy }): ServiceDefinition {
   let build: unknown
   let dependsOn: unknown
   let metadata: unknown
   let perConsumer: unknown
+  let policy: { maxAttempts: unknown, timeouts: unknown, onTimeout: unknown }
   try {
-    const object: { build?: unknown, dependsOn?: unknown, metadata?: unknown, perConsumer?: unknown } = typeof option === 'function'
+    const object: { build?: unknown, dependsOn?: unknown, metadata?: unknown, perConsumer?: unknown, maxAttempts?: unknown, timeouts?: unknown, onTimeout?: unknown } = typeof option === 'function'
       ? { build: option }
       : typeof option === 'object' && option !== null ? option : {}
     build = object.build
     dependsOn = object.dependsOn
     metadata = object.metadata
     perConsumer = object.perConsumer
+    policy = { maxAttempts: object.maxAttempts, timeouts: object.timeouts, onTimeout: object.onTimeout }
   }
   catch (error) {
     throw new InvalidArgumentError(`Cannot read the provide options of '${name}'.`, { cause: error })
@@ -51,5 +54,6 @@ export function readDefinition(name: string, option: unknown, inherit?: { readon
     build: build as BuildFunction,
     metadata: readMetadata(name, metadata, inherit?.metadata),
     perConsumer: perConsumer === true,
+    policy: readPolicy(`'${name}'`, policy, inherit?.policy),
   }
 }

@@ -73,7 +73,7 @@ async function runNotice(service: ServiceNode, instance: InstanceNode, snapshot:
   const decisions = await runHandlers(service, instance, 'dependency-change', instance.controller.signal, {
     dependsOn: hookDependsOn(service, view),
     changes: Object.freeze(changes),
-  }, true)
+  }, { all: true })
   service.busy = false
 
   for (const decision of decisions)

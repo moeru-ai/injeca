@@ -238,7 +238,7 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - `explain()` lists the owners of all conflicting registrations, in container order.
 - A registration of the same name without the exclusive marker counts as a declaration. A conflict needs only one exclusive declaration.
 - A `running` service stops when a second declaration appears. Then it goes to `conflict`.
-- The conflict is a phase, not an error. No call throws `exclusive-conflict` in step 3.
+- The conflict is a phase, not an error. No call throws an error for it.
 
 ### Resolution conditions
 
@@ -324,7 +324,7 @@ declared → pending → building → starting → running
 | `retrying` | A `start` hook returned `requeue`. The service waits for the next attempt. |
 | `running` | The instance serves calls. Only this phase has a status. |
 | `stopping` | The service waits until its holders release it. Then the `stop` hook and the effect disposers run. |
-| `failed` | Retries ended, or a hook returned `fail`. A user or Host action can move the service out of `failed`. |
+| `failed` | A build failed, retries ended, a timeout failed, or a hook returned `fail`. A user or Host action moves the service out of `failed`: `start()` again, `stop()` and then `start()`, or `replace()` with a new configuration. |
 | `withdrawn` | The registration is withdrawn and the instance is disposed. |
 
 | Step | Rule |
@@ -365,8 +365,8 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - The old instance runs `stop` and dispose only after each holder releases it. A holder that calls an `unavailable` old instance gets the failure that `unavailable` means.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
 - `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
-- A service without a serving instance (`pending`, `conflict`, `failed`, `building`, or `starting`) has no old instance to keep. The new registration takes the slot at once.
-- An option without `metadata` keeps the metadata of the registration. `perConsumer` does not change.
+- A service without a serving instance (`pending`, `conflict`, `failed`, `building`, `starting`, or `retrying`) has no old instance to keep. The new registration takes the slot at once.
+- An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
 
 ### Transactions
 
@@ -474,13 +474,17 @@ decide.fail(error, { reason? })
 
 ### Requeue
 
-- `after` sets a fixed delay in milliseconds.
-- `backoff: { kind: 'exponential', initial, max, jitter? }` sets an exponential delay. The caller gives all values.
+- `after` sets a fixed delay in milliseconds. When a decision has `after` and `backoff`, `after` wins.
+- `backoff: { kind: 'exponential', initial, max, jitter? }` sets an exponential delay. The caller gives all values. The delay is `initial * 2 ** (attempt - 1)`, and at most `max`.
+- `jitter` is a fraction from 0 to 1. The delay becomes a random value between `delay * (1 - jitter)` and `delay`. The random source is `createContainer({ random })` of the root container. It defaults to `Math.random`. Tests inject it, so the delays are deterministic.
 - `maxAttempts` on the decision, the service, or the container limits the attempts. Without a limit, the requeue continues until the dependency or the container changes.
+- A `maxAttempts` on the decision overrides the `provide` option. The `provide` option overrides the `createContainer` option. A container without a value uses the value of its nearest ancestor that has one.
+- The attempt count is for each hook of each instance. A run that returns `requeue` at attempt `maxAttempts` ends the retries. So `maxAttempts: 3` allows three runs.
 - A requeued run reads the latest snapshot.
 - Changes that arrive while a run waits merge into that run. A service never has more than one waiting run.
 - A requeue cannot keep a service alive. If a required dependency is withdrawn during any wait, the service cancels the wait and stops at once.
 - A `start` requeue keeps the instance. It runs `start` again, not `build`. The service is `retrying` and not available. It still holds its dependencies.
+- With more than one `start` handler, the next attempt runs the handler that requeued, then the handlers after it. The handlers before it do not run again.
 - A dependency hook requeue keeps the service `running` with its current bindings.
 - A requeue for a replaced required dependency delays the release of the old instance. Set `maxAttempts` for this case.
 - When attempts end, a running service stops first. Then it goes to `failed` with the last reason.
@@ -488,9 +492,13 @@ decide.fail(error, { reason? })
 ### Timeouts
 
 - `start` and `stop` wait until they settle, unless the service or the container sets a timeout.
-- A service sets `timeouts: { start, stop }` in its `provide` options. Container options can set values for all services. A service value overrides a container value.
-- When a timeout passes, injeca records it in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail`.
-- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container.
+- A service sets `timeouts: { start, stop }` in its `provide` options. Container options can set values for all services. A service value overrides a container value, field by field. A container without a value uses the value of its nearest ancestor that has one.
+- The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
+- When a timeout passes, injeca records a `timeout` record in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail` with a `hook-timeout` error.
+- `onTimeout(context)` is a synchronous function. `context.hook` is `'start'` or `'stop'`, and `context.decide` has the methods of that hook. A value that is not a decision gives `fail`.
+- At a `start` timeout, the hook run signal aborts. The handlers after the stuck handler do not run. A decision that the stuck handler returns later is ignored and recorded.
+- At a `stop` timeout, injeca stops waiting for the stuck callback. It still calls the remaining `stop` handlers and effect disposers, but it does not wait for them.
+- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container. Then the disposal continues and rejects with the `hook-timeout` error.
 
 ## Reading state
 
@@ -507,6 +515,7 @@ decide.fail(error, { reason? })
 - `observe(container, callback)` is a read-only view of all transitions in the container. It replays the current state of all services at once.
 - Each record has the key, the owner, the `instanceId`, the from and to phase or status, the decision kind, and the reason.
 - A `registration-replaced` record tells that a second `provide` before `start()` replaced a registration. Its reason names the replacement.
+- A `timeout` record tells that a `start` or `stop` hook did not settle before its timeout. It has the hook, the timeout, and the attempt. A `decision` record with the `onTimeout` decision follows it.
 - An inspector or a trace exporter uses this stream. A consumer can send it to another process with eventa.
 
 ### Graph queries
@@ -520,7 +529,7 @@ Graph queries are pure reads. They never change state.
 | `graph(container).order(keys?)` | Topological order |
 | `graph(container).cycles()` | All cycles |
 | `graph(container).impact(change)` | The services that a proposed change stops or rebuilds |
-| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies |
+| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue |
 
 A user interface can preview an action before the user confirms it. An example: "Disabling Y also stops X, A, and B." For this, `graph(container).impact()` runs on a copy of the graph with the proposed change. The copy does not change the real graph. No action requires a preview.
 
@@ -541,7 +550,7 @@ The consumer defines the rules that run these listeners. For example, the AIRI h
 
 ## Errors
 
-- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `exclusive-conflict`, `replace-while-stopping`, `start-timeout`, `invalid-argument`.
+- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
 
 ## Implementation

@@ -18,7 +18,7 @@ export interface ProposedChange {
   readonly renewed: ReadonlySet<ServiceNode>
 }
 
-const livePhases: ReadonlySet<string> = new Set(['building', 'starting', 'running'])
+const livePhases: ReadonlySet<string> = new Set(['building', 'starting', 'retrying', 'running'])
 
 /** A service with an instance that a change can stop or rebuild. A new service that waits for its swap does not count. */
 function isLive(service: ServiceNode): boolean {
