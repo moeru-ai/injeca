@@ -1,191 +1,147 @@
 ---
 name: injeca
 description: >-
-  Guide for using injeca — a pure functional dependency injection library with application
-  lifecycle management, inspired by go.uber.org/dig and go.uber.org/fig. Use this skill
-  whenever the user imports from 'injeca', mentions injeca, needs dependency injection in
-  TypeScript/JavaScript without classes, wants to wire up services with lifecycle hooks
-  (start/stop), needs to manage application startup/shutdown order, or discusses functional
-  DI patterns. Also use when the user asks about alternatives to tsyringe, inversify, or
-  awilix that avoid class-based decorators.
+  Guide for using injeca 0.3, a pure functional dependency injection library for TypeScript with
+  service lifecycles, run-time changes, status propagation, and child containers, inspired by
+  go.uber.org/fx and go.uber.org/dig. Use this skill when the user imports from 'injeca', mentions
+  injeca, wires services with start and stop hooks, manages startup and shutdown order, adds or
+  withdraws services at run time, builds a plugin system on a container, or migrates from the
+  injeca 0.2 `lifecycle` key. Also use it when the user asks about class-free alternatives to
+  tsyringe, inversify, or awilix.
 license: MIT
 metadata:
   author: moeru-ai
-  version: "0.1.0"
+  version: "0.3.0"
 ---
 
 # injeca
 
-Pure functional dependency injection with application lifecycle management.
+Pure functional dependency injection with service lifecycles and run-time convergence. It works in Node.js, Electron, browsers, and workers.
 
-## Core Concepts
+## Core concepts
 
-1. **No classes, no decorators** — everything is plain functions and objects
-2. **Singleton by default** — `build` runs once, the result is cached
-3. **Lifecycle hooks** — `onStart` / `onStop` for ordered startup and graceful shutdown
-4. **Topological resolution** — dependencies are resolved in correct order, circular deps are detected
+1. **No classes, no decorators.** Everything is plain functions and objects.
+2. **One instance for each build.** `build` runs once for each instance. injeca caches the result.
+3. **Lifecycle in `build`.** `on('start')` and `on('stop')` in the build context. Dependents stop before their providers.
+4. **Convergence.** Services can appear, disappear, and change after `start()`. Dependents rebuild or move to the new instance.
+5. **Status.** A running service is `ready`, `degraded`, or `unavailable`. The effective status goes down the graph.
 
-## API Quick Reference
-
-### Global Container (Singleton)
-
-The simplest way — `injeca` is a pre-created global container:
+## Global container
 
 ```ts
-import { injeca, lifecycle } from 'injeca'
+import { injeca } from 'injeca'
 
-// Register a provider (returns a typed key for dependency declaration)
+// provide returns a typed key for dependsOn.
 const config = injeca.provide('config', () => ({ port: 3000 }))
 
-// Provider with dependencies and lifecycle
 const server = injeca.provide({
-  dependsOn: { config, lifecycle },
-  async build({ dependsOn }) {
-    const { config, lifecycle } = dependsOn
+  dependsOn: { config },
+  build({ dependsOn, on, effect, signal }) {
     const app = createServer()
-
-    lifecycle.appHooks.onStart(() => app.listen(config.port))
-    lifecycle.appHooks.onStop(() => app.close())
-
+    on('start', () => app.listen(dependsOn.config.port))
+    on('stop', () => app.close())
     return app
   },
 })
 
-// Invoke — runs after all providers are resolved
 injeca.invoke({
   dependsOn: { server },
-  async callback({ server }) {
-    console.log('Server ready:', server.address())
+  callback({ server }) {
+    console.info('Server ready:', server.address())
   },
 })
 
-// Start the application (resolves deps → runs onStart hooks → runs invocations)
 await injeca.start()
-
-// Graceful shutdown (runs onStop hooks in reverse topological order)
 process.once('SIGINT', () => injeca.stop())
 ```
 
-### Scoped Container (for tests, per-request, or multiple instances)
+## Containers
 
 ```ts
-import { createContainer, invoke, lifecycle, provide, start, stop } from 'injeca'
+import { createContainer, dispose, invoke, provide, start, stop } from 'injeca'
 
-const container = createContainer()
+const container = createContainer({ enabled: false }) // logging off, for tests
 
 const token = provide(container, 'token', () => crypto.randomUUID())
-
-invoke(container, {
-  dependsOn: { token },
-  callback: ({ token }) => console.log('token', token),
-})
+invoke(container, { dependsOn: { token }, callback: ({ token }) => console.info(token) })
 
 await start(container)
-await stop(container)
+await stop(container) // stop keeps the registrations
+await dispose(container) // dispose clears the container
 ```
 
-### Provider Patterns
+A child container uses `createContainer({ parent, owner })`. It resolves keys from its ancestors and does not start until `start(child)` runs.
 
-#### Simple value provider
+## Hooks and decisions
+
+A hook gets a context with `decide`, `attempt`, `previous`, and `signal`. A return value that is not a decision, for example the result of `app.listen()`, selects the default of the hook. `decide` has only the methods that the hook allows:
+
+| Hook | `decide` methods |
+| --- | --- |
+| `start` | `handled`, `requeue`, `stop`, `fail` |
+| `stop` | `handled`, `fail` |
+| `dependency-change`, `dependency-status-change` | all |
 
 ```ts
-const config = injeca.provide('config', () => ({ port: 3000 }))
-// or with scoped container:
-const config = provide(container, 'config', () => ({ port: 3000 }))
-```
-
-#### Provider with dependencies
-
-```ts
-const db = injeca.provide({
-  dependsOn: { config },
-  build: ({ dependsOn }) => createDatabase(dependsOn.config.connectionString),
+on('start', async ({ decide }) => {
+  try {
+    await app.listen(port)
+  }
+  catch (error) {
+    return decide.fail(error)
+  }
 })
 ```
 
-#### Provider with lifecycle hooks
+A dependency hook also gets `dependsOn` (the current snapshot) and `changes`. Decide from the current snapshot.
+
+## Run-time changes
 
 ```ts
-const server = injeca.provide({
-  dependsOn: { config, lifecycle },
-  async build({ dependsOn }) {
-    const { config, lifecycle } = dependsOn
-    const app = createServer()
+const vision = injeca.provide('modules:vision', () => createVision())
+await vision.withdraw() // dependents stop first. A stale registration returns false.
+```
 
-    lifecycle.appHooks.onStart(() => app.listen(config.port))
-    lifecycle.appHooks.onStop(() => app.close())
+- Without a `dependency-change` handler, a dependent rebuilds when a dependency gets a new instance.
+- A withdrawn required dependency always stops the dependent.
 
-    return app
-  },
+## Keys, optional, and fallback
+
+```ts
+import { defineKey, firstAvailable, optional } from 'injeca'
+
+const llmKey = defineKey<LlmClient>('airi.llm') // no provider yet
+
+injeca.provide('voice:speech', {
+  dependsOn: { llm: firstAvailable(remoteLlmKey, llmKey), tts: optional(ttsKey) },
+  build: ({ dependsOn }) => createSpeech(dependsOn.llm, dependsOn.tts?.value),
 })
+
+injeca.provide(llmKey, () => createLocalLlm()) // the build result must match LlmClient
 ```
 
-#### Lazy / reusable provider
-
-If `build` returns a function, that function itself is cached (not its return value). Useful for factory patterns:
+## Status and reading state
 
 ```ts
-const createWindow = injeca.provide('createWindow', {
-  dependsOn: { config },
-  build: ({ dependsOn }) => {
-    const getWindow = setupReusableWindow(dependsOn.config)
-    return async () => await getWindow() // callable many times, same window
-  },
-})
+import { observe, waitFor, watch } from 'injeca'
+
+build: ({ setStatus }) => {
+  setStatus('unavailable', { reason: 'reconnecting' })
+}
+
+watch(container, server, ({ phase, status }) => {})
+await waitFor(container, server, { status: 'ready', timeoutMs: 5_000 })
+observe(container, record => {})
 ```
 
-### Lifecycle
+## Key rules
 
-Import `lifecycle` from `injeca` to declare start/stop hooks inside providers:
-
-```ts
-import { lifecycle } from 'injeca'
-
-const service = injeca.provide({
-  dependsOn: { lifecycle },
-  build({ dependsOn }) {
-    dependsOn.lifecycle.appHooks.onStart(() => { /* runs on start */ })
-    dependsOn.lifecycle.appHooks.onStop(() => { /* runs on stop */ })
-    return myService
-  },
-})
-```
-
-- `onStart` hooks run in topological order (dependencies first)
-- `onStop` hooks run in reverse topological order (dependents first)
-- Both are async-safe
-
-### Manual Resolution
-
-```ts
-import { resolve } from 'injeca'
-
-const resolved = await resolve(container, { config, db })
-// resolved.config and resolved.db are ready to use
-```
-
-### Logger Configuration
-
-```ts
-import { createContainer } from 'injeca'
-
-// Disable logging
-const container = createContainer({ enabled: false })
-
-// Custom logger
-import { createLoggLogger } from 'injeca'
-const container = createContainer({ logger: createLoggLogger() })
-```
-
-## Key Rules
-
-1. **Singletons**: `build` only runs once — the return value is cached. If you return a function, the function is cached, not its result.
-2. **Dependency declaration**: Use `dependsOn` with typed keys from `provide()` for full type safety.
-3. **Lifecycle**: Always import `lifecycle` from `injeca` and declare it in `dependsOn` to get `onStart`/`onStop` hooks.
-4. **Start order**: Call `start(container)` or `injeca.start()` after all providers and invocations are registered.
-5. **Circular deps**: Injeca detects circular dependencies at resolution time and throws an error.
-6. **No `any`**: Provider types are fully inferred from `build` return type and `dependsOn` declarations.
+1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
+2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
+3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start({ timeoutMs })` to fail with an explanation.
+4. A cleanup must not await the disposal of its own container.
+5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
 
 ## Documentation
 
-For the latest API reference, use context7 to query `injeca` documentation.
+See the README and `docs/design-0.3.md` in `moeru-ai/injeca`.
