@@ -6,6 +6,8 @@ import type { OwnerRecord } from './service'
 
 export interface Container {
   logger: Logger
+  /** `true` when the container writes the lifecycle trace to `logger`. A child container reads it when it is created. */
+  logging: boolean
   readonly owner: OwnerRecord
   readonly parent: Container | undefined
 }

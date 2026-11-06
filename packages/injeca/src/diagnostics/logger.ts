@@ -2,6 +2,9 @@ import type { Logg as LoggLogger } from '@guiiai/logg'
 
 import { name } from '../../package.json'
 
+/**
+ * The logger of a container. `warn` always writes. The other methods write the lifecycle trace, and injeca calls them only when the `logging` option of the container is `true`.
+ */
 export interface Logger {
   provide: (name: string, dependencies: string[]) => void
   invoke: (dependencies: string[]) => void
@@ -17,7 +20,15 @@ export interface Logger {
 }
 
 export interface LoggerOptions {
-  enabled?: boolean
+  /**
+   * Writes the lifecycle trace: `provide`, `invoke`, builds, `start` and `stop` hooks, and `running`. It defaults to `false`.
+   * A child container uses the value of its parent, unless it sets its own. `warn` does not depend on it.
+   */
+  logging?: boolean
+  /**
+   * The logger. It defaults to the logger of the parent container, then to `createDefaultLogger()`.
+   * To also silence the warnings, for example in tests, pass `createNoopLogger()`.
+   */
   logger?: Logger
 }
 

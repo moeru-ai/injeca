@@ -4,7 +4,7 @@ import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../t
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
 import { BuildAfterDisposeError, InvalidArgumentError } from '../diagnostics/errors'
-import { createDefaultLogger, createNoopLogger } from '../diagnostics/logger'
+import { createDefaultLogger } from '../diagnostics/logger'
 import { assertActive, nodeOf, readPolicy, registerNode, releaseService } from '../graph/nodes'
 import { recordAbortedWait } from '../graph/observers'
 import { abortable, readSignal } from '../helpers/abort'
@@ -99,6 +99,20 @@ function readRandom(options: ContainerOptions): () => number {
   return (random as (() => number) | undefined) ?? Math.random
 }
 
+function readLogging(options: ContainerOptions, parent: ContainerNode | undefined): boolean {
+  let logging: unknown
+  try {
+    logging = options.logging
+  }
+  catch (error) {
+    throw new InvalidArgumentError('Cannot read the logging option.', { cause: error })
+  }
+  if (logging !== undefined && typeof logging !== 'boolean')
+    throw new InvalidArgumentError('The logging option must be a boolean.')
+
+  return (logging as boolean | undefined) ?? parent?.api.logging ?? false
+}
+
 function createRuntime(options: ContainerOptions): Runtime {
   let seq = 0
   let instanceSeq = 0
@@ -130,9 +144,8 @@ export function createContainer(options: ContainerOptions = {}): Container {
   const owner = readOwner(options.owner)
   const isolated = readIsolated(options)
   const policy = readContainerPolicy(options)
-  const logger = options.enabled === false
-    ? createNoopLogger()
-    : (options.logger ?? parent?.api.logger ?? createDefaultLogger())
+  const logging = readLogging(options, parent)
+  const logger = options.logger ?? parent?.api.logger ?? createDefaultLogger()
   const runtime = parent?.runtime ?? createRuntime(options)
 
   let reactiveOwner: ContainerNode['reactiveOwner']
@@ -140,7 +153,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     reactiveOwner = getActiveSub()
   }))
 
-  const api: Container = { logger, owner, parent: parent?.api }
+  const api: Container = { logger, logging, owner, parent: parent?.api }
   const node: ContainerNode = {
     seq: runtime.nextSeq(),
     api,

@@ -71,6 +71,7 @@ process.once('SIGINT', async () => {
 - `provide` returns a typed key. Use it in `dependsOn`. injeca infers the type of each dependency.
 - `start()` builds each service when its dependencies are running, then runs its `start` hooks. It resolves when everything is running.
 - `stop()` stops dependents before their providers. The registrations stay, so a later `start()` builds them again.
+- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Logging](#logging).
 
 > [!WARNING]
 >
@@ -484,6 +485,24 @@ await dispose(plugin)
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
 - A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 
+### Logging
+
+`logging: true` writes the lifecycle trace: each `provide`, `invoke`, build, `start` and `stop` hook, and `running`. It is off by default.
+
+```ts
+import { createContainer, createLoggLogger, createNoopLogger, injeca } from 'injeca'
+
+const app = createContainer({ logging: true }) // writes PROVIDE, RUN, HOOK OnStart, RUNNING, and the other lines
+const plugin = createContainer({ parent: app, logging: false }) // a child uses the value of its parent, unless it sets its own
+const quiet = createContainer({ logger: createNoopLogger() }) // also no warnings, for tests
+
+injeca.getContainer().logging = true // the global container
+injeca.setLogger(createLoggLogger(logg)) // a logger from @guiiai/logg
+```
+
+- `logger.warn` always writes, whatever `logging` is. injeca warns for a re-entrant call, a `stop` timeout, and a late failure of a callback that it stopped waiting for.
+- The logger is `options.logger`, then the logger of the parent container, then `createDefaultLogger()`. It writes with `console`.
+
 ### Exported registrations
 
 A registration in a child container is visible only in that container and its descendants. `export: true` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
@@ -651,6 +670,17 @@ await start(container, { signal: timeout(container, 10_000) })
 - `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()`, `dispose()`, or `withdraw()` from a cleanup that its wait includes resolves at once with a warning. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 - A custom `Logger` needs `warn(message)`. `createDefaultLogger`, `createLoggLogger`, and `createNoopLogger` have it. injeca also writes stop timeouts and late failures of abandoned callbacks with it.
 - `injeca/testing` exports `manualClock` and `drained`. See [Testing with a manual clock](#testing-with-a-manual-clock).
+- The `enabled` option of `createContainer` is removed. The lifecycle logs are off by default. `logging: true` turns them on. Warnings always go to the logger. See [Logging](#logging).
+
+```ts
+// 0.3
+createContainer({ enabled: false }) // no logs
+createContainer() // lifecycle logs
+
+// 0.4
+createContainer({ logger: createNoopLogger() }) // no logs and no warnings. Or remove the option to keep the warnings.
+createContainer({ logging: true }) // lifecycle logs
+```
 
 ## License
 

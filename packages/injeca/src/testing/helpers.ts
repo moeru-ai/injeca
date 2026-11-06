@@ -1,7 +1,6 @@
 import type { Logger } from '../diagnostics/logger'
-import type { Clock } from '../helpers/clock'
 import type { WatchKey } from '../queries/watch'
-import type { BuildContext, Container, KeyReference, ObserveRecord, OwnerRecord, ServicePhase, ServiceState } from '../types'
+import type { BuildContext, Container, ContainerOptions, ObserveRecord, ServicePhase, ServiceState } from '../types'
 
 import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer } from '../primitives/container'
@@ -27,9 +26,9 @@ export function deferred<T = void>(): Deferred<T> {
   return { promise, resolve }
 }
 
-/** Creates a container for a test. Logging is off, unless `enabled` is `true` or `logger` is set. */
-export function createTestContainer(options: { parent?: Container, owner?: OwnerRecord, clock?: Clock, enabled?: boolean, isolate?: readonly KeyReference[], logger?: Logger } = {}): Container {
-  return createContainer({ enabled: options.logger !== undefined, ...options })
+/** Creates a container for a test. It writes nothing, also no warnings, unless `logger` is set. */
+export function createTestContainer(options: ContainerOptions = {}): Container {
+  return createContainer({ ...options, logger: options.logger ?? createNoopLogger() })
 }
 
 /** A logger that writes nothing and collects the messages of `warn`. */

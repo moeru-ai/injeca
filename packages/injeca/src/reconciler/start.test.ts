@@ -2,6 +2,7 @@ import type { Container, ContainerOptions, ObserveRecord, PolicyOptions } from '
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, dispose, provide, start, stop } from '../scoped'
 import { collectRecords, deferred, drained, manualClock, stateOf } from '../testing/helpers'
 
@@ -13,7 +14,7 @@ async function tick(manual: { advance: (ms: number) => void }, app: Container, m
 /** Provides `airi.server` with a `start` hook that waits for `gate`, and a second hook that records its call. */
 function setup(options: { container?: Omit<ContainerOptions, 'clock'>, service?: PolicyOptions } = {}) {
   const manual = manualClock()
-  const app = createContainer({ enabled: false, ...options.container, clock: manual.clock })
+  const app = createContainer({ logger: createNoopLogger(), ...options.container, clock: manual.clock })
   const gate = deferred()
   const signals: AbortSignal[] = []
   const later = vi.fn()
@@ -140,9 +141,9 @@ describe('start timeouts', () => {
   })
 
   it('rejects a timeout that is not a finite number of 0 or more', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer({ logger: createNoopLogger() })
     expect(() => provide(app, 'airi.bad', { timeouts: { start: -1 }, build: () => 1 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
-    expect(() => createContainer({ enabled: false, timeouts: { stop: Number.NaN } })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
+    expect(() => createContainer({ logger: createNoopLogger(), timeouts: { stop: Number.NaN } })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
   })
 })
 
@@ -186,7 +187,7 @@ describe('a start hook that stop() or dispose() aborts (G2)', () => {
 
   it('still applies a configured stop timeout to the stop hooks', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 100 } })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, timeouts: { stop: 100 } })
     provide(app, 'airi.server', ({ on }) => {
       on('start', () => new Promise(() => {}))
       on('stop', () => new Promise(() => {}))

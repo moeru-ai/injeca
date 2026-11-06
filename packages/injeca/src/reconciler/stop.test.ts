@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, dispose, provide, start, stop } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, warningLogger } from '../testing/helpers'
 
@@ -156,7 +157,7 @@ describe('stop timeouts', () => {
 
   it('fails the stop when onTimeout returns fail', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const error = new Error('The tray did not close.')
     provide(app, 'airi.tray', {
       timeouts: { stop: 20 },
@@ -177,7 +178,7 @@ describe('stop timeouts', () => {
 
   it('aborts the signal of a stop handler at the stop timeout', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 30 } })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, timeouts: { stop: 30 } })
     const signals: AbortSignal[] = []
     provide(app, 'airi.tray', ({ on }) => {
       on('stop', ({ signal }) => {
@@ -199,7 +200,7 @@ describe('stop timeouts', () => {
 
   it('applies a handled onTimeout decision, so the stop has no error', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const gate = deferred()
     provide(app, 'airi.tray', {
       timeouts: { stop: 20 },
@@ -220,7 +221,7 @@ describe('stop timeouts', () => {
 
   it('waits for a stop without a configured timeout', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const gate = deferred()
     provide(app, 'airi.tray', ({ on }) => {
       on('stop', () => gate.promise)

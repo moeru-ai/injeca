@@ -1,4 +1,6 @@
+import type { Logger } from '../diagnostics/logger'
 import type { ServiceNode } from '../graph/graph'
+import type { Container } from '../types'
 
 import { untracked } from '../helpers/signals'
 
@@ -12,9 +14,14 @@ export function invokeUser<T>(fn: () => T | Promise<T>): Promise<T> {
   }
 }
 
-/** Only services with a key write to the logger. Invocations and resolvers do not. */
-export function loggerOf(service: ServiceNode) {
-  return service.kind === 'service' ? service.container.api.logger : undefined
+/** The logger of the lifecycle trace of `container`, or `undefined` when its `logging` option is off. `warn` does not use it. */
+export function traceLoggerOf(container: Container): Logger | undefined {
+  return container.logging ? container.logger : undefined
+}
+
+/** Only services with a key write the lifecycle trace. Invocations and resolvers do not. */
+export function loggerOf(service: ServiceNode): Logger | undefined {
+  return service.kind === 'service' ? traceLoggerOf(service.container.api) : undefined
 }
 
 export function callListeners<A extends unknown[]>(listeners: ReadonlySet<(...args: A) => void>, ...args: A): void {

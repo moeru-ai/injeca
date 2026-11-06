@@ -10,6 +10,7 @@ import { assertActive, createRegistration, createService, nodeOf, publishService
 import { emitRecord } from '../graph/observers'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { batch, untracked } from '../helpers/signals'
+import { traceLoggerOf } from '../reconciler/calls'
 import { isExclusiveKey, normalizeName } from './keys'
 import { registrationApi } from './replace'
 
@@ -147,7 +148,7 @@ export function provideIn(container: Container, stackIndex: number, nameOrOption
   // The name is read above, outside this entry point, so that the stack index of `autoName` stays the same.
   const registration = untracked(() => register(node, name, definition, exclusive))
 
-  container.logger.provide(name, definition.edges.map(edge => edge.keyName))
+  traceLoggerOf(container)?.provide(name, definition.edges.map(edge => edge.keyName))
 
   return registrationApi(registration)
 }

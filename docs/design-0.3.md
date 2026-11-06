@@ -220,6 +220,8 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - `effect(container, setup)` adds an effect to a container. `dispose()` runs it.
 - `effect(container, setup)` on a container whose disposal started or ended runs `setup`, then runs its disposer at once. So a late resource does not leak. A disposer that throws throws to the caller. A disposer promise that rejects goes to the runtime as an unhandled error.
 - The global functions use one root container. `getContainer()` returns it.
+- `createContainer({ logging })` turns on the lifecycle trace: `provide`, `invoke`, each build, each `start` and `stop` hook, and `running`. It defaults to `false`. A child container uses the value of its parent, unless it sets its own. `container.logging` is the current value.
+- `logger.warn` always writes, whatever `logging` is. The logger is `options.logger`, then the logger of the parent, then `createDefaultLogger()`. To also silence the warnings, pass `createNoopLogger()`.
 
 ### Keys
 
@@ -771,7 +773,8 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
     - The re-entry check reads the teardown of the instance of a signal, not the phase of its service.
     - `registration.withdraw({ signal })` and the `withdraw()` of an invocation take a signal. A re-entrant `withdraw()` resolves at once. `WithdrawOptions` is exported.
     - `injeca/testing` exports `manualClock` and `drained`.
-    - Changed assertions: the `stop` timeout tests expect `stop()` and `dispose()` to resolve, not to reject with `hook-timeout`. The type test checks the `tx.commit` signal without a second commit, because the second commit rejected unhandled.
+    - `logging?: boolean` replaces `enabled`. The lifecycle trace is off by default. `warn` does not depend on it. A child container inherits `logging` from its parent. `createTestContainer` passes a noop logger unless the test gives a `logger`. This is a breaking change.
+    - Changed assertions: the tests that passed `enabled: false` pass a noop logger now. The `stop` timeout tests expect `stop()` and `dispose()` to resolve, not to reject with `hook-timeout`. The type test checks the `tx.commit` signal without a second commit, because the second commit rejected unhandled.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
@@ -851,6 +854,7 @@ Each rule in this document needs a test. These cases are required:
 69. A cleanup of a successor whose build failed during a make-before-break rebuild calls `dispose()` with its signal, and the call resolves at once. A signal of the new running instance still waits.
 70. `withdraw({ signal })` stops waiting at the abort, sends `wait-aborted`, and the withdrawal continues. An aborted signal starts the withdrawal. A cleanup of the service, or of a dependent that holds it, that calls `withdraw()` with its signal or from its synchronous part resolves at once with a warning. A stop hook that withdraws its export, then disposes its container, completes.
 71. `manualClock` and `drained` from `injeca/testing` drive `timeout()` and a policy timeout without real time.
+72. A container writes no lifecycle trace by default, and writes each lifecycle method with `logging: true`. `warn` writes in both cases. A child inherits `logging` unless it sets its own. Types: `enabled` is not an option.
 
 ## Appendix: plugin-sdk
 

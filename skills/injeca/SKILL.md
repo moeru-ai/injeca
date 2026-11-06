@@ -61,7 +61,7 @@ process.once('SIGINT', () => injeca.stop())
 ```ts
 import { createContainer, dispose, invoke, provide, start, stop } from 'injeca'
 
-const container = createContainer({ enabled: false }) // logging off, for tests
+const container = createContainer() // no lifecycle logs. `logging: true` writes them
 
 const token = provide(container, 'token', () => crypto.randomUUID())
 invoke(container, { dependsOn: { token }, callback: ({ token }) => console.info(token) })
@@ -72,6 +72,8 @@ await dispose(container) // dispose clears the container
 ```
 
 A child container uses `createContainer({ parent, owner })`. It resolves keys from its ancestors and does not start until `start(child)` runs.
+
+Logging: `logging: true` writes the lifecycle trace (`provide`, `invoke`, builds, hooks, `running`). It is off by default, and a child inherits it from its parent unless it sets its own. `logger.warn` always writes. To also silence the warnings in tests, pass `logger: createNoopLogger()`. The `enabled` option of 0.3 is removed.
 
 A child registration is invisible to the parent and to the siblings. `export: true` makes it a candidate in the area of the parent container too:
 

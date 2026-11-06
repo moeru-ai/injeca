@@ -8,6 +8,7 @@ import { recordAbortedWait } from '../graph/observers'
 import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
 import { errorFrom } from '../helpers/error-from'
 import { batch, untracked } from '../helpers/signals'
+import { traceLoggerOf } from '../reconciler/calls'
 import { findReentry, reportReentry } from '../reconciler/reentry'
 
 const visibleKinds: ReadonlySet<ServiceNode['kind']> = new Set(['service', 'invocation'])
@@ -115,7 +116,7 @@ export function start(container: Container, options?: StartOptions): Promise<voi
     })
   })
 
-  return settled.then(() => container.logger.running())
+  return settled.then(() => traceLoggerOf(container)?.running())
 }
 
 /**

@@ -9,7 +9,7 @@ import {
   InvalidArgumentError,
   StartTimeoutError,
 } from '../diagnostics/errors'
-import { defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop, timeout } from '../scoped'
+import { createContainer, defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop, timeout } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController, warningLogger } from '../testing/helpers'
 
 describe('start and stop', () => {
@@ -1138,5 +1138,95 @@ describe('dispose with a signal', () => {
 
     await dispose(app, { signal })
     expect(listeners()).toBe(0)
+  })
+})
+
+describe('logging', () => {
+  function spyLogger() {
+    return {
+      provide: vi.fn(),
+      invoke: vi.fn(),
+      beforeRun: vi.fn(),
+      run: vi.fn(),
+      hookOnStart: vi.fn(),
+      hookOnStartComplete: vi.fn(),
+      hookOnStop: vi.fn(),
+      hookOnStopComplete: vi.fn(),
+      running: vi.fn(),
+      warn: vi.fn(),
+    }
+  }
+
+  async function runLifecycle(app: ReturnType<typeof createContainer>) {
+    provide(app, 'airi.window', ({ on }) => {
+      on('start', () => {})
+      on('stop', () => {})
+      return 'window'
+    })
+    invoke(app, () => {})
+    await start(app)
+    await stop(app)
+  }
+
+  it('writes no lifecycle trace by default', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger })
+    expect(app.logging).toBe(false)
+    await runLifecycle(app)
+
+    for (const [method, spy] of Object.entries(logger))
+      expect(spy, method).not.toHaveBeenCalled()
+  })
+
+  it('writes the lifecycle trace with logging: true', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger, logging: true })
+    await runLifecycle(app)
+
+    expect(logger.provide).toHaveBeenCalledWith('airi.window', [])
+    expect(logger.invoke).toHaveBeenCalledWith([])
+    expect(logger.beforeRun).toHaveBeenCalledWith('airi.window')
+    expect(logger.run).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.hookOnStart).toHaveBeenCalledWith('airi.window')
+    expect(logger.hookOnStartComplete).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.hookOnStop).toHaveBeenCalledWith('airi.window')
+    expect(logger.hookOnStopComplete).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.running).toHaveBeenCalledOnce()
+    expect(logger.warn).not.toHaveBeenCalled()
+  })
+
+  it('writes warnings whatever logging is', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger })
+    provide(app, 'airi.window', ({ on }) => {
+      on('stop', ({ signal }) => {
+        void dispose(app, { signal })
+      })
+      return 'window'
+    })
+    await start(app)
+    await dispose(app)
+
+    expect(logger.warn).toHaveBeenCalledOnce()
+    expect(logger.hookOnStop).not.toHaveBeenCalled()
+  })
+
+  it('lets a child container inherit logging from its parent, unless it sets its own', async () => {
+    const logger = spyLogger()
+    const parent = createContainer({ logger, logging: true })
+    const child = createContainer({ parent })
+    const quiet = createContainer({ parent, logging: false })
+    expect(child.logging).toBe(true)
+    expect(quiet.logging).toBe(false)
+    expect(createContainer({ parent: quiet, logging: true }).logging).toBe(true)
+
+    provide(quiet, 'plugin.quiet', () => 'quiet')
+    expect(logger.provide).not.toHaveBeenCalled()
+    provide(child, 'plugin.loud', () => 'loud')
+    expect(logger.provide).toHaveBeenCalledWith('plugin.loud', [])
+  })
+
+  it('rejects a logging option that is not a boolean', () => {
+    expect(() => createContainer({ logging: 'yes' as unknown as boolean })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
   })
 })

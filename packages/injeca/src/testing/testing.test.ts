@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, provide, start, stop, timeout } from '../scoped'
 import { drained, manualClock } from './testing'
 
 describe('the public test clock', () => {
   it('drives timeout() without real time', () => {
     const { clock, advance, pending } = manualClock()
-    const app = createContainer({ enabled: false, clock })
+    const app = createContainer({ logger: createNoopLogger(), clock })
     const signal = timeout(app, 1_000)
 
     advance(999)
@@ -21,7 +22,7 @@ describe('the public test clock', () => {
 
   it('drives a policy stop timeout with drained', async () => {
     const { clock, advance } = manualClock()
-    const app = createContainer({ enabled: false, clock, timeouts: { stop: 100 } })
+    const app = createContainer({ logger: createNoopLogger(), clock, timeouts: { stop: 100 } })
     provide(app, 'airi.tray', ({ on }) => {
       on('stop', () => new Promise<void>(() => {}))
       return 'tray'

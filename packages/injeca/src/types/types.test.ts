@@ -19,7 +19,7 @@ interface Tts {
 
 describe('call-site types', () => {
   it('infers the key type of provide by name from build', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', { build: (): Llm => ({ chat: () => 'hi' }) })
     const shorthand = provide(app, 'airi.count', () => 1)
     const asyncShorthand = provide(app, 'airi.async', async () => 'value')
@@ -31,7 +31,7 @@ describe('call-site types', () => {
   })
 
   it('infers each dependsOn value, and types an optional dependency as { value, status } | undefined', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
     const ttsKey = defineKey<Tts>('airi.tts')
 
@@ -60,7 +60,7 @@ describe('call-site types', () => {
   })
 
   it('checks the build result against the type of a defineKey key', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const ttsKey = defineKey<Tts>('airi.tts')
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
 
@@ -79,7 +79,7 @@ describe('call-site types', () => {
   })
 
   it('types the hook context of each hook', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
     const ttsKey = defineKey<Tts>('airi.tts')
 
@@ -149,7 +149,7 @@ describe('call-site types', () => {
   })
 
   it('types decisions, firstAvailable, and the state readers', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const remote = defineKey<Llm>('airi.llm.remote')
     const local = defineKey<{ chat: () => string, local: true }>('airi.llm.local')
     const context = createHookContext('stop')
@@ -181,7 +181,7 @@ describe('call-site types', () => {
   })
 
   it('types where, replace, transactions, perConsumer, and the step 3 readers', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llmKey = defineKey<Llm>('airi.llm', { exclusive: true })
     const llm = provide(app, llmKey, { metadata: { version: '1.0.0' }, build: () => ({ chat: () => 'hi' }) })
 
@@ -239,7 +239,7 @@ describe('call-site types', () => {
     expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()
   })
   it('types the retry and timeout options', () => {
-    const app = createContainer({ enabled: false, maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
+    const app = createContainer({ maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
     provide(app, 'airi.device', {
       maxAttempts: 3,
       timeouts: { start: 2_000 },
@@ -257,5 +257,13 @@ describe('call-site types', () => {
     // @ts-expect-error A timeout is a number of milliseconds.
     const wrong: PolicyOptions = { timeouts: { start: '1s' } }
     void wrong
+  })
+
+  it('types the logging option, and enabled is gone', () => {
+    const app = createContainer({ logging: true })
+    expectTypeOf(app.logging).toEqualTypeOf<boolean>()
+
+    // @ts-expect-error `enabled` was removed. Lifecycle logs are off by default. Pass `logging: true` to write them.
+    void createContainer({ enabled: false })
   })
 })

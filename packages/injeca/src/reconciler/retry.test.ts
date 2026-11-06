@@ -2,6 +2,7 @@ import type { Container, HookContext, ObserveRecord, PhaseObserveRecord } from '
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, provide, start, stop } from '../scoped'
 import { collectRecords, drained, manualClock, provideWithStatus, stateOf } from '../testing/helpers'
 
@@ -29,7 +30,7 @@ function provideSpeech(app: Container, handler: StartHandler, options: { maxAtte
 
 function setup(handler: StartHandler, options: { maxAttempts?: number, containerMaxAttempts?: number } = {}) {
   const manual = manualClock()
-  const app = createContainer({ enabled: false, clock: manual.clock, maxAttempts: options.containerMaxAttempts })
+  const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, maxAttempts: options.containerMaxAttempts })
   const llm = provideWithStatus(app, 'airi.llm')
   const speech = provideSpeech(app, handler, { maxAttempts: options.maxAttempts })
 
@@ -144,7 +145,7 @@ describe('start requeue', () => {
   it('merges the changes during the wait into one attempt, and the running service then handles the latest snapshot', async () => {
     const statusRuns: string[][] = []
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const llm = provideWithStatus(app, 'airi.llm')
     const starts = vi.fn()
     provide(app, 'voice.speech', {
@@ -178,7 +179,7 @@ describe('start requeue', () => {
 
   it('runs the start handler that requeued again, and not the handlers before it', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const calls: string[] = []
     provide(app, 'airi.server', ({ on }) => {
       on('start', () => {
@@ -231,7 +232,7 @@ describe('maxAttempts precedence', () => {
 
   it('uses the value of the nearest ancestor container', async () => {
     const manual = manualClock()
-    const root = createContainer({ enabled: false, clock: manual.clock, maxAttempts: 2 })
+    const root = createContainer({ logger: createNoopLogger(), clock: manual.clock, maxAttempts: 2 })
     const child = createContainer({ parent: root })
     provideWithStatus(root, 'airi.llm')
     const attempts: number[] = []
@@ -249,9 +250,9 @@ describe('maxAttempts precedence', () => {
   })
 
   it('rejects a maxAttempts that is not a positive integer', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer({ logger: createNoopLogger() })
     expect(() => provide(app, 'airi.bad', { maxAttempts: 0, build: () => 1 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
-    expect(() => createContainer({ enabled: false, maxAttempts: 1.5 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
+    expect(() => createContainer({ logger: createNoopLogger(), maxAttempts: 1.5 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
   })
 })
 
