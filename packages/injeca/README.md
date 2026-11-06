@@ -483,7 +483,7 @@ await dispose(plugin)
 - `start(container, { signal: timeout(container, ms) })` rejects with a `StartTimeoutError` that explains each unit that is not running. injeca has no built-in timeout.
 - A unit with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
-- `createContainer({ local: [key] })` makes a key local to the container: it does not resolve from the ancestors. A local key also hides the parent-visible units of the sibling containers. It does not hide the parent-visible units of its own child containers.
+- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the parent-visible units of the sibling containers. It does not hide the parent-visible units of its own child containers.
 - A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a unit that holds a unit of the container. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 
 ### Logging
@@ -691,13 +691,11 @@ createContainer({ logging: true }) // lifecycle logs
 // 0.4
 provide(root, 'host:client', { perConsumer: true, build: ({ consumer }) => createHostClient(consumer) })
 provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
-createContainer({ parent: root, isolate: [ttsKey] })
 graph(container).services()
 
 // 0.5
 provide(root, 'host:client', { instances: 'per-container', build: ({ consumer }) => createHostClient(consumer) })
 provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemoryKit() })
-createContainer({ parent: root, local: [ttsKey] })
 graph(container).units()
 ```
 
@@ -705,7 +703,6 @@ graph(container).units()
 | --- | --- |
 | `perConsumer: true` | `instances: 'per-container'`. The default is `'shared'`. |
 | `export: true` | `visibility: 'parent'`. The default is `'local'`. |
-| `createContainer({ isolate: [key] })` | `createContainer({ local: [key] })` |
 | `graph(container).services()` | `graph(container).units()` |
 | `GraphService` with `perConsumer: boolean` and `exported: boolean` | `GraphUnit` with `instances: 'shared' \| 'per-container'` and `visibility: 'local' \| 'parent'` |
 | `kind: 'service'` in `GraphService` and `ServiceExplanation` | `kind: 'unit'` |

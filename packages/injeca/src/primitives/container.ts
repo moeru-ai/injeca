@@ -45,29 +45,29 @@ function readOwner(owner: unknown): OwnerRecord {
   return deepFreeze(copy as OwnerRecord)
 }
 
-function readLocalKeys(options: ContainerOptions): ReadonlySet<string> {
-  let local: unknown
+function readIsolated(options: ContainerOptions): ReadonlySet<string> {
+  let isolate: unknown
   try {
-    local = options.local
+    isolate = options.isolate
   }
   catch (error) {
-    throw new InvalidArgumentError('Cannot read the local option.', { cause: error })
+    throw new InvalidArgumentError('Cannot read the isolate option.', { cause: error })
   }
-  if (local === undefined)
+  if (isolate === undefined)
     return new Set()
-  if (!Array.isArray(local))
-    throw new InvalidArgumentError('The local option must be a list of keys or names.')
+  if (!Array.isArray(isolate))
+    throw new InvalidArgumentError('The isolate option must be a list of keys or names.')
 
-  return new Set(local.map((key: unknown) => {
+  return new Set(isolate.map((key: unknown) => {
     let name: unknown
     try {
       name = normalizeName(key as string)
     }
     catch (error) {
-      throw new InvalidArgumentError('Cannot read a key of the local option.', { cause: error })
+      throw new InvalidArgumentError('Cannot read a key of the isolate option.', { cause: error })
     }
     if (typeof name !== 'string' || name.length === 0)
-      throw new InvalidArgumentError('Each entry of the local option must be a key or a non-empty name.')
+      throw new InvalidArgumentError('Each entry of the isolate option must be a key or a non-empty name.')
 
     return name
   }))
@@ -142,7 +142,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     assertActive(parent, 'create a child container')
 
   const owner = readOwner(options.owner)
-  const localKeys = readLocalKeys(options)
+  const isolated = readIsolated(options)
   const policy = readContainerPolicy(options)
   const logging = readLogging(options, parent)
   const logger = options.logger ?? parent?.api.logger ?? createDefaultLogger()
@@ -167,7 +167,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
       slots: new Map(),
       childUnits: new Map(),
     },
-    localKeys,
+    isolated,
     policy,
     listeners: new Map(),
     transactions: new Set(),

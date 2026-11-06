@@ -84,7 +84,7 @@ describe('parent-visible registrations', () => {
     expect(peek(root, plainKey)).toMatchObject({ kind: 'resolved', value: 'root' })
   })
 
-  it('rejects a visibility option other than local or parent', () => {
+  it('rejects a visibility option other than isolated or parent', () => {
     const { a } = host()
     expect(() => provide(a, plainKey, { visibility: 'yes' as unknown as 'parent', build: () => 'a' })).toThrow(InvalidArgumentError)
   })
@@ -388,37 +388,37 @@ describe('parent-visible exclusive keys', () => {
   })
 })
 
-describe('parent visibility and local keys', () => {
-  it('hides the parent-visible units of the siblings from a container with a local key', async () => {
+describe('parent visibility and key isolation', () => {
+  it('hides the parent-visible units of the siblings from a container that isolates the key', async () => {
     const root = createTestContainer()
     const a = createTestContainer({ parent: root })
-    const local = createTestContainer({ parent: root, local: [plainKey] })
+    const isolated = createTestContainer({ parent: root, isolate: [plainKey] })
     provide(a, plainKey, { visibility: 'parent', build: () => 'a' })
-    provide(local, 'local:consumer', { dependsOn: { k: plainKey }, build: ({ dependsOn }) => dependsOn.k })
+    provide(isolated, 'isolated:consumer', { dependsOn: { k: plainKey }, build: ({ dependsOn }) => dependsOn.k })
     void start(root)
     void start(a)
-    void start(local)
+    void start(isolated)
     await drained(root)
 
-    expect(phaseOf(local, 'local:consumer')).toBe('pending')
-    expect(peek(local, plainKey)).toMatchObject({ kind: 'missing' })
+    expect(phaseOf(isolated, 'isolated:consumer')).toBe('pending')
+    expect(peek(isolated, plainKey)).toMatchObject({ kind: 'missing' })
   })
 
-  it('accepts the parent-visible units of its own children in a container with a local key, and keeps them out of the ancestor area', async () => {
+  it('accepts the parent-visible units of its own children in a container that isolates the key, and keeps them out of the ancestor area', async () => {
     const root = createTestContainer()
-    const local = createTestContainer({ parent: root, local: [kitKey] })
-    const child = createTestContainer({ parent: local })
+    const isolated = createTestContainer({ parent: root, isolate: [kitKey] })
+    const child = createTestContainer({ parent: isolated })
     provide(root, kitKey, () => 'root')
     provide(child, kitKey, { visibility: 'parent', build: () => 'child' })
-    provide(local, 'local:consumer', { dependsOn: { k: kitKey }, build: ({ dependsOn }) => dependsOn.k })
+    provide(isolated, 'isolated:consumer', { dependsOn: { k: kitKey }, build: ({ dependsOn }) => dependsOn.k })
     void start(root)
-    void start(local)
+    void start(isolated)
     void start(child)
     await drained(root)
 
-    expect(peek(local, kitKey)).toMatchObject({ kind: 'resolved', value: 'child' })
-    expect(phaseOf(local, 'local:consumer')).toBe('running')
-    // The local key ends the area of the root key, so the child registration does not conflict with it.
+    expect(peek(isolated, kitKey)).toMatchObject({ kind: 'resolved', value: 'child' })
+    expect(phaseOf(isolated, 'isolated:consumer')).toBe('running')
+    // The isolated key the area of the root key, so the child registration does not conflict with it.
     expect(peek(root, kitKey)).toMatchObject({ kind: 'resolved', value: 'root' })
   })
 })

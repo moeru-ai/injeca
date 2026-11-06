@@ -27,7 +27,7 @@ export interface ContainerOptions extends LoggerOptions, PolicyOptions {
   random?: () => number
   /**
    * The keys that do not resolve from the ancestors. The container and its descendants resolve them only from their own registrations.
-   * A local key also ends the resolution area of an exclusive key of an ancestor.
+   * An isolated key also ends the resolution area of an exclusive key of an ancestor.
    */
-  local?: readonly KeyReference[]
+  isolate?: readonly KeyReference[]
 }

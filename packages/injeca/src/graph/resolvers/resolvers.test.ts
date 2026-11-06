@@ -51,24 +51,24 @@ describe('shadowing', () => {
   })
 })
 
-describe('local keys', () => {
-  it('does not resolve a local key from the ancestors', async () => {
+describe('key isolation', () => {
+  it('does not resolve an isolated key from the ancestors', async () => {
     const root = createTestContainer()
-    const local = createTestContainer({ parent: root, local: [ttsKey, 'airi.llm'] })
+    const isolated = createTestContainer({ parent: root, isolate: [ttsKey, 'airi.llm'] })
     provide(root, ttsKey, () => 'root tts')
     provide(root, 'airi.llm', () => 'root llm')
     provide(root, 'airi.config', () => 'config')
-    provide(local, 'voice.speech', { dependsOn: { tts: ttsKey }, build: ({ dependsOn }) => dependsOn.tts })
-    provide(local, 'voice.config', { dependsOn: { config: 'airi.config' }, build: ({ dependsOn }) => dependsOn.config })
+    provide(isolated, 'voice.speech', { dependsOn: { tts: ttsKey }, build: ({ dependsOn }) => dependsOn.tts })
+    provide(isolated, 'voice.config', { dependsOn: { config: 'airi.config' }, build: ({ dependsOn }) => dependsOn.config })
     await start(root)
-    void start(local)
+    void start(isolated)
     await drained(root)
 
-    expect(phaseOf(local, 'voice.speech')).toBe('pending')
-    expect(phaseOf(local, 'voice.config')).toBe('running')
+    expect(phaseOf(isolated, 'voice.speech')).toBe('pending')
+    expect(phaseOf(isolated, 'voice.config')).toBe('running')
 
-    provide(local, ttsKey, () => 'own tts')
+    provide(isolated, ttsKey, () => 'own tts')
     await drained(root)
-    expect(phaseOf(local, 'voice.speech')).toBe('running')
+    expect(phaseOf(isolated, 'voice.speech')).toBe('running')
   })
 })

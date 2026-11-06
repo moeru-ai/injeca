@@ -5,12 +5,12 @@ import { computed, signal } from 'alien-signals'
 
 import { areaOf } from './visibility'
 
-/** Tells whether `ancestor` is `container` or an ancestor of it, with no container in between that has `keyName` as a local key. */
+/** Tells whether `ancestor` is `container` or an ancestor of it, with no container in between that isolates `keyName`. */
 function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: string): boolean {
   for (let current: ContainerNode | undefined = container; current; current = current.parent) {
     if (current === ancestor)
       return true
-    if (current.localKeys.has(keyName))
+    if (current.isolated.has(keyName))
       return false
   }
 
@@ -19,7 +19,7 @@ function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: str
 
 /**
  * Tells whether two containers share a resolution area of `keyName`.
- * A resolution area is the container that has the key, with its descendants that do not have the key as a local key.
+ * A resolution area is the container that has the key, with its descendants that do not isolate the key.
  * For a parent-visible registration, the caller passes the parent container. See `areaOf`.
  */
 export function sameArea(a: ContainerNode, b: ContainerNode, keyName: string): boolean {

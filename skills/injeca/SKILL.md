@@ -83,7 +83,7 @@ provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemory
 
 - The registration stays in its container: owner, disposal, own dependencies, and phases. It is visible exactly one level up.
 - At each level, the registration of that container comes before the parent-visible units of its children. A parent-visible unit shadows a farther ancestor only while it runs.
-- `createContainer({ local: [key] })` makes a key local to the container: it does not resolve from the ancestors. A local key hides the parent-visible units of the siblings, but not those of the own children.
+- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the parent-visible units of the sibling containers, but not those of its own child containers.
 - `instances: 'per-container'` and `tx.provide` take `visibility` too. Consumer instances live in the consumer container. Their `dependsOn` resolves from the container of the registration.
 
 ## Hooks and decisions
@@ -270,7 +270,7 @@ const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(cont
 5. Code that keeps a dependency must be a unit or an invocation, so that it converges. `resolve()` is for one-time code.
 6. Use `replace()`, not `withdraw()` and `provide()`, to change a unit without a gap.
 7. Do not use `Math.random` or real timers in retry and timeout tests. Pass `random` and the `clock` of `manualClock()` from `injeca/testing` to `createContainer`. `timeout(container, ms)` uses that clock.
-8. Use the 0.5 names. There are no aliases for the 0.4 names: `perConsumer: true` is `instances: 'per-container'`, `export: true` is `visibility: 'parent'`, `isolate` is `local`, `graph().services()` is `graph().units()`, and each `Service` type or error is a `Unit` type or error, for example `UnitFailedError` (`unit-failed`).
+8. Use the 0.5 names. There are no aliases for the 0.4 names: `perConsumer: true` is `instances: 'per-container'`, `export: true` is `visibility: 'parent'`, `graph().services()` is `graph().units()`, and each `Service` type or error is a `Unit` type or error, for example `UnitFailedError` (`unit-failed`).
 
 ## Documentation
 

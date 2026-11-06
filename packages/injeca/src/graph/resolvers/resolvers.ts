@@ -20,7 +20,7 @@ export function slotOf(container: ContainerNode, keyName: string): WritableSigna
  * Lists the registrations of `keyName` that a consumer in `container` can see, nearest first.
  *
  * At each level, from `container` up through its ancestors, the candidates are the registration of that container, then the parent-visible units of its child containers in creation order.
- * The walk ends at a container that has the key as a local key. So a local key also hides the parent-visible units of the siblings.
+ * The walk ends at a container that isolates the key. So an isolated key also hides the parent-visible units of the siblings.
  * A unit does not resolve itself. A consumer unit of a per-container registration does not resolve its registration.
  */
 export function candidatesOf(container: ContainerNode, keyName: string, consumer?: ResolutionConsumer): UnitNode[] {
@@ -33,7 +33,7 @@ export function candidatesOf(container: ContainerNode, keyName: string, consumer
     add(slotOf(current, keyName)())
     for (const child of childUnitsOf(current, keyName)())
       add(child)
-    if (current.localKeys.has(keyName))
+    if (current.isolated.has(keyName))
       break
   }
 

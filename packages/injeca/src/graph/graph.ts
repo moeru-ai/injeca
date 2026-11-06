@@ -340,7 +340,7 @@ export interface ContainerNode {
   readonly units: Set<UnitNode>
   readonly signals: ContainerSignals
   /** The key names that do not resolve from the ancestors. */
-  readonly localKeys: ReadonlySet<string>
+  readonly isolated: ReadonlySet<string>
   /** The retry and timeout options of `createContainer`. */
   readonly policy: Policy
   /** The listener registry, by event id. */
