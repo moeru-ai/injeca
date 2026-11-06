@@ -125,7 +125,8 @@ export async function runHandlers(service: ServiceNode, instance: InstanceNode, 
 /**
  * Records a timeout of a `start` or `stop` hook in the observe stream, and returns the decision of the `onTimeout` handler.
  *
- * The handler runs synchronously. A value that is not a decision of this hook, a promise, a throw, or no handler gives `fail` with `hook-timeout`.
+ * The handler runs synchronously. For `start`, a value that is not a decision of this hook, a promise, or no handler gives `fail` with `hook-timeout`.
+ * For `stop`, they give `handled` with the timeout as the reason, so that the stop continues and its callers do not fail. A throw gives `fail` for both hooks.
  */
 export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook: 'start' | 'stop', timeoutMs: number): Decision {
   const state = hookStateOf(instance, hook)
@@ -143,13 +144,14 @@ export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook
     reason: error.message,
   })
 
+  const fallback = (): Decision => hook === 'stop' ? decide.handled({ reason: error.message }) : decide.fail(error, { reason: error.message })
   const handler = timeoutHandlerOf(service)
   if (!handler)
-    return decide.fail(error, { reason: error.message })
+    return fallback()
 
   try {
     const value = untracked(() => handler(Object.freeze({ hook, timeoutMs, attempt: state.attempt, previous: state.previous, decide }) as TimeoutContext))
-    return validateDecision(run, value) ?? decide.fail(error, { reason: error.message })
+    return validateDecision(run, value) ?? fallback()
   }
   catch (handlerError) {
     return decide.fail(handlerError, { reason: `The onTimeout handler of '${service.name}' threw.` })

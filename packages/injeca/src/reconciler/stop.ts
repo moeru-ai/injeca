@@ -49,9 +49,20 @@ export function reconcileStopping(service: ServiceNode): void {
  * Runs the `stop` hooks in reverse order, then the effect disposers in reverse order.
  *
  * A configured `stop` timeout covers all of them. It is a timeout signal on the container clock. The `stop` handlers get it in their `signal`.
- * When it aborts, injeca records it, applies the `onTimeout` decision, and stops waiting.
+ * When it aborts, injeca records it, warns, applies the `onTimeout` decision, and stops waiting. Without `onTimeout`, the timeout counts as `handled`, so the callers of `stop()` and `dispose()` do not fail.
  * The callback in progress is abandoned. The remaining callbacks still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
  */
+/** The warning of a `stop` timeout. During a stop or a disposal of the container, it tells the most common cause. */
+function stopTimeoutWarning(service: ServiceNode, timeoutMs: number): string {
+  const warning = `The cleanups of '${service.name}' did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the stop continues.`
+  const { container } = service
+  const action = container.state === 'disposing' ? 'disposing' : container.signals.started() ? undefined : 'stopping'
+  if (!action)
+    return warning
+
+  return `${warning} The container is ${action}. A cleanup can be waiting for its own container. It must pass its signal to stop() or dispose().`
+}
+
 async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
   const errors: unknown[] = []
   const { clock, context } = service.container.runtime
@@ -79,6 +90,7 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
       return { value: result.value }
 
     timedOut = true
+    service.container.api.logger.warn(stopTimeoutWarning(service, timeoutMs!))
     const decision = decideTimeout(service, instance, 'stop', timeoutMs!)
     recordDecision(service, instance, decision, false)
     finishRun(instance, 'stop', decision)

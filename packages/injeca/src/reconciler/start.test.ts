@@ -195,9 +195,11 @@ describe('a start hook that stop() or dispose() aborts (G2)', () => {
     void start(app)
     await drained(app)
 
-    const disposal = dispose(app).catch((error: unknown) => error)
+    const { records } = collectRecords(app)
+    const disposal = dispose(app)
     await drained(app)
     manual.advance(100)
-    expect(await disposal).toMatchObject({ code: 'hook-timeout', hook: 'stop' })
+    await expect(disposal).resolves.toBeUndefined()
+    expect(records).toContainEqual(expect.objectContaining({ type: 'timeout', key: 'airi.server', hook: 'stop', timeoutMs: 100 }))
   })
 })

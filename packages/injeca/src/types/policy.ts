@@ -17,7 +17,8 @@ export type TimeoutContext = {
 /**
  * Decides what happens when a `start` or `stop` hook times out. It runs synchronously.
  *
- * A value that is not a decision, a promise, or a throw gives `fail` with `hook-timeout`.
+ * For a `start` timeout, a value that is not a decision or a promise gives `fail` with `hook-timeout`.
+ * For a `stop` timeout, it gives `handled`, so that the stop continues. A throw gives `fail` for both hooks.
  */
 export type TimeoutHandler = (context: TimeoutContext) => unknown
 
@@ -42,6 +43,6 @@ export interface PolicyOptions {
   maxAttempts?: number
   /** The timeouts of the `start` and `stop` hooks. Each field overrides the same field of the container. */
   timeouts?: HookTimeouts
-  /** Decides what happens when a hook times out. Without it, the result is `fail` with `hook-timeout`. */
+  /** Decides what happens when a hook times out. Without it, a `start` timeout gives `fail` with `hook-timeout`, and a `stop` timeout counts as `handled`. */
   onTimeout?: TimeoutHandler
 }
