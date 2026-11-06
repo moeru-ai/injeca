@@ -209,8 +209,8 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - `dispose(container)` disposes the child containers first, one after the other, in reverse creation order. Each child disposal completes, with its own effects, before the next one starts. Then the registrations and invocations of the container withdraw in one batch. Then the effects of the container run in reverse registration order.
 - The whole subtree enters disposal at once. No new registration, child container, or transaction can start in it.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
-- A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. The check is the same in every runtime. injeca does not track a call across `await`, because the web has no runtime async context.
-- A cleanup must not await the disposal of its own container or of an ancestor. injeca does not detect this after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
+- A `stop` or `dispose` call from a cleanup in the same container, or in a descendant, does not wait. It warns, sends a `reentrant-call` record, and resolves at once. injeca finds the call by the signal of the cleanup, or by the synchronous part of the cleanup. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- A cleanup that awaits the disposal of its own container or of an ancestor without its signal is not found after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
 - An outside caller that calls `dispose()` again during disposal gets the same promise.
 - `stop(container)` stops. `dispose(container)` cleans up. `stop()` stops all instances, dependents first, and keeps the registrations. The container stays usable, and a later `start()` builds the registrations again. `stop()` also ends the demands of `resolve`, `watch`, and `waitFor` on the services of the container. `dispose()` also withdraws the registrations, disposes the child containers, and runs the container effects. A disposed container cannot be used again.
 - `start(container, { signal? })` has no built-in timeout. When a timeout signal aborts, it rejects with the `explain()` result of each service that is not `running`. See [Cancellation](#cancellation).
@@ -594,6 +594,18 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 - Only `resolve`, `waitFor`, and `start` turn a timeout reason into a typed error. They wait for a state, so the error tells which state did not come. The other calls reject with the reason.
 - The policy timeouts stay numbers: `timeouts: { start, stop }` and `onTimeout`. See [Timeouts](#timeouts).
 
+#### Calling dispose from a cleanup
+
+A cleanup that waits for `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. injeca finds such a call and does not let it wait.
+
+- injeca records the service of each signal that it gives to a run: the build signal, which the effects and the invocation callback also use, and the signal of each hook run. A signal from `withTimeout` or `anySignal` on top of it keeps that origin.
+- A call with such a signal is a re-entrant call when the service is in the subtree of the target container and is `stopping`.
+- A call from the synchronous part of a teardown or of a container effect in the subtree is a re-entrant call too. A frame of the cleanup context tells this, in every runtime.
+- injeca does not reject a re-entrant call and does not wait. It writes a warning with `logger.warn`, sends a `reentrant-call` record, and resolves at once. The `stop` or the disposal continues as usual. A call from outside still gets a promise that settles when the work ends.
+- A call without a signal after an `await` is not found, because the web has no async context. A configured `stop` timeout ends that cleanup. So a cleanup passes its `signal` to `stop()` and `dispose()`.
+- A signal of a service that is not `stopping` is not a re-entrant signal. The call waits as usual, and the signal can end the wait.
+- `reentrant-dispose` and `ReentrantDisposeError` are removed in 0.4, because no call rejects with them.
+
 ## Reading state
 
 ### Subscriptions
@@ -612,6 +624,7 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 - Each record has the key, the owner, the `instanceId`, the from and to phase or status, the decision kind, and the reason.
 - A `registration-replaced` record tells that a second `provide` before `start()` replaced a registration. Its reason names the replacement.
 - A `timeout` record tells that a `start` or `stop` hook did not settle before its timeout. It has the hook, the timeout, and the attempt. A `decision` record with the `onTimeout` decision follows it.
+- A `reentrant-call` record tells that a cleanup called `stop()` or `dispose()` of its own container or of an ancestor, and that the call resolved at once. It has the call and the reason. `key` is the service of the cleanup, or `''` for a container effect.
 - A `wait-aborted` record tells that the signal of `stop()` or `dispose()` aborted before a service stopped. It has the call, the phase at the abort, the reason text, and `abortReason`. There is one record for each service that did not stop. A container effect that does not settle has no record.
 - An inspector or a trace exporter uses this stream. A consumer can send it to another process with eventa.
 
@@ -658,8 +671,8 @@ The consumer defines the rules that run these listeners. For example, the AIRI h
 
 ## Errors
 
-- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `service-failed`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
-- `waitFor` and `resolve` reject with `wait-timeout` when their signal aborts with a timeout reason. `start` rejects with `start-timeout` in the same case. The `cause` is the reason. `hook-timeout` is the error of a policy timeout. No code was removed in 0.4.
+- All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `replace-while-stopping`, `service-failed`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`. 0.4 removes `reentrant-dispose`, because a re-entrant `stop` or `dispose` resolves at once.
+- `waitFor` and `resolve` reject with `wait-timeout` when their signal aborts with a timeout reason. `start` rejects with `start-timeout` in the same case. The `cause` is the reason. `hook-timeout` is the error of a policy timeout. No timeout code was removed in 0.4.
 - A signal option that is not an `AbortSignal`, and a `timeout()` time that is not a finite number of 0 or more, throw `invalid-argument`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
 - A `provide` with an `export` option that is not a boolean throws `invalid-argument`.
@@ -742,6 +755,7 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
   - `stop`, `dispose`, `registration.replace`, and `tx.commit` take `{ signal }`.
   - The `start` and `stop` policy timeouts run on timeout signals. A `stop` handler sees the `stop` timeout on its `signal`.
   - `observe` has the `wait-aborted` record.
+  - A `stop` or `dispose` from a cleanup of its own container resolves at once with a warning and a `reentrant-call` record. injeca finds it by the signal of the cleanup. `reentrant-dispose` is removed. The `Logger` has `warn`.
   - The tests that used `timeoutMs` pass `timeout(container, ms)` now. The tests of an invalid `timeoutMs` check an invalid signal now. The other assertions did not change.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
@@ -762,7 +776,7 @@ Each rule in this document needs a test. These cases are required:
 9. A requeue that reaches `maxAttempts` moves the service to `failed`. A requeue without `maxAttempts` keeps retrying.
 10. `on` after `build` returns throws `hook-outside-build`.
 11. A value that is not a decision counts as `undefined`, and the hook takes its default. Examples are a plain object, a server object, and a promise that resolves to a number. A decision from another run, another hook, or another instance throws `invalid-decision`. A superseded run's decision is ignored and recorded.
-12. A re-entrant dispose from the synchronous part of a cleanup rejects. An outside caller gets the same promise.
+12. A re-entrant `dispose` or `stop` from the synchronous part of a cleanup, or with the signal of a cleanup after an `await`, warns, sends a `reentrant-call` record, and resolves at once. A signal from `withTimeout` keeps its origin. A child cleanup that awaits the disposal of the parent resolves at once too. An outside caller gets the same promise, and it resolves when the disposal ends.
 13. A `perConsumer` service builds once for each consumer container and disposes with that container.
 14. Two declarations of an exclusive key put both services in `conflict`, in either order.
 15. A service leaves `conflict` when the other declaration is removed, and then converges.
@@ -805,7 +819,7 @@ Each rule in this document needs a test. These cases are required:
 52. Two sibling exports of one exclusive key conflict in either order. A parent registration and a child export of one exclusive key conflict.
 53. An isolated key hides the exports of the siblings, but not the exports of the own children.
 54. A `perConsumer` export builds one instance in each consumer container. A `tx.provide` with `export` reserves an exclusive key in the parent area until the commit or the abort.
-55. A cleanup that awaits the disposal of its own container after an `await` is not detected as re-entrant. A configured `stop` timeout ends the wait.
+55. A cleanup that awaits the disposal of its own container after an `await`, without its signal, is not detected as re-entrant. A configured `stop` timeout ends the wait.
 56. A `perConsumer` registration, exported or not, resolves its dependencies from its own container. The build context keeps `consumer`.
 57. `where(firstAvailable(...), condition)` and `firstAvailable(where(key, condition), ...)` select the first available candidate that passes. `optional` combines in any order. `explain()` names each rejected candidate.
 58. A replacement of a leaf rebuilds an intermediate service make-before-break. Its dependent gets `dependency-change` from the old instance to the new one, and never stops. A withdrawn bound dependency still stops first. A failed successor fails the service. An invocation stops, then runs again.

@@ -152,6 +152,7 @@ await dispose(container, { signal: timeout(container, 5_000) })
 - `start`, `stop`, and `dispose` stop only the wait. The services keep converging, and the cleanups keep running. `stop` and `dispose` send a `wait-aborted` record for each service that did not stop.
 - After an aborted `dispose`, the container stays in `disposing`. Call `dispose(container)` again to wait for the result.
 - An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
+- Calling dispose from a cleanup: pass the cleanup `signal`, for example `on('stop', async ({ signal }) => { await dispose(container, { signal }) })`. injeca knows the signals of builds, hooks, and invocations, also through `withTimeout`. The call warns, sends a `reentrant-call` record, and resolves at once. There is no `reentrant-dispose` error.
 
 ## Run-time changes
 
@@ -258,7 +259,7 @@ const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(cont
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
 2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
 3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start(container, { signal: timeout(container, ms) })` to fail with an explanation.
-4. A cleanup must not await the disposal of its own container. A configured `stop` timeout ends such a cleanup.
+4. A cleanup that calls `stop()` or `dispose()` of its own container, or of an ancestor, passes its `signal`. Then the call warns and resolves at once. Without the signal, after an `await`, only a configured `stop` timeout ends the cleanup.
 5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
 6. Use `replace()`, not `withdraw()` and `provide()`, to change a service without a gap.
 7. Do not use `Math.random` or real timers in retry and timeout tests. Pass `clock` and `random` to `createContainer`. `timeout(container, ms)` uses that clock.
