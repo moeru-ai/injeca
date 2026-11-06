@@ -48,13 +48,42 @@ describe('where', () => {
     ])
   })
 
-  it('rejects a condition that is not a function, a second condition, and a fallback marker', () => {
+  it('rejects a condition that is not a function and a second condition', () => {
     const condition = (): boolean => true
     // @ts-expect-error The condition is a function.
     expect(() => where('airi.llm', 'v2')).toThrow(InvalidArgumentError)
     expect(() => where(where(optional('airi.llm'), condition), condition)).toThrow(InvalidArgumentError)
-    // @ts-expect-error A fallback marker cannot have a condition.
-    expect(() => where(firstAvailable('a', 'b'), condition)).toThrow(InvalidArgumentError)
+    expect(() => where(where(firstAvailable('a', 'b'), condition), condition)).toThrow(InvalidArgumentError)
+    // @ts-expect-error A condition marker cannot get a second condition.
+    expect(() => where(where('a', condition), condition)).toThrow(InvalidArgumentError)
+  })
+
+  it('accepts a firstAvailable marker in both orders, and combines with optional() in any order', () => {
+    const all = (): boolean => true
+    const remoteOnly = (): boolean => true
+    const fallback = where(firstAvailable('remote', 'local'), all)
+
+    expect(isFallbackDependency(fallback)).toBe(true)
+    expect(Object.isFrozen(fallback)).toBe(true)
+    expect(fallback).toMatchObject({ dependencies: ['remote', 'local'], condition: all })
+    const inner = firstAvailable(where('remote', remoteOnly), 'local')
+    expect(inner).toMatchObject({ dependencies: ['remote', 'local'], candidateConditions: { remote: remoteOnly } })
+
+    expect(readEdges('consumer', {
+      outer: fallback,
+      inner,
+      both: where(firstAvailable(where('remote', remoteOnly), 'local'), all),
+      optionalOuter: optional(where(firstAvailable('remote', 'local'), all)),
+      outerOptional: where(optional(firstAvailable('remote', 'local')), all),
+      optionalInner: optional(firstAvailable(where('remote', remoteOnly), 'local')),
+    })).toEqual([
+      { name: 'outer', keyName: 'remote | local', candidates: ['remote', 'local'], optional: false, fallback: true, condition: all },
+      { name: 'inner', keyName: 'remote | local', candidates: ['remote', 'local'], optional: false, fallback: true, candidateConditions: { remote: remoteOnly } },
+      { name: 'both', keyName: 'remote | local', candidates: ['remote', 'local'], optional: false, fallback: true, condition: all, candidateConditions: { remote: remoteOnly } },
+      { name: 'optionalOuter', keyName: 'remote | local', candidates: ['remote', 'local'], optional: true, fallback: true, condition: all },
+      { name: 'outerOptional', keyName: 'remote | local', candidates: ['remote', 'local'], optional: true, fallback: true, condition: all },
+      { name: 'optionalInner', keyName: 'remote | local', candidates: ['remote', 'local'], optional: true, fallback: true, candidateConditions: { remote: remoteOnly } },
+    ])
   })
 })
 

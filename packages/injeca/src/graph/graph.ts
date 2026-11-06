@@ -18,8 +18,10 @@ export interface DependencyEdge {
   readonly candidates: readonly string[]
   readonly optional: boolean
   readonly fallback: boolean
-  /** The resolution condition from `where`. */
+  /** The resolution condition from `where`. It filters each candidate. */
   readonly condition?: ResolutionCondition
+  /** The resolution conditions of single candidates, from `firstAvailable(where(key, condition), ...)`, by key name. */
+  readonly candidateConditions?: Readonly<Record<string, ResolutionCondition>>
 }
 
 /** The retry and timeout options of one registration or one container, read once from the caller. */

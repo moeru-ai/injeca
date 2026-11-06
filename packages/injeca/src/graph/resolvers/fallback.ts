@@ -4,7 +4,7 @@ import { resolveKey } from './plain'
 import { isAvailable } from './resolvers'
 
 /**
- * Resolves a `firstAvailable` edge. The first serving and available candidate wins.
+ * Resolves a `firstAvailable` edge. The first serving and available candidate that passes its conditions wins. A rejected candidate is skipped.
  * If no serving candidate is available, the first serving candidate stays selected, so that a running dependent does not lose it.
  * Without a serving candidate, the edge reports the first candidate that exists.
  */
@@ -12,7 +12,7 @@ export function resolveFallback(consumer: ResolutionConsumer, edge: DependencyEd
   let firstUnresolved: Resolution | undefined
   let firstServing: Resolution | undefined
   for (const keyName of edge.candidates) {
-    const resolution = resolveKey(consumer, keyName, edge.condition)
+    const resolution = resolveKey(consumer, keyName, edge)
     if (resolution.kind === 'missing')
       continue
     if (resolution.kind !== 'resolved') {

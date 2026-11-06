@@ -195,6 +195,20 @@ describe('call-site types', () => {
         return 'speech'
       },
     })
+    const localKey = defineKey<{ chat: () => string, local: true }>('airi.llm.local')
+    provide(app, 'voice.fallback', {
+      dependsOn: {
+        outer: where(firstAvailable(llmKey, localKey), () => true),
+        inner: firstAvailable(where(llmKey, () => true), localKey),
+        optionalInner: optional(firstAvailable(where(llmKey, () => true), localKey)),
+      },
+      build: ({ dependsOn }) => {
+        expectTypeOf(dependsOn.outer).toEqualTypeOf<Llm | { chat: () => string, local: true }>()
+        expectTypeOf(dependsOn.inner).toEqualTypeOf<Llm | { chat: () => string, local: true }>()
+        expectTypeOf(dependsOn.optionalInner).toEqualTypeOf<OptionalValue<Llm | { chat: () => string, local: true }> | undefined>()
+        return 'fallback'
+      },
+    })
     provide(app, 'host.client', {
       perConsumer: true,
       build: ({ consumer }) => {

@@ -4,8 +4,16 @@ import type { DependencyEdge } from '../graph'
 import { InvalidArgumentError } from '../../diagnostics/errors'
 import { isConditionalDependency, isFallbackDependency, isOptionalDependency, normalizeName } from '../../primitives/keys'
 
-function edgeOf(name: string, candidates: readonly string[], optional: boolean, fallback: boolean, condition?: ResolutionCondition): DependencyEdge {
-  return Object.freeze({ name, keyName: candidates.join(' | '), candidates, optional, fallback, ...(condition ? { condition } : {}) })
+function edgeOf(name: string, candidates: readonly string[], optional: boolean, fallback: boolean, condition?: ResolutionCondition, candidateConditions?: Readonly<Record<string, ResolutionCondition>>): DependencyEdge {
+  return Object.freeze({
+    name,
+    keyName: candidates.join(' | '),
+    candidates,
+    optional,
+    fallback,
+    ...(condition ? { condition } : {}),
+    ...(candidateConditions ? { candidateConditions } : {}),
+  })
 }
 
 /**
@@ -27,11 +35,11 @@ export function readEdges(owner: string, dependsOn: unknown): readonly Dependenc
 
   return Object.freeze(entries.map(([name, dependency]): DependencyEdge => {
     if (isOptionalDependency(dependency))
-      return edgeOf(name, dependency.dependencies, true, dependency.dependencies.length > 1, dependency.condition)
+      return edgeOf(name, dependency.dependencies, true, dependency.dependencies.length > 1, dependency.condition, dependency.candidateConditions)
     if (isConditionalDependency(dependency))
       return edgeOf(name, dependency.dependencies, false, false, dependency.condition)
     if (isFallbackDependency(dependency))
-      return edgeOf(name, dependency.dependencies, false, true)
+      return edgeOf(name, dependency.dependencies, false, true, dependency.condition, dependency.candidateConditions)
     if (typeof dependency === 'string' || (typeof dependency === 'object' && dependency !== null && 'key' in dependency)) {
       const keyName = normalizeName(dependency as string | ProvidedKey<string, unknown, undefined>)
       if (typeof keyName === 'string' && keyName.length > 0)

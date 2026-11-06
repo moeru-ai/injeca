@@ -2,7 +2,7 @@ import type { ProviderInfo } from '../../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { defineKey, graph, optional, provide, resolve, start, where } from '../../scoped'
+import { defineKey, firstAvailable, graph, optional, peek, provide, resolve, start, where } from '../../scoped'
 import { collectRecords, createTestContainer, drained, phaseOf } from '../../testing/helpers'
 
 const boardKey = defineKey<string>('dev.airi.whiteboard')
@@ -65,5 +65,38 @@ describe('resolution conditions', () => {
     expect(records.filter(record => record.type === 'error')).toEqual([
       expect.objectContaining({ type: 'error', key: 'whiteboard.panel', error }),
     ])
+  })
+
+  it('filters the candidates of firstAvailable, selects the first candidate that passes, and explain names each rejected candidate', async () => {
+    const app = createTestContainer()
+    provide(app, 'llm.remote', { metadata: { version: '1.0.0' }, build: () => 'remote v1' })
+    provide(app, 'llm.local', { metadata: { version: '1.2.0' }, build: () => 'local v1' })
+    const atLeastTwo = (provider: ProviderInfo): boolean => major(provider) >= 2
+    provide(app, 'chat', { dependsOn: { llm: where(firstAvailable('llm.remote', 'llm.local'), atLeastTwo) }, build: ({ dependsOn }) => dependsOn.llm })
+    void start(app)
+    await drained(app)
+
+    expect(phaseOf(app, 'chat')).toBe('pending')
+    expect(graph(app).explain('chat').blockers).toEqual([
+      { kind: 'rejected-provider', dependency: 'llm', key: 'llm.remote', owner: {}, metadata: { version: '1.0.0' } },
+      { kind: 'rejected-provider', dependency: 'llm', key: 'llm.local', owner: {}, metadata: { version: '1.2.0' } },
+    ])
+    expect(peek(app, where(firstAvailable('llm.remote', 'llm.local'), atLeastTwo))).toMatchObject({ kind: 'rejected', key: 'llm.remote' })
+
+    // A condition on one candidate filters only that candidate. The order of where() and firstAvailable() has no effect on the others.
+    await expect(resolve(app, {
+      inner: firstAvailable(where('llm.remote', atLeastTwo), 'llm.local'),
+      optionalInner: optional(firstAvailable(where('llm.remote', atLeastTwo), 'llm.local')),
+      optionalOuter: optional(where(firstAvailable('llm.remote', 'llm.local'), atLeastTwo)),
+      outerOptional: where(optional(firstAvailable('llm.remote', 'llm.local')), atLeastTwo),
+    })).resolves.toEqual({
+      inner: 'local v1',
+      optionalInner: { value: 'local v1', status: 'ready' },
+      optionalOuter: undefined,
+      outerOptional: undefined,
+    })
+
+    provide(app, 'llm.local.v2', { metadata: { version: '2.0.0' }, build: () => 'local v2' })
+    await expect(resolve(app, { llm: where(firstAvailable('llm.remote', 'llm.local', 'llm.local.v2'), atLeastTwo) })).resolves.toEqual({ llm: 'local v2' })
   })
 })

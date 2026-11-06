@@ -94,7 +94,7 @@ function dependencyOf(edge: DependencyEdge, resolution: { readonly kind: GraphRe
     keys: edge.candidates,
     optional: edge.optional,
     fallback: edge.fallback,
-    conditional: edge.condition !== undefined,
+    conditional: edge.condition !== undefined || edge.candidateConditions !== undefined,
     resolution: resolution.kind,
     ...withoutUndefined({ provider: resolution.provider && entryOf(resolution.provider) }),
   })

@@ -1,9 +1,8 @@
-import type { InstanceNode, ServiceNode, TransactionNode } from '../graph/graph'
-import type { ResolutionCondition } from '../types'
+import type { DependencyEdge, InstanceNode, ServiceNode, TransactionNode } from '../graph/graph'
 import type { SnapshotEntry } from './snapshot'
 
 import { releaseReservations } from '../graph/nodes'
-import { acceptsProvider } from '../graph/resolvers/condition'
+import { acceptsCandidate } from '../graph/resolvers/condition'
 import { inConflict } from '../graph/resolvers/exclusive'
 import { resolveKey } from '../graph/resolvers/plain'
 import { requiredChanged } from '../graph/resolvers/resolvers'
@@ -57,15 +56,15 @@ function memberEntry(member: ServiceNode, built: ReadonlyMap<ServiceNode, Instan
 }
 
 /** Resolves one key inside a transaction: a built member first, then the published providers. */
-function resolveInTransaction(service: ServiceNode, keyName: string, condition: ResolutionCondition | undefined, members: TransactionMembers, built: ReadonlyMap<ServiceNode, InstanceNode>): SnapshotEntry | undefined {
+function resolveInTransaction(service: ServiceNode, keyName: string, edge: DependencyEdge, members: TransactionMembers, built: ReadonlyMap<ServiceNode, InstanceNode>): SnapshotEntry | undefined {
   const member = members.get(keyName)
   if (member && member !== service) {
-    if (inConflict(member) || (condition && !acceptsProvider(service, keyName, condition, member)))
+    if (inConflict(member) || !acceptsCandidate(service, edge, keyName, member))
       return undefined
     return memberEntry(member, built)
   }
 
-  const resolution = resolveKey(service, keyName, condition)
+  const resolution = resolveKey(service, keyName, edge)
   if (resolution.kind !== 'resolved')
     return undefined
 
@@ -79,7 +78,7 @@ function resolveInTransaction(service: ServiceNode, keyName: string, condition: 
 function transactionSnapshot(service: ServiceNode, members: TransactionMembers, built: ReadonlyMap<ServiceNode, InstanceNode>): Map<string, SnapshotEntry | undefined> | undefined {
   const snapshot = new Map<string, SnapshotEntry | undefined>()
   for (const edge of service.edges) {
-    const entries = edge.candidates.map(keyName => resolveInTransaction(service, keyName, edge.condition, members, built))
+    const entries = edge.candidates.map(keyName => resolveInTransaction(service, keyName, edge, members, built))
     const entry = entries.find(candidate => candidate !== undefined && candidate.state.status !== 'unavailable') ?? entries.find(candidate => candidate !== undefined)
     if (!edge.optional && (!entry || entry.state.status === 'unavailable'))
       return undefined
