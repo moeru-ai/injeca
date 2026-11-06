@@ -84,8 +84,6 @@ provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
 - `isolate: [key]` hides the exports of the siblings, but not the exports of the own children.
 - `perConsumer` and `tx.provide` take `export` too. Consumer instances live in the consumer container. Their `dependsOn` resolves from the exporting container.
 
-`createContainer({ asyncContext })` on the root container takes `{ run(store, fn), get() }`. In Node, fill it with `AsyncLocalStorage`. Then a cleanup that awaits the disposal of its own container after an `await` rejects with `reentrant-dispose` at once.
-
 ## Hooks and decisions
 
 A hook gets a context with `decide`, `attempt`, `previous`, and `signal`. A return value that is not a decision, for example the result of `app.listen()`, selects the default of the hook. `decide` has only the methods that the hook allows:
@@ -240,7 +238,7 @@ const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
 2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
 3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start({ timeoutMs })` to fail with an explanation.
-4. A cleanup must not await the disposal of its own container. Without `asyncContext`, only a configured `stop` timeout ends such a cleanup. With it, the call rejects with `reentrant-dispose`.
+4. A cleanup must not await the disposal of its own container. A configured `stop` timeout ends such a cleanup.
 5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
 6. Use `replace()`, not `withdraw()` and `provide()`, to change a service without a gap.
 7. Do not use `Math.random` or real timers in retry tests. Pass `clock` and `random` to `createContainer`.

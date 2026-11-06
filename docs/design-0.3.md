@@ -209,10 +209,8 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - `dispose(container)` disposes the child containers first, one after the other, in reverse creation order. Each child disposal completes, with its own effects, before the next one starts. Then the registrations and invocations of the container withdraw in one batch. Then the effects of the container run in reverse registration order.
 - The whole subtree enters disposal at once. No new registration, child container, or transaction can start in it.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
-- A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. Without an async context, the check is the same in every runtime.
-- A cleanup must not await the disposal of its own container or of an ancestor. Without an async context, injeca does not detect this after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
-- `createContainer({ asyncContext })` on a root container injects an async context: `{ run(store, fn), get() }`. A Node caller fills it with `AsyncLocalStorage`. injeca imports no runtime module. The child containers use the async context of their root.
-- With an async context, the cleanup frame follows a call across `await`. So a cleanup that awaits the disposal of its own container or of an ancestor rejects with `reentrant-dispose` at once. The store can hold a value of another library. Only a frame that injeca wrote counts.
+- A dispose call from the synchronous part of a cleanup in the same container, or in a descendant, rejects with `reentrant-dispose`. The check is the same in every runtime. injeca does not track a call across `await`, because the web has no runtime async context.
+- A cleanup must not await the disposal of its own container or of an ancestor. injeca does not detect this after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
 - An outside caller that calls `dispose()` again during disposal gets the same promise.
 - `stop(container)` stops. `dispose(container)` cleans up. `stop()` stops all instances, dependents first, and keeps the registrations. The container stays usable, and a later `start()` builds the registrations again. `stop()` also ends the demands of `resolve`, `watch`, and `waitFor` on the services of the container. `dispose()` also withdraws the registrations, disposes the child containers, and runs the container effects. A disposed container cannot be used again.
 - `start(container, { timeoutMs? })` has no built-in timeout. When a configured timeout passes, it rejects with the `explain()` result of each service that is not `running`.
@@ -635,8 +633,7 @@ The consumer defines the rules that run these listeners. For example, the AIRI h
 - All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `reentrant-dispose`, `replace-while-stopping`, `service-failed`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`.
 - `waitFor` and `resolve` with `timeoutMs` reject with `wait-timeout`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
-- A `provide` with an `export` option that is not a boolean, and a `createContainer` with an `asyncContext` that has no `run` or `get` function, throw `invalid-argument`.
-- `reentrant-dispose` covers an awaited self-dispose only with an `asyncContext`. See [Containers](#containers).
+- A `provide` with an `export` option that is not a boolean throws `invalid-argument`.
 
 ## Implementation
 
@@ -670,7 +667,7 @@ The implementation has two layers. The interactive model uses the same split.
 | `graph/nodes/` | The functions for each node kind: `container`, `service`, `edge`, `registration`, `reservation` (the key reservation of a transaction), and `consumer` (the services of a `perConsumer` registration), with `definition` (the options of one registration). The types are in `graph.ts`, because they refer to each other |
 | `graph/resolvers/` | Edge resolution. `resolvers.ts` has the queries on a resolution and the shadowing rule. `plain.ts` and `fallback.ts` resolve each edge kind. `exclusive.ts` has the conflicts. `exports.ts` has the exports of each container and the area of a registration. `condition.ts` runs the resolution conditions |
 | `reconciler/` | The execution layer. `reconciler.ts` has the queue and the drain. Each transition has one file |
-| `helpers/` | Internal building blocks: signals, the delivery queue, the cleanup context (synchronous, or on top of an injected async context), the clock, and small utilities |
+| `helpers/` | Internal building blocks: signals, the delivery queue, the cleanup context, the clock, and small utilities |
 | `testing/` | The `injeca/testing` entry (`testing.ts`) and test helpers |
 
 The main module of a directory is `<dir>/<dir>.ts`, for example `reconciler/reconciler.ts`. An `index.ts` file only re-exports, for example `types/index.ts` and `graph/nodes/index.ts`.
@@ -702,7 +699,7 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
 4. Done. Retries: requeue, backoff, `maxAttempts`, and timeouts.
 5. Done, except the publish. Release: the README, the injeca skill, and version 0.3.0.
 5a. Done in 0.3.1. Fixes from the plugin-sdk migration study: an atomic `perConsumer` replacement, demand and failure rules for `watch` and `waitFor`, `withdraw()` before a commit, key reservation, no wait for an aborted `start` hook, `peek` and bounded `resolve`, retries of failed consumer services, children-first disposal, and invocation keys.
-5b. Exported registrations and async context: `provide(child, key, { export: true })` and `tx.provide` with `export` make a registration a candidate in the area of the parent container, with exclusive conflicts in that area. `createContainer({ asyncContext })` detects a cleanup that awaits its own disposal across `await`. See [Exported registrations](#exported-registrations) and [Containers](#containers).
+5b. Exported registrations: `provide(child, key, { export: true })` and `tx.provide` with `export` make a registration a candidate in the area of the parent container, with exclusive conflicts in that area. See [Exported registrations](#exported-registrations).
 5c. Fixes from the plugin-sdk move to injeca. See [Rebuild without a gap](#rebuild-without-a-gap), [Fallback dependencies](#fallback-dependencies), and [Registrations](#registrations).
   - The `dependsOn` of a `perConsumer` consumer service resolves from the registration container. Before, it resolved from the consumer container.
   - `where()` accepts a `firstAvailable()` marker, and `firstAvailable()` accepts `where()` markers. The condition filters the candidates.
@@ -772,7 +769,7 @@ Each rule in this document needs a test. These cases are required:
 52. Two sibling exports of one exclusive key conflict in either order. A parent registration and a child export of one exclusive key conflict.
 53. An isolated key hides the exports of the siblings, but not the exports of the own children.
 54. A `perConsumer` export builds one instance in each consumer container. A `tx.provide` with `export` reserves an exclusive key in the parent area until the commit or the abort.
-55. With an `asyncContext`, a cleanup that awaits the disposal of its own container or of an ancestor rejects with `reentrant-dispose`. Without it, a `stop` timeout ends the wait.
+55. A cleanup that awaits the disposal of its own container after an `await` is not detected as re-entrant. A configured `stop` timeout ends the wait.
 56. A `perConsumer` registration, exported or not, resolves its dependencies from its own container. The build context keeps `consumer`.
 57. `where(firstAvailable(...), condition)` and `firstAvailable(where(key, condition), ...)` select the first available candidate that passes. `optional` combines in any order. `explain()` names each rejected candidate.
 58. A replacement of a leaf rebuilds an intermediate service make-before-break. Its dependent gets `dependency-change` from the old instance to the new one, and never stops. A withdrawn bound dependency still stops first. A failed successor fails the service. An invocation stops, then runs again.
@@ -791,7 +788,7 @@ plugin-sdk is a reference, not a source of requirements. After 0.3, plugin-sdk c
 | `DependencyService` states and `waitFor` | Phases, effective status, `watch`, `waitFor` |
 | `ctx.kits.watch` | `watch(container, key, callback)` |
 | `HostClientFactory(runtime)` | `perConsumer: true` and `consumer` in the build context |
-| `DisposableStore` and the session cleanup chain | Container effects and `dispose(container)`. The Node cleanup context becomes `createContainer({ asyncContext })`. |
+| `DisposableStore` and the session cleanup chain | Container effects and `dispose(container)` |
 | `ResourceService` | `provide` with a value or a lazy `build` |
 | Activation Planner graph, order, and cycles | `graph(container).*` queries. AIRI removes the Planner. |
 | Planner `duplicate-extension-provider` and `host-kit-id-conflict` | Exclusive keys and `conflict`. Sibling Extension containers export their Kits, so their exclusive keys meet in the host area. |

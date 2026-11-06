@@ -173,7 +173,6 @@ provide(container, 'modules:camera', {
 - When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
 - `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
 - After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
-- With `createContainer({ asyncContext })`, such a cleanup gets a `ReentrantDisposeError` at once and needs no timeout. See [Containers](#containers).
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 
 ## Changes at run time
@@ -389,23 +388,7 @@ await dispose(plugin)
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use `timeoutMs` to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
-- A dispose call from the synchronous part of a cleanup of the same container, or of a descendant, rejects with `ReentrantDisposeError` (`reentrant-dispose`). After an `await`, injeca detects it only with an `asyncContext`.
-
-### Async context
-
-injeca imports no runtime module. To detect a cleanup that awaits the disposal of its own container after an `await`, give the root container an async context. In Node, use `AsyncLocalStorage`:
-
-```ts
-import { AsyncLocalStorage } from 'node:async_hooks'
-
-const storage = new AsyncLocalStorage<unknown>()
-const host = createContainer({
-  asyncContext: { run: (store, fn) => storage.run(store, fn), get: () => storage.getStore() },
-})
-```
-
-- Only a root container reads `asyncContext`. Its child containers use it too.
-- Without it, a cleanup that awaits its own disposal waits until a `stop` timeout ends it.
+- A dispose call from the synchronous part of a cleanup of the same container, or of a descendant, rejects with `ReentrantDisposeError` (`reentrant-dispose`). injeca behaves the same in every runtime, so it does not detect such a call after an `await`. A configured `stop` timeout ends that cleanup.
 
 ### Exported registrations
 

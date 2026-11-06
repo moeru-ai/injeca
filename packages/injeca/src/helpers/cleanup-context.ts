@@ -1,5 +1,3 @@
-import type { AsyncContext } from '../types/container'
-
 /**
  * One frame of a container cleanup chain. A frame stays active until the disposal of its container settles.
  */
@@ -10,7 +8,7 @@ export interface CleanupFrame {
 }
 
 /**
- * Tracks the active cleanup frames of calls. Without an async context, it sees only the synchronous part of each call.
+ * Tracks the active cleanup frames of synchronous calls.
  */
 export interface CleanupContext {
   current: () => CleanupFrame | undefined
@@ -30,7 +28,8 @@ function activeIn(frame: CleanupFrame | undefined, owner: object): boolean {
 }
 
 // This context sees only the synchronous part of each cleanup callback, in every runtime.
-// Without an async context, injeca does not detect a cleanup that awaits the disposal of its own container after an `await`. A configured stop timeout ends it.
+// A cleanup must not await the disposal of its own container or of an ancestor.
+// injeca does not detect that case after an `await`. A configured stop timeout ends it.
 function createSynchronousContext(): CleanupContext {
   let currentFrame: CleanupFrame | undefined
 
@@ -50,31 +49,6 @@ function createSynchronousContext(): CleanupContext {
   }
 }
 
-/**
- * A context on top of an async context that the caller injects, for example `AsyncLocalStorage` in Node.
- * The frame follows a call across `await`, so a cleanup that awaits the disposal of its own container is detected.
- * The store of the async context can hold a value of another library. Only a frame that this context stored counts.
- */
-function createAsyncContext(asyncContext: AsyncContext): CleanupContext {
-  const frames = new WeakSet<object>()
-  const isFrame = (value: unknown): value is CleanupFrame => typeof value === 'object' && value !== null && frames.has(value)
-  const current = (): CleanupFrame | undefined => {
-    const store = asyncContext.get()
-    return isFrame(store) ? store : undefined
-  }
-
-  return {
-    current,
-    run: (frame, fn) => {
-      if (frame)
-        frames.add(frame)
-      return asyncContext.run(frame, fn)
-    },
-    isActive: owner => activeIn(current(), owner),
-  }
-}
-
-/** Creates the cleanup context of a runtime. With `asyncContext`, the frames follow calls across `await`. */
-export function createCleanupContext(asyncContext?: AsyncContext): CleanupContext {
-  return asyncContext ? createAsyncContext(asyncContext) : createSynchronousContext()
+export function createCleanupContext(): CleanupContext {
+  return createSynchronousContext()
 }

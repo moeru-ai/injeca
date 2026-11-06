@@ -1,5 +1,5 @@
 import type { ContainerNode, Policy, Runtime, ServiceNode } from '../graph/graph'
-import type { AsyncContext, Container, ContainerOptions, EffectSetup, OwnerRecord } from '../types'
+import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../types'
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
@@ -96,36 +96,10 @@ function readRandom(options: ContainerOptions): () => number {
   return (random as (() => number) | undefined) ?? Math.random
 }
 
-function isAsyncContext(value: unknown): value is AsyncContext {
-  return typeof value === 'object' && value !== null && 'run' in value && typeof value.run === 'function' && 'get' in value && typeof value.get === 'function'
-}
-
-/** Reads the async context once. Its functions keep the object as `this`, so a method of the caller object works. */
-function readAsyncContext(options: ContainerOptions): AsyncContext | undefined {
-  try {
-    const asyncContext: unknown = options.asyncContext
-    if (asyncContext === undefined)
-      return undefined
-    if (!isAsyncContext(asyncContext))
-      return invalidAsyncContext()
-
-    return Object.freeze({ run: asyncContext.run.bind(asyncContext), get: asyncContext.get.bind(asyncContext) })
-  }
-  catch (error) {
-    if (error instanceof InvalidArgumentError)
-      throw error
-    throw new InvalidArgumentError('Cannot read the asyncContext option.', { cause: error })
-  }
-}
-
-function invalidAsyncContext(): never {
-  throw new InvalidArgumentError('The asyncContext option must be an object with run and get functions.')
-}
-
 function createRuntime(options: ContainerOptions): Runtime {
   let seq = 0
   let instanceSeq = 0
-  const context = createCleanupContext(readAsyncContext(options))
+  const context = createCleanupContext()
 
   return {
     clock: options.clock ?? systemClock,

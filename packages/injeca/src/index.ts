@@ -84,7 +84,6 @@ export {
 
 export type { ResolveOptions, StartOptions } from './scoped'
 export type {
-  AsyncContext,
   BuildContext,
   ConditionalDependency,
   Container,
