@@ -1,0 +1,46 @@
+name: Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy - injeca.moeru.ai
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    environment:
+      name: Docs Production
+      url: https://injeca.moeru.ai/
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: pnpm
+      # NOTICE(wrangler-workspace-install): Keep Wrangler outside the workspace
+      # graph so wrangler-action can reuse it without changing the lockfile.
+      - name: Install Wrangler
+        run: pnpm install --global wrangler@4
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build site
+        run: pnpm --filter @injeca/docs build
+      - name: Deploy site
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy -c ./apps/docs/wrangler.toml
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

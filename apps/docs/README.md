@@ -15,3 +15,5 @@ pnpm -F @injeca/docs dev       # the lab
 pnpm -F @injeca/docs build     # dist/
 pnpm -F @injeca/docs banners   # the README figures, with headless Chrome
 ```
+
+`wrangler.toml` deploys `dist/` to Cloudflare Workers as an assets-only Worker. `.github/workflows/deploy-cloudflare-workers.yml` deploys `main`, and the two preview workflows upload a preview for each pull request after a maintainer approves it.

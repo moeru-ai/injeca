@@ -1,0 +1,12 @@
+# This Worker serves injeca.moeru.ai: the scenario lab of apps/docs.
+name = "moeru-ai-injeca"
+compatibility_date = "2026-11-01"
+preview_urls = true
+# NOTICE(dashboard-managed-routes): Domain and route ownership intentionally
+# lives in the Cloudflare dashboard rather than this deploy configuration.
+workers_dev = false
+
+# Assets-only Worker. The lab is one page, so unknown paths fall back to its index.html.
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
