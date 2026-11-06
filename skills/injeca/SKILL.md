@@ -82,7 +82,7 @@ provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
 - The registration stays in its container: owner, disposal, own dependencies, and phases. An export goes exactly one level up.
 - At each level, the registration of that container comes before the exports of its children. An export shadows a farther ancestor only while it runs.
 - `isolate: [key]` hides the exports of the siblings, but not the exports of the own children.
-- `perConsumer` and `tx.provide` take `export` too. Consumer instances live in the consumer container.
+- `perConsumer` and `tx.provide` take `export` too. Consumer instances live in the consumer container. Their `dependsOn` resolves from the exporting container.
 
 `createContainer({ asyncContext })` on the root container takes `{ run(store, fn), get() }`. In Node, fill it with `AsyncLocalStorage`. Then a cleanup that awaits the disposal of its own container after an `await` rejects with `reentrant-dispose` at once.
 
@@ -143,6 +143,8 @@ await vision.withdraw() // dependents stop first. A stale registration returns f
 ```
 
 - Without a `dependency-change` handler, a dependent rebuilds when a dependency gets a new instance.
+- A rebuild of a running service has no gap. The new instance builds and starts while the old one serves. Then they swap in one batch, and the dependents get `dependency-change`.
+- A rebuild stops first only when a dependency of the old instance has no provider now. An invocation always stops first, then runs again. A failed new instance stops the old one and moves the service to `failed`.
 - A withdrawn required dependency always stops the dependent.
 
 ### Replacement and transactions
@@ -161,6 +163,7 @@ await tx.commit() // builds in dependency order, publishes in one batch, then ru
 ```
 
 - `replace()` resolves `true` after the swap, and `false` for a stale registration. A failed new instance keeps the old one. A service in `stopping` rejects with `replace-while-stopping`.
+- While the swap waits, `explain(key).replacement` shows the new instance with its phase and blockers.
 - A failed transaction build publishes nothing and runs no `start` hook. `tx.abort()` and a container disposal drop the transaction.
 
 ## Keys, optional, and fallback
@@ -180,7 +183,9 @@ injeca.provide(llmKey, () => createLocalLlm()) // the build result must match Ll
 
 - `defineKey(name, { exclusive: true })` allows one provider in a resolution area. Two providers both go to `conflict` and run no code. When one leaves, the other converges. An export counts in the area of the parent, so two sibling exports of one exclusive key conflict.
 - `where(key, ({ key, owner, metadata }) => boolean)` accepts a provider only when the condition returns `true`. It must be pure and synchronous.
-- `perConsumer: true` runs `build` once for each consumer container, with `consumer` in the build context. `metadata` is a frozen record that conditions and graph queries read.
+- `where(firstAvailable(a, b), condition)` filters each candidate. `firstAvailable(where(a, condition), b)` filters `a` only. The selection is the first available candidate that passes. `optional` combines in any order. `explain()` names each rejected candidate.
+- `perConsumer: true` runs `build` once for each consumer container, with `consumer` in the build context. Its `dependsOn` resolves from the container of the registration. `metadata` is a frozen record that conditions and graph queries read.
+- A required, an optional, or a `firstAvailable` edge to a `perConsumer` key demands the consumer instance, also when the key registers later.
 
 ## Status and reading state
 
@@ -207,7 +212,7 @@ queries.dependencies(server)
 queries.dependents(config)
 queries.order()
 queries.cycles()
-queries.explain(server) // why a service is not running
+queries.explain(server) // why a service is not running, and its pending replacement
 queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }, on a copy of the graph
 ```
 

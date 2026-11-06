@@ -202,6 +202,14 @@ on('dependency-change', ({ dependsOn, decide }) => {
 })
 ```
 
+A rebuild of a running service has no gap. The old instance keeps serving while a new instance builds and starts against the new dependencies. Then one batch swaps them, as for `replace()`. The dependents of the service get `dependency-change` with the new instance. They do not lose it.
+
+- This applies to a rebuild without a handler and to `decide.rebuild()`.
+- The service stops first and builds again when a dependency that the old instance uses has no provider now. Then there is nothing to build against.
+- An invocation stops first and runs again.
+- If the new instance fails, the old instance stops and the service goes to `failed`.
+- A `replace()` during the rebuild cancels the rebuild and replaces the service.
+
 ### Atomic replacement
 
 A withdrawal followed by a new `provide` leaves a gap: all dependents stop. `replace()` has no gap. A hot reload tool uses it.
@@ -216,7 +224,8 @@ await tts.replace(() => createTtsV2())
 - The swap is one batch. It occurs only after the new instance completes `start`. The new instance is `ready`.
 - For a `perConsumer` registration, each running consumer gets a new instance first. The swap of all consumers is one batch, after each new instance completes `start`. If one fails, no consumer changes.
 - If the new `build` or `start` fails, `replace()` rejects and the old instance does not change. This is also the usual fix for an `unavailable` provider.
-- The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild.
+- The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the services above it.
+- `graph(container).explain(key)` shows the new instance as `replacement` while the swap waits, with its phase and blockers.
 - A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A service in `stopping` rejects with `ReplaceWhileStoppingError`.
 
 ### Transactions
@@ -296,6 +305,29 @@ injeca.provide('whiteboard:view', {
 
 - A rejected required dependency keeps the dependent `pending`. A rejected optional dependency is `undefined`.
 - The condition must be pure and synchronous. A thrown error counts as `false` and goes to the observe stream.
+
+A condition also filters the candidates of `firstAvailable`. The selection is the first available candidate that passes:
+
+```ts
+import type { ProviderInfo } from 'injeca'
+
+import { firstAvailable, optional, where } from 'injeca'
+
+const atLeastTwo = ({ metadata }: ProviderInfo) => String(metadata.version).startsWith('2.')
+
+injeca.provide('voice:chat', {
+  dependsOn: {
+    // The condition applies to each candidate.
+    llm: where(firstAvailable(remoteLlmKey, localLlmKey), atLeastTwo),
+    // The condition applies to the remote candidate only.
+    backup: optional(firstAvailable(where(remoteLlmKey, atLeastTwo), localLlmKey)),
+  },
+  build: ({ dependsOn }) => createChat(dependsOn.llm, dependsOn.backup?.value),
+})
+```
+
+- `where`, `firstAvailable`, and `optional` combine in any order. A candidate with two conditions must pass both.
+- `graph(container).explain()` names each candidate that a condition rejected.
 
 ## Status
 
@@ -388,7 +420,7 @@ provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
 provide(pluginB, 'b:session', { dependsOn: { memory: memoryKitKey }, build: ({ dependsOn }) => startSession(dependsOn.memory) })
 ```
 
-- The registration stays in its container. That container owns it, and `dispose(pluginA)` withdraws it. Its own dependencies resolve from that container.
+- The registration stays in its container. That container owns it, and `dispose(pluginA)` withdraws it. Its own dependencies resolve from that container. This is also true for a `perConsumer` export.
 - An export goes exactly one level up. A container that wants to reach the area of its grandparent exports from its own level.
 - A consumer looks in its own container, then in each ancestor. At each level, the registration of that container comes first, then the exports of its children in creation order.
 - Shadowing still has no gap. An export takes over from a provider of a farther ancestor only while it runs.
@@ -400,6 +432,10 @@ provide(pluginB, 'b:session', { dependsOn: { memory: memoryKitKey }, build: ({ d
 ### Per-consumer services
 
 `perConsumer: true` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container. The instance disposes with the consumer container.
+
+The instance lives in the consumer container, but its `dependsOn` resolves from the container of the registration, as for a plain registration. So a key of the consumer container does not change the dependencies of the registration.
+
+A dependent demands its consumer instance through a required, an optional, or a `firstAvailable` edge. This is also true when the key registers after the dependent.
 
 A failed consumer instance builds again on the next demand from its container: a new `resolve`, `watch`, or `waitFor` call, or a dependent that starts to wait. Each demander gets one new build for each failure.
 
@@ -458,7 +494,7 @@ queries.dependencies(server) // the direct edges of a service
 queries.dependents(config) // the services that use a service now
 queries.order() // providers before their dependents
 queries.cycles() // each dependency cycle
-queries.explain(server) // why a service is not running, also for a key without a provider
+queries.explain(server) // why a service is not running, also for a key without a provider, with a pending replacement
 queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }
 ```
 

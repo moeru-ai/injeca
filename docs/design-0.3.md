@@ -247,7 +247,7 @@ A registration in a child container is invisible to its parent and to its siblin
 - At one level, the own registration of the container comes before an export of the same plain key. With the shadowing rule, it serves while it runs. Until then, a running export serves.
 - The shadowing rule applies to exports without a change. An export takes over from a provider of a farther ancestor only while it is `running`. Dependents move with `dependency-change`, and they move back when the export stops. So an export never leaves a gap.
 - `replace()` keeps the export, as it keeps `perConsumer`.
-- A `perConsumer` registration can be exported. Each consumer service lives in the consumer container and disposes with it. Its `consumer` is the owner of the consumer container.
+- A `perConsumer` registration can be exported. Each consumer service lives in the consumer container and disposes with it. Its `consumer` is the owner of the consumer container. Its own dependencies resolve from the exporting container, as for a plain export.
 - `tx.provide(key, { export: true })` reserves an exclusive key in the area of the parent container at once. The commit publishes the service there in the same batch as the other services of the transaction.
 - `graph(container)` queries, `peek`, `watch`, `waitFor`, and `observe` see an export from the parent area. The `owner` of the export is the owner of the exporting container. `graph().services()` marks an export with `exported: true`. `observe(parent)` gets its records, because the exporting container is a child of the parent.
 
@@ -273,6 +273,7 @@ A registration in a child container is invisible to its parent and to its siblin
 - The condition checks the provider that the shadowing rule selects. A rejection does not fall back to an ancestor provider.
 - The input of a condition is frozen, so injeca calls each condition once for each provider registration and keeps the result.
 - `where(optional(key), condition)` and `optional(where(key, condition))` are the same.
+- A condition also filters the candidates of a fallback dependency. See [Fallback dependencies](#fallback-dependencies).
 - plugin-sdk uses conditions for semantic version ranges. injeca does not know semantic versions.
 
 ### Fallback dependencies
@@ -281,6 +282,12 @@ A registration in a child container is invisible to its parent and to its siblin
 - When the selected provider becomes unavailable, or a provider earlier in the list becomes available, the selection changes.
 - A change of the selection is a change of identity. The consumer gets `dependency-change`. With a handler, it can move to the new provider in place. Without one, it rebuilds.
 - `firstAvailable` is required, unless it is wrapped in `optional()`. If no provider in the list is available, a required fallback keeps the service `pending`.
+- A resolution condition filters the candidates. The selection is the first available candidate that passes its conditions. A rejected candidate is skipped, so the selection falls back to the next candidate.
+  - `where(firstAvailable(a, b), condition)` applies the condition to each candidate.
+  - `firstAvailable(where(a, condition), b)` applies the condition to `a` only.
+  - A candidate with a condition of both forms must pass both. A second `where` on one marker fails with `invalid-argument`.
+  - `optional()` combines in any order: `optional(where(firstAvailable(...), c))`, `where(optional(firstAvailable(...)), c)`, and `optional(firstAvailable(where(a, c), b))`.
+- When a required fallback does not resolve, `explain()` lists a `rejected-provider` blocker for each rejected candidate.
 - An example: a remote LLM plugin is the first choice and a local model is the fallback.
 
 ## Services
@@ -293,6 +300,8 @@ A registration in a child container is invisible to its parent and to its siblin
 - A replacement before `start()` sends a `registration-replaced` record to the observe stream. No hook runs for it.
 - `options.perConsumer: true` makes `build` run once for each consumer container. Then the build context has `consumer`, the owner record of that consumer. The instance disposes with the consumer container.
   - The registration itself never builds and stays `pending`. `start()` does not wait for it. Each consumer container gets its own service in that container. Its observe records carry the owner of the consumer container.
+  - The `dependsOn` of a consumer service resolves from the container of the registration, not from the consumer container. So it resolves as for a plain registration in that container. A dependency on another `perConsumer` key gets the consumer service of the registration container.
+  - A dependent demands the consumer service through each edge kind: required, optional, and `firstAvailable`. A running dependent also demands it when the key registers after the dependent.
   - `replace()` on the registration is atomic for all consumers. Each running consumer service gets a successor that runs `build` and `start`. A successor that completes `start` waits. When every successor waits, one batch swaps the registration and all consumer services. The other consumer services leave and build again on demand.
   - If one successor fails, all successors stop, and `replace()` rejects with that failure. The old registration and its consumer services do not change. A new consumer still builds from the old registration.
   - A consumer service that leaves during the replacement, for example with its container, drops out of the batch. A newer `replace()` or a withdrawal cancels the replacement, and `replace()` resolves `false`.
@@ -394,6 +403,8 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - The swap is one batch. After it, the service has a new `instanceId`. Dependents follow the rule for a replaced required dependency in [dependency-change](#dependency-change).
 - For a `perConsumer` registration, the swap of all consumer services is one batch. See [Registrations](#registrations).
 - The old instance runs `stop` and dispose only after each holder releases it. A holder that calls an `unavailable` old instance gets the failure that `unavailable` means.
+- A dependent without a handler rebuilds without a gap too. See [Rebuild without a gap](#rebuild-without-a-gap). So a replacement deep in the graph changes the identity of each service above it, but it does not withdraw them.
+- While the swap waits, `explain()` of the service has `replacement`: the explanation of the new instance, with its phase and blockers.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
 - `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
 - A service without a serving instance (`pending`, `conflict`, `failed`, `building`, `starting`, or `retrying`) has no old instance to keep. The new registration takes the slot at once.
@@ -447,6 +458,29 @@ The identity of a dependency changed: it was replaced, withdrawn, or it appeared
 | A required dependency is replaced | Rebuild | Call the handler |
 | A required dependency is withdrawn | Stop | Stop. The handler gets a notice only. Its return value is ignored. |
 | An optional dependency appears, disappears, or is replaced | Rebuild | Call the handler |
+
+A rebuild of a running service, for this table or for `decide.rebuild()`, has no gap when the old instance can keep serving. See [Rebuild without a gap](#rebuild-without-a-gap).
+
+### Rebuild without a gap
+
+A rebuild is make-before-break. The old instance keeps serving while a successor builds and starts. Then one batch swaps them, as for `replace()`.
+
+- The successor has the options of the service. It builds against the current dependencies and runs `start`. Its phases go to the observe stream.
+- The old instance keeps its bindings and its status. A bound provider instance stays usable until its last holder releases it, so the old instance keeps working.
+- After the successor completes `start`, one batch publishes it and removes the old service. The old instance goes to `stopping` with the decision `rebuild` and its reason. It runs `stop` and dispose after its holders release it.
+- The dependents of the service see an identity change and get `dependency-change`. They do not see a withdrawal. A dependent without a handler rebuilds without a gap in the same way. So a change deep in the graph moves up without a gap.
+- The successor keeps the place of the service in registration order.
+- If the successor fails, the old instance stops, and the service goes to `failed` with that error. This is the same final state as a failed build after a stop.
+- If a dependency changes again during the build of the successor, injeca discards the successor and starts a new one.
+- A `replace()` or a withdrawal of the registration cancels the rebuild. A pending `replace()` or `tx.replace` takes precedence over a rebuild: the old instance serves until that replacement ends.
+
+The rule for the old instance: it can keep serving when these conditions are all true. Otherwise the service stops first and builds again from `pending`, as in 0.3.0.
+
+1. The service has a key. An invocation has no dependents, so it stops first, then runs again. See [Invocations](#invocations).
+2. Each dependency that the old instance is bound to still resolves, maybe to a new instance. A withdrawn dependency, required or optional, leaves nothing to build against.
+3. The container is not in disposal.
+
+A required dependency that is withdrawn stops the service at once, as before. A stop or a disposal of the container cancels the successor.
 
 ### dependency-status-change
 
@@ -542,7 +576,7 @@ decide.fail(error, { reason? })
 - `watch(container, key, callback)` sends the current phase and effective status at once, then each change. It returns a disposer. The container owns the subscription.
 - `waitFor(container, key, { status?, timeoutMs?, signal? })` resolves when the key is available, or has the given status. It rejects on a timeout or an abort. It has no built-in timeout.
 - `waitFor` rejects with `service-failed` when the service is in `failed`, or when it waits for a required provider in `failed`, directly or through pending providers. This is the same rule as for `resolve`. The error has `key`, and its `cause` is the failure.
-- For a `perConsumer` key, `watch` and `waitFor` demand the consumer service of the container, as `resolve` does. So they report the real availability for that container, also before `start()`. The demand ends with the subscription, or with `stop()`.
+- For a `perConsumer` key, `watch` and `waitFor` demand the consumer service of the container, as `resolve` does. So they report the real availability for that container, also before `start()`. The demand ends with the subscription, or with `stop()`. After a rebuild or a replacement, the demand moves to the new consumer service.
 - injeca delivers changes for one key in order. An earlier `withdrawn` never arrives after a later `running`.
 - A callback error does not stop a transition or the other callbacks. injeca records the error in the observe stream.
 - injeca does not call a callback after its container is disposed.
@@ -566,7 +600,7 @@ Graph queries are pure reads. They never change state.
 | `graph(container).order(keys?)` | Topological order |
 | `graph(container).cycles()` | All cycles |
 | `graph(container).impact(change)` | The services that a proposed change stops or rebuilds |
-| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue. A key without a service gives `phase: undefined` and a `missing-provider` blocker. |
+| `graph(container).explain(key)` | Why a service is not `running`: missing, conflicting, rejected, or unavailable dependencies, or a `start` requeue. A key without a service gives `phase: undefined` and a `missing-provider` blocker. A service with a replacement in progress has `replacement`, the explanation of the new instance. |
 
 `peek(container, dependency)` is a pure read too. It does not demand, build, or start a service. It accepts a key, `where(key, condition)`, or `firstAvailable(...)`, and resolves as for a consumer in the container. The result is one of these:
 
@@ -669,6 +703,13 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
 5. Done, except the publish. Release: the README, the injeca skill, and version 0.3.0.
 5a. Done in 0.3.1. Fixes from the plugin-sdk migration study: an atomic `perConsumer` replacement, demand and failure rules for `watch` and `waitFor`, `withdraw()` before a commit, key reservation, no wait for an aborted `start` hook, `peek` and bounded `resolve`, retries of failed consumer services, children-first disposal, and invocation keys.
 5b. Exported registrations and async context: `provide(child, key, { export: true })` and `tx.provide` with `export` make a registration a candidate in the area of the parent container, with exclusive conflicts in that area. `createContainer({ asyncContext })` detects a cleanup that awaits its own disposal across `await`. See [Exported registrations](#exported-registrations) and [Containers](#containers).
+5c. Fixes from the plugin-sdk move to injeca. See [Rebuild without a gap](#rebuild-without-a-gap), [Fallback dependencies](#fallback-dependencies), and [Registrations](#registrations).
+  - The `dependsOn` of a `perConsumer` consumer service resolves from the registration container. Before, it resolved from the consumer container.
+  - `where()` accepts a `firstAvailable()` marker, and `firstAvailable()` accepts `where()` markers. The condition filters the candidates.
+  - A rebuild of a running service is make-before-break. Before, it was stop-then-build, so a replacement deep in the graph withdrew the services above it for a moment.
+  - An optional or a fallback edge of a running dependent demands the consumer service of a `perConsumer` key that registers later.
+  - `explain()` has `replacement` for a service with a replacement in progress.
+  - One existing assertion changed: `where(firstAvailable('a', 'b'), condition)` threw `invalid-argument`, and now it returns a fallback marker. The other tests pass without changes.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
@@ -732,6 +773,11 @@ Each rule in this document needs a test. These cases are required:
 53. An isolated key hides the exports of the siblings, but not the exports of the own children.
 54. A `perConsumer` export builds one instance in each consumer container. A `tx.provide` with `export` reserves an exclusive key in the parent area until the commit or the abort.
 55. With an `asyncContext`, a cleanup that awaits the disposal of its own container or of an ancestor rejects with `reentrant-dispose`. Without it, a `stop` timeout ends the wait.
+56. A `perConsumer` registration, exported or not, resolves its dependencies from its own container. The build context keeps `consumer`.
+57. `where(firstAvailable(...), condition)` and `firstAvailable(where(key, condition), ...)` select the first available candidate that passes. `optional` combines in any order. `explain()` names each rejected candidate.
+58. A replacement of a leaf rebuilds an intermediate service make-before-break. Its dependent gets `dependency-change` from the old instance to the new one, and never stops. A withdrawn bound dependency still stops first. A failed successor fails the service. An invocation stops, then runs again.
+59. An optional or a `firstAvailable` edge to a `perConsumer` key that registers after the dependent demands the consumer service.
+60. `explain()` of a service with a pending `replace()` has `replacement` with the phase and the blockers of the new instance.
 
 ## Appendix: plugin-sdk
 
