@@ -4,33 +4,14 @@ import type { WatchKey } from '../queries/watch'
 import type { BuildContext, Container, KeyReference, ObserveRecord, OwnerRecord, ServicePhase, ServiceState } from '../types'
 
 import { createNoopLogger } from '../diagnostics/logger'
-import { nodeOf } from '../graph/nodes'
 import { createContainer } from '../primitives/container'
 import { provide } from '../primitives/provide'
 import { observe } from '../queries/observe'
 import { watch } from '../queries/watch'
 
-/**
- * Resolves when the reconciler queue of `container` has drained and stays drained.
- *
- * A build or a hook that settles on a microtask can queue more work after a drain.
- * So the helper waits one macrotask after each drain, and starts again when another drain happens.
- */
-export function drained(container: Container): Promise<void> {
-  const { reconciler } = nodeOf(container).runtime
-
-  return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const stopListening = reconciler.onDrained(() => {
-      clearTimeout(timer)
-      timer = setTimeout(() => {
-        stopListening()
-        resolve()
-      }, 0)
-    })
-    reconciler.requestDrain()
-  })
-}
+export { drained } from './drained'
+export { manualClock } from './manual-clock'
+export type { ManualClock } from './manual-clock'
 
 export interface Deferred<T = void> {
   promise: Promise<T>
@@ -44,40 +25,6 @@ export function deferred<T = void>(): Deferred<T> {
   })
 
   return { promise, resolve }
-}
-
-export interface ManualClock {
-  readonly clock: Clock
-  /** Moves the time forward and runs each timer that is due, in order. */
-  readonly advance: (ms: number) => void
-  /** The number of timers that wait. */
-  readonly pending: () => number
-}
-
-export function manualClock(): ManualClock {
-  let now = 0
-  let seq = 0
-  const timers = new Map<number, { readonly at: number, readonly callback: () => void }>()
-
-  return {
-    clock: {
-      now: () => now,
-      setTimeout: (callback, ms) => {
-        const id = ++seq
-        timers.set(id, { at: now + ms, callback })
-        return () => timers.delete(id)
-      },
-    },
-    advance: (ms) => {
-      now += ms
-      const due = [...timers].filter(([, timer]) => timer.at <= now).sort(([, a], [, b]) => a.at - b.at)
-      for (const [id, timer] of due) {
-        timers.delete(id)
-        timer.callback()
-      }
-    },
-    pending: () => timers.size,
-  }
 }
 
 /** Creates a container for a test. Logging is off, unless `enabled` is `true` or `logger` is set. */
