@@ -1,5 +1,5 @@
-import type { Decision, FailDecision, HandledDecision, ServiceHook } from '../primitives/decision'
-import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus, WithdrawOptions } from './index'
+import type { Decision, FailDecision, HandledDecision, UnitHook } from '../primitives/decision'
+import type { BuildContext, DependencyChange, DependencySnapshot, GraphUnit, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, UnitState, UnitStatus, WithdrawOptions } from './index'
 
 import { describe, expectTypeOf, it } from 'vitest'
 
@@ -86,7 +86,7 @@ describe('call-site types', () => {
     provide(app, 'voice.speech', {
       dependsOn: { llm, tts: optional(ttsKey) },
       build: ({ on, setStatus }) => {
-        expectTypeOf(setStatus).parameter(0).toEqualTypeOf<ServiceStatus>()
+        expectTypeOf(setStatus).parameter(0).toEqualTypeOf<UnitStatus>()
 
         on('start', ({ decide, attempt, previous, signal }) => {
           expectTypeOf(attempt).toEqualTypeOf<number>()
@@ -119,7 +119,7 @@ describe('call-site types', () => {
           expectTypeOf(dependsOn.llm).toEqualTypeOf<DependencySnapshot<Llm>>()
           expectTypeOf(dependsOn.llm.instanceId).toEqualTypeOf<string>()
           expectTypeOf(dependsOn.tts).toEqualTypeOf<DependencySnapshot<Tts> | undefined>()
-          expectTypeOf(dependsOn.tts?.status).toEqualTypeOf<ServiceStatus | undefined>()
+          expectTypeOf(dependsOn.tts?.status).toEqualTypeOf<UnitStatus | undefined>()
           expectTypeOf(changes).toEqualTypeOf<readonly DependencyChange[]>()
           expectTypeOf(decide).toHaveProperty('rebuild')
           return dependsOn.tts ? decide.handled() : decide.rebuild()
@@ -157,9 +157,9 @@ describe('call-site types', () => {
 
     // Design test 39: a decision carries the fields of its run.
     expectTypeOf(decision).toEqualTypeOf<FailDecision>()
-    expectTypeOf(decision.service).toEqualTypeOf<string>()
+    expectTypeOf(decision.unit).toEqualTypeOf<string>()
     expectTypeOf(decision.instanceId).toEqualTypeOf<string>()
-    expectTypeOf(decision.hook).toEqualTypeOf<ServiceHook>()
+    expectTypeOf(decision.hook).toEqualTypeOf<UnitHook>()
     expectTypeOf(decision.attempt).toEqualTypeOf<number>()
     expectTypeOf(decision.issuedAt).toEqualTypeOf<number>()
     expectTypeOf(context.decide.handled()).toEqualTypeOf<HandledDecision>()
@@ -175,12 +175,12 @@ describe('call-site types', () => {
     })
 
     expectTypeOf(watch(app, remote, (state) => {
-      expectTypeOf(state).toEqualTypeOf<ServiceState>()
+      expectTypeOf(state).toEqualTypeOf<UnitState>()
     })).toEqualTypeOf<() => void>()
-    expectTypeOf(waitFor(app, 'airi.llm.remote', { status: 'ready' })).resolves.toEqualTypeOf<ServiceState>()
+    expectTypeOf(waitFor(app, 'airi.llm.remote', { status: 'ready' })).resolves.toEqualTypeOf<UnitState>()
   })
 
-  it('types where, replace, transactions, perConsumer, and the step 3 readers', () => {
+  it('types where, replace, transactions, instances, and the step 3 readers', () => {
     const app = createContainer()
     const llmKey = defineKey<Llm>('airi.llm', { exclusive: true })
     const llm = provide(app, llmKey, { metadata: { version: '1.0.0' }, build: () => ({ chat: () => 'hi' }) })
@@ -211,7 +211,7 @@ describe('call-site types', () => {
       },
     })
     provide(app, 'host.client', {
-      perConsumer: true,
+      instances: 'per-container',
       build: ({ consumer }) => {
         expectTypeOf(consumer).toEqualTypeOf<OwnerRecord | undefined>()
         return consumer
@@ -235,7 +235,7 @@ describe('call-site types', () => {
     // @ts-expect-error `timeoutMs` was removed. Pass a signal from `timeout(container, ms)`.
     void resolve(app, { llm }, { timeoutMs: 1_000 })
 
-    expectTypeOf(graph(app).services()).toEqualTypeOf<readonly GraphService[]>()
+    expectTypeOf(graph(app).units()).toEqualTypeOf<readonly GraphUnit[]>()
     expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()
   })
   it('types the retry and timeout options', () => {

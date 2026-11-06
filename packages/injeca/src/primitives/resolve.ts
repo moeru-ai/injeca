@@ -1,8 +1,8 @@
-import type { BuildFunction, ServiceNode } from '../graph/graph'
+import type { BuildFunction, UnitNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, ResolveDependencyDeclaration } from '../types'
 
 import { BuildAfterDisposeError } from '../diagnostics/errors'
-import { assertActive, createService, nodeOf, readEdges, releaseService } from '../graph/nodes'
+import { assertActive, createUnit, nodeOf, readEdges, releaseUnit } from '../graph/nodes'
 import { blockingFailure } from '../graph/resolvers/resolvers'
 import { onAbort, readSignal, waitAbortError } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
@@ -34,7 +34,7 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
 
   return new Promise((done, fail) => untracked(() => {
     let settled = false
-    let service: ServiceNode | undefined
+    let unit: UnitNode | undefined
     let stopListening = () => {}
     let disarm = () => {}
 
@@ -45,7 +45,7 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
       settled = true
       stopListening()
       disarm()
-      batch(() => releaseService(service!))
+      batch(() => releaseUnit(unit!))
       outcome()
     }
 
@@ -53,17 +53,17 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
     const build: BuildFunction = context => finish(() => done({ ...context.dependsOn } as ResolveDependencyDeclaration<Deps>))
 
     batch(() => {
-      service = createService({ container: node, kind: 'resolver', name: 'resolve', edges, build })
-      node.services.add(service)
+      unit = createUnit({ container: node, kind: 'resolver', name: 'resolve', edges, build })
+      node.units.add(unit)
     })
 
     // A required dependency that failed, directly or through a pending provider, rejects the call.
     stopListening = reconciler.onDrained(() => {
-      const failure = blockingFailure(service!)
+      const failure = blockingFailure(unit!)
       if (failure)
         finish(() => fail(failure.error))
     })
     disarm = onAbort(signal, reason => finish(() => fail(waitAbortError(reason, 'resolve() timed out.'))))
-    void service!.withdrawal.promise.then(() => finish(() => fail(new BuildAfterDisposeError('The container was disposed before resolve() got its dependencies.'))))
+    void unit!.withdrawal.promise.then(() => finish(() => fail(new BuildAfterDisposeError('The container was disposed before resolve() got its dependencies.'))))
   }))
 }

@@ -1,22 +1,24 @@
 import type { BuildContext, InvocationContext } from './context'
-import type { DependencyDeclarations, DependencyMap, ProvidedKey, ResolveDependencyDeclaration, ServiceMetadata } from './keys'
+import type { DependencyDeclarations, DependencyMap, ProvidedKey, ResolveDependencyDeclaration, UnitMetadata } from './keys'
 import type { PolicyOptions } from './policy'
 
 /** The registration options that each object form of `provide` accepts. */
 export interface RegistrationOptions extends PolicyOptions {
   /** A record that resolution conditions and graph queries read. injeca freezes a copy. */
-  metadata?: ServiceMetadata
+  metadata?: UnitMetadata
   /**
-   * Runs `build` once for each consumer container. The build context then has `consumer`.
+   * How many instances the registration builds. The default is `'shared'`: one instance for all consumers.
+   * `'per-container'` runs `build` once for each consumer container. The build context then has `consumer`.
    * Each instance disposes with its consumer container.
    */
-  perConsumer?: boolean
+  instances?: 'shared' | 'per-container'
   /**
-   * Exports the registration one level up. The registration stays in its container: its owner, its disposal, its dependencies, and its phases.
+   * Where consumers see the registration. The default is `'local'`: its container and the descendants of its container.
+   * `'parent'` makes the registration visible one level up. The registration stays in its container: its owner, its disposal, its dependencies, and its phases.
    * It is also a candidate for consumers in the resolution area of the parent container: the parent and each descendant of the parent.
    * For an exclusive key, it counts as a declaration in that area. On a root container, it has no effect.
    */
-  export?: boolean
+  visibility?: 'local' | 'parent'
 }
 
 export type ProvideOptionObject<T, D extends DependencyMap | undefined = undefined> = { build: (context: BuildContext<D>) => T | Promise<T> } & RegistrationOptions & (D extends undefined ? { dependsOn?: Record<string, never> } : { dependsOn: { [K in keyof D]: string } })
@@ -41,7 +43,7 @@ export type InvokeOptionWithKeys<Deps extends DependencyDeclarations> = InvokeOp
 
 /**
  * The `replace()` of a registration. It takes the function shorthand, or the object form with or without `dependsOn`.
- * An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
+ * An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `instances` and `visibility` do not change.
  */
 export interface ReplaceFunction<T> {
   <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>, options?: ReplaceOptions): Promise<boolean>
@@ -61,31 +63,31 @@ export interface ReplaceOptions {
 export interface WithdrawOptions {
   /**
    * Ends the wait when the signal aborts, and rejects with the reason. The withdrawal continues. There is no default.
-   * The service gets a `wait-aborted` record in the observe stream when it did not finish its withdrawal. An aborted signal still starts the withdrawal.
+   * The unit gets a `wait-aborted` record in the observe stream when it did not finish its withdrawal. An aborted signal still starts the withdrawal.
    */
   signal?: AbortSignal
 }
 
 /**
- * The result of `provide`: the typed key of the service, with `withdraw()` and `replace()`.
+ * The result of `provide`: the typed key of the unit, with `withdraw()` and `replace()`.
  */
 export interface Registration<Key, T, D extends DependencyMap | undefined> extends ProvidedKey<Key, T, D> {
   /**
-   * Withdraws the service. Dependents stop first. Then the service runs its `stop` hooks and effect disposers.
+   * Withdraws the unit. Dependents stop first. Then the unit runs its `stop` hooks and effect disposers.
    *
-   * Resolves `false` for a stale registration and does not change any service. Rejects with the teardown errors.
+   * Resolves `false` for a stale registration and does not change any unit. Rejects with the teardown errors.
    *
-   * A call from a cleanup that the withdrawal waits for cannot wait: of the service, of a consumer service of it, or of a service that holds it.
+   * A call from a cleanup that the withdrawal waits for cannot wait: of the unit, of a consumer unit of it, or of a unit that holds it.
    * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves `true` at once. The withdrawal continues.
    */
   readonly withdraw: (options?: WithdrawOptions) => Promise<boolean>
   /**
-   * Replaces the instance of the service without a gap.
+   * Replaces the instance of the unit without a gap.
    *
    * The old instance keeps serving with its status while the new instance runs `build` and `start`. The swap is one batch.
    * Resolves `true` after the swap. Resolves `false` for a stale registration, when a newer `replace` or a withdrawal supersedes this call, or when `options.signal` aborts before the swap.
    * Rejects with the build or start error of the new instance, and the old instance does not change.
-   * Rejects with `replace-while-stopping` when the service is in `stopping`.
+   * Rejects with `replace-while-stopping` when the unit is in `stopping`.
    */
   readonly replace: ReplaceFunction<T>
 }

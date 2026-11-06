@@ -2,7 +2,7 @@ import type { Logger, LoggerOptions } from '../diagnostics/logger'
 import type { Clock } from '../helpers/clock'
 import type { KeyReference } from './keys'
 import type { PolicyOptions } from './policy'
-import type { OwnerRecord } from './service'
+import type { OwnerRecord } from './unit'
 
 export interface Container {
   logger: Logger
@@ -12,7 +12,7 @@ export interface Container {
   readonly parent: Container | undefined
 }
 
-/** The options of `createContainer`. `maxAttempts`, `timeouts`, and `onTimeout` apply to each service of the container and of its descendants that does not set its own value. */
+/** The options of `createContainer`. `maxAttempts`, `timeouts`, and `onTimeout` apply to each unit of the container and of its descendants that does not set its own value. */
 export interface ContainerOptions extends LoggerOptions, PolicyOptions {
   /** Makes a child container. It resolves keys from its own registrations and from those of its ancestors. */
   parent?: Container
@@ -27,7 +27,7 @@ export interface ContainerOptions extends LoggerOptions, PolicyOptions {
   random?: () => number
   /**
    * The keys that do not resolve from the ancestors. The container and its descendants resolve them only from their own registrations.
-   * An isolated key also ends the resolution area of an exclusive key of an ancestor.
+   * A local key also ends the resolution area of an exclusive key of an ancestor.
    */
-  isolate?: readonly KeyReference[]
+  local?: readonly KeyReference[]
 }

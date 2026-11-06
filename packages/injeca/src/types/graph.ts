@@ -1,24 +1,25 @@
 import type { Container } from './container'
-import type { ConditionalDependency, DependencyDeclaration, DependencyMap, FallbackDependency, KeyReference, OptionalDependency, ProvidedBy, ProvidedKey, ServiceMetadata } from './keys'
-import type { OwnerRecord, ServiceExplanation, ServicePhase, ServiceStatus, StatusCause } from './service'
+import type { ConditionalDependency, DependencyDeclaration, DependencyMap, FallbackDependency, KeyReference, OptionalDependency, ProvidedBy, ProvidedKey, UnitMetadata } from './keys'
+import type { OwnerRecord, StatusCause, UnitExplanation, UnitPhase, UnitStatus } from './unit'
 
-/** One service, invocation, or declared service in a graph query result. */
-export interface GraphService {
-  /** The key name of the service, or the name of the invocation. */
+/** One unit, invocation, or declared unit in a graph query result. */
+export interface GraphUnit {
+  /** The key name of the unit, or the name of the invocation. */
   readonly key: string
-  readonly kind: 'service' | 'invocation'
-  /** The owner record of the container of the service. */
+  readonly kind: 'unit' | 'invocation'
+  /** The owner record of the container of the unit. */
   readonly owner: OwnerRecord
-  readonly phase: ServicePhase
-  /** The effective status of a running service. */
-  readonly status?: ServiceStatus
+  readonly phase: UnitPhase
+  /** The effective status of a running unit. */
+  readonly status?: UnitStatus
   readonly instanceId?: string
-  readonly metadata: ServiceMetadata
+  readonly metadata: UnitMetadata
   readonly exclusive: boolean
-  readonly perConsumer: boolean
-  /** `true` for a registration that `provide(..., { export: true })` exports to the resolution area of the parent container. */
-  readonly exported: boolean
-  /** The owner record of the consumer container of a `perConsumer` instance. */
+  /** `'per-container'` for a registration that builds one instance for each consumer container. */
+  readonly instances: 'shared' | 'per-container'
+  /** `'parent'` for a registration that is also visible in the resolution area of the parent container. */
+  readonly visibility: 'local' | 'parent'
+  /** The owner record of the consumer container of a per-container instance. */
   readonly consumer?: OwnerRecord
 }
 
@@ -33,7 +34,7 @@ export interface GraphService {
  */
 export type GraphResolution = 'resolved' | 'not-running' | 'missing' | 'rejected' | 'conflict'
 
-/** One declared edge of a service. */
+/** One declared edge of a unit. */
 export interface GraphDependency {
   /** The local name in `dependsOn`. */
   readonly name: string
@@ -45,14 +46,14 @@ export interface GraphDependency {
   readonly conditional: boolean
   readonly resolution: GraphResolution
   /** The provider that the edge selects now. A `missing` edge has none. */
-  readonly provider?: GraphService
+  readonly provider?: GraphUnit
 }
 
 /**
  * A proposed change for `impact`.
  *
- * - `withdraw`: the service of `key` is withdrawn.
- * - `replace`: the service of `key` gets a new instance.
+ * - `withdraw`: the unit of `key` is withdrawn.
+ * - `replace`: the unit of `key` gets a new instance.
  * - `dispose`: `container` and its descendants are disposed.
  */
 export type ImpactChange
@@ -60,14 +61,14 @@ export type ImpactChange
     | { readonly kind: 'replace', readonly key: KeyReference }
     | { readonly kind: 'dispose', readonly container: Container }
 
-/** The services that a proposed change affects. Each list has only services that have an instance now. */
+/** The units that a proposed change affects. Each list has only units that have an instance now. */
 export interface ImpactResult {
-  /** The services that stop: the withdrawn services, and the dependents that lose a required dependency. */
-  readonly stopped: readonly GraphService[]
+  /** The units that stop: the withdrawn units, and the dependents that lose a required dependency. */
+  readonly stopped: readonly GraphUnit[]
   /** The dependents that rebuild, because a dependency changes and they have no `dependency-change` handler. */
-  readonly rebuilt: readonly GraphService[]
+  readonly rebuilt: readonly GraphUnit[]
   /** The dependents that get a `dependency-change` call. Their handler decides what happens. */
-  readonly notified: readonly GraphService[]
+  readonly notified: readonly GraphUnit[]
 }
 
 /**
@@ -76,26 +77,26 @@ export interface ImpactResult {
  * The queries cover the container and its descendants. A key resolves as for a consumer in the container: from the container, then from its ancestors.
  */
 export interface Graph {
-  /** All services and invocations, with the declared services of open transactions. */
-  readonly services: () => readonly GraphService[]
-  /** The declared edges of the service of `key`. */
+  /** All units and invocations, with the declared units of open transactions. */
+  readonly units: () => readonly GraphUnit[]
+  /** The declared edges of the unit of `key`. */
   readonly dependencies: (key: KeyReference) => readonly GraphDependency[]
-  /** The services whose edges select the service of `key` now. */
-  readonly dependents: (key: KeyReference) => readonly GraphService[]
+  /** The units whose edges select the unit of `key` now. */
+  readonly dependents: (key: KeyReference) => readonly GraphUnit[]
   /**
    * The topological order: each provider comes before its dependents.
-   * With `keys`, the order has only those services and their transitive dependencies. The members of one cycle come together, in registration order.
+   * With `keys`, the order has only those units and their transitive dependencies. The members of one cycle come together, in registration order.
    */
-  readonly order: (keys?: readonly KeyReference[]) => readonly GraphService[]
-  /** Each dependency cycle, as a list of services. */
-  readonly cycles: () => readonly (readonly GraphService[])[]
-  /** The services that a proposed change stops, rebuilds, or notifies. It runs on a copy of the graph. */
+  readonly order: (keys?: readonly KeyReference[]) => readonly GraphUnit[]
+  /** Each dependency cycle, as a list of units. */
+  readonly cycles: () => readonly (readonly GraphUnit[])[]
+  /** The units that a proposed change stops, rebuilds, or notifies. It runs on a copy of the graph. */
   readonly impact: (change: ImpactChange) => ImpactResult
   /**
-   * Why the service of `key` is not `running`: missing, conflicting, rejected, failed, or unavailable dependencies.
-   * A key without a service gives `phase: undefined` and one `missing-provider` blocker.
+   * Why the unit of `key` is not `running`: missing, conflicting, rejected, failed, or unavailable dependencies.
+   * A key without a unit gives `phase: undefined` and one `missing-provider` blocker.
    */
-  readonly explain: (key: KeyReference) => ServiceExplanation
+  readonly explain: (key: KeyReference) => UnitExplanation
 }
 
 /** The value type of a dependency declaration for `peek`. */
@@ -125,10 +126,10 @@ export type PeekValue<D>
  * `key` is the key name of the provider. For `firstAvailable`, it is the selected key, or the first key when no key has a provider.
  */
 export type PeekResult<T>
-  = | { readonly kind: 'resolved', readonly key: string, readonly owner: OwnerRecord, readonly value: T, readonly status: Exclude<ServiceStatus, 'unavailable'>, readonly instanceId: string }
+  = | { readonly kind: 'resolved', readonly key: string, readonly owner: OwnerRecord, readonly value: T, readonly status: Exclude<UnitStatus, 'unavailable'>, readonly instanceId: string }
     | { readonly kind: 'unavailable', readonly key: string, readonly owner: OwnerRecord, readonly instanceId: string, readonly reason?: string, readonly cause?: StatusCause }
-    | { readonly kind: 'not-running', readonly key: string, readonly owner: OwnerRecord, readonly phase: ServicePhase, readonly error?: unknown }
-    | { readonly kind: 'rejected', readonly key: string, readonly owner: OwnerRecord, readonly metadata: ServiceMetadata }
+    | { readonly kind: 'not-running', readonly key: string, readonly owner: OwnerRecord, readonly phase: UnitPhase, readonly error?: unknown }
+    | { readonly kind: 'rejected', readonly key: string, readonly owner: OwnerRecord, readonly metadata: UnitMetadata }
     | { readonly kind: 'conflict', readonly key: string, readonly owners: readonly OwnerRecord[] }
     | { readonly kind: 'missing', readonly key: string }
 

@@ -1,4 +1,4 @@
-import type { InstanceNode, ServiceNode, StopIntent } from '../graph/graph'
+import type { InstanceNode, StopIntent, UnitNode } from '../graph/graph'
 import type { CleanupFrame } from '../helpers/cleanup-context'
 
 import { HookTimeoutError } from '../diagnostics/errors'
@@ -9,7 +9,7 @@ import { batch } from '../helpers/signals'
 import { invokeUser, loggerOf } from './calls'
 import { syncHolds } from './holds'
 import { callHandler, decideTimeout, finishRun, recordDecision, recordLateDecision, reportLateFailure } from './hook-run'
-import { serviceFrame } from './reentry'
+import { unitFrame } from './reentry'
 import { cancelRequeueWait } from './requeue'
 
 export function mergeIntent(current: StopIntent, next: StopIntent): StopIntent {
@@ -26,29 +26,29 @@ export function mergeIntent(current: StopIntent, next: StopIntent): StopIntent {
   }
 }
 
-export function enterStopping(service: ServiceNode, intent: StopIntent): void {
-  service.stopIntent = mergeIntent(service.stopIntent, intent)
-  setPhase(service, 'stopping', { reason: service.stopIntent.reason, decision: service.stopIntent.decision })
-  service.container.runtime.reconciler.markDirty(service)
+export function enterStopping(unit: UnitNode, intent: StopIntent): void {
+  unit.stopIntent = mergeIntent(unit.stopIntent, intent)
+  setPhase(unit, 'stopping', { reason: unit.stopIntent.reason, decision: unit.stopIntent.decision })
+  unit.container.runtime.reconciler.markDirty(unit)
 }
 
-export function reconcileStopping(service: ServiceNode): void {
-  const instance = service.signals.instance()
+export function reconcileStopping(unit: UnitNode): void {
+  const instance = unit.signals.instance()
   if (!instance) {
-    settleAfterStop(service, [])
+    settleAfterStop(unit, [])
     return
   }
   // A provider waits until all its holders release it.
   if (instance.signals.holders().size > 0)
     return
 
-  void teardown(service, instance, true)
+  void teardown(unit, instance, true)
 }
 
 /** The warning of a `stop` timeout. During a stop or a disposal of the container, it tells the most common cause. */
-function stopTimeoutWarning(service: ServiceNode, timeoutMs: number): string {
-  const warning = `The cleanups of '${service.name}' did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the stop continues.`
-  const { container } = service
+function stopTimeoutWarning(unit: UnitNode, timeoutMs: number): string {
+  const warning = `The cleanups of '${unit.name}' did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the stop continues.`
+  const { container } = unit
   const action = container.state === 'disposing' ? 'disposing' : container.signals.started() ? undefined : 'stopping'
   if (!action)
     return warning
@@ -64,16 +64,16 @@ function stopTimeoutWarning(service: ServiceNode, timeoutMs: number): string {
  * The callback in progress is abandoned. The remaining callbacks still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
  * The late decisions of the abandoned `stop` handlers are recorded as ignored. A late failure of an abandoned callback goes to `logger.warn`, unless it is the abort reason of its signal.
  */
-async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
+async function runTeardownCallbacks(unit: UnitNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
   const errors: unknown[] = []
-  const { clock, context } = service.container.runtime
+  const { clock, context } = unit.container.runtime
   // Each callback runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
   const call = <T>(fn: () => T | Promise<T>): Promise<T> => context.run(frame, () => invokeUser(fn))
 
-  const timeoutMs = timeoutOf(service, 'stop')
+  const timeoutMs = timeoutOf(unit, 'stop')
   const deadline = timeoutMs === undefined
     ? undefined
-    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The 'stop' hook of '${service.name}' timed out.`, 'stop', timeoutMs))
+    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The 'stop' hook of '${unit.name}' timed out.`, 'stop', timeoutMs))
   // A `stop` handler sees the timeout on its signal, and the disposal of the instance.
   const hookSignal = anySignal(instance.controller.signal, deadline?.signal)
   let timedOut = false
@@ -83,7 +83,7 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
    */
   const settle = async <T>(promise: Promise<T>, source: 'stop' | 'effect', late?: (value: T) => void): Promise<{ readonly value: T } | undefined> => {
     const abandon = (): undefined => {
-      promise.then(value => late?.(value), (error: unknown) => reportLateFailure(service, source, error, [hookSignal, instance.controller.signal]))
+      promise.then(value => late?.(value), (error: unknown) => reportLateFailure(unit, source, error, [hookSignal, instance.controller.signal]))
       return undefined
     }
     if (!deadline)
@@ -97,9 +97,9 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
 
     abandon()
     timedOut = true
-    service.container.api.logger.warn(stopTimeoutWarning(service, timeoutMs!))
-    const decision = decideTimeout(service, instance, 'stop', timeoutMs!)
-    recordDecision(service, instance, decision, false)
+    unit.container.api.logger.warn(stopTimeoutWarning(unit, timeoutMs!))
+    const decision = decideTimeout(unit, instance, 'stop', timeoutMs!)
+    recordDecision(unit, instance, decision, false)
     finishRun(instance, 'stop', decision)
     if (decision.kind === 'fail')
       errors.push(decision.error)
@@ -107,21 +107,21 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
   }
 
   if (stopHooks && instance.hooks.stop.length > 0) {
-    const logger = loggerOf(service)
-    logger?.hookOnStop(service.name)
+    const logger = loggerOf(unit)
+    logger?.hookOnStop(unit.name)
     const startTime = performance.now()
     for (const handler of [...instance.hooks.stop].reverse()) {
-      const settled = await settle(callHandler(service, instance, 'stop', handler, hookSignal, {}, call), 'stop', late => recordLateDecision(service, instance, late, [hookSignal, instance.controller.signal]))
+      const settled = await settle(callHandler(unit, instance, 'stop', handler, hookSignal, {}, call), 'stop', late => recordLateDecision(unit, instance, late, [hookSignal, instance.controller.signal]))
       if (!settled)
         continue
 
       const decision = settled.value
-      recordDecision(service, instance, decision, false)
+      recordDecision(unit, instance, decision, false)
       finishRun(instance, 'stop', decision)
       if (decision.kind === 'fail')
         errors.push(decision.error)
     }
-    logger?.hookOnStopComplete(service.name, performance.now() - startTime)
+    logger?.hookOnStopComplete(unit.name, performance.now() - startTime)
   }
 
   const effects = instance.effects.splice(0).reverse()
@@ -138,91 +138,91 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
   return errors
 }
 
-export async function teardown(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, phase?: 'stopping'): Promise<void> {
-  service.busy = true
+export async function teardown(unit: UnitNode, instance: InstanceNode, stopHooks: boolean, phase?: 'stopping'): Promise<void> {
+  unit.busy = true
   instance.tearingDown = true
   cancelRequeueWait(instance)
   instance.extraHolds.clear()
   if (phase)
-    setPhase(service, phase, { reason: service.stopIntent.reason })
+    setPhase(unit, phase, { reason: unit.stopIntent.reason })
 
-  // The frame of the teardown names the service, so that a synchronous `stop()` or `dispose()` from a cleanup is found, also outside a disposal.
-  const frame = serviceFrame(service, service.container.frame)
-  const errors = await service.container.runtime.context.run(frame, () => runTeardownCallbacks(service, instance, stopHooks, frame))
+  // The frame of the teardown names the unit, so that a synchronous `stop()` or `dispose()` from a cleanup is found, also outside a disposal.
+  const frame = unitFrame(unit, unit.container.frame)
+  const errors = await unit.container.runtime.context.run(frame, () => runTeardownCallbacks(unit, instance, stopHooks, frame))
   frame.active = false
 
   instance.disposed = true
-  instance.controller.abort(new Error(`The instance '${instance.id}' of '${service.name}' was disposed.`))
-  service.busy = false
+  instance.controller.abort(new Error(`The instance '${instance.id}' of '${unit.name}' was disposed.`))
+  unit.busy = false
 
-  service.container.runtime.reconciler.notifyTeardown(service, errors)
+  unit.container.runtime.reconciler.notifyTeardown(unit, errors)
   batch(() => {
     instance.bindings.clear()
-    syncHolds(service, instance)
+    syncHolds(unit, instance)
     // The phase record still names the stopped instance. The instance is cleared after it.
-    settleAfterStop(service, errors)
-    service.signals.instance(undefined)
+    settleAfterStop(unit, errors)
+    unit.signals.instance(undefined)
   })
 }
 
-function settleAfterStop(service: ServiceNode, errors: readonly unknown[]): void {
-  const intent = service.stopIntent
-  service.stopIntent = {}
+function settleAfterStop(unit: UnitNode, errors: readonly unknown[]): void {
+  const intent = unit.stopIntent
+  unit.stopIntent = {}
 
-  // A new service that did not reach its swap leaves. The old service does not change.
-  const { swap } = service
+  // A new unit that did not reach its swap leaves. The old unit does not change.
+  const { swap } = unit
   if (swap) {
     const failure = intent.failure ?? (errors.length > 0 ? { error: errors[0] } : undefined)
-    service.swap = undefined
+    unit.swap = undefined
     if (failure) {
-      service.failure = failure
-      setPhase(service, 'failed', { reason: intent.reason ?? 'The replacement failed. The old instance stays.', decision: intent.decision })
+      unit.failure = failure
+      setPhase(unit, 'failed', { reason: intent.reason ?? 'The replacement failed. The old instance stays.', decision: intent.decision })
       swap.settle({ kind: 'failed', error: failure.error })
     }
     else {
-      swap.settle(service.signals.active() ? { kind: 'cancelled' } : { kind: 'stopping' })
+      swap.settle(unit.signals.active() ? { kind: 'cancelled' } : { kind: 'stopping' })
     }
-    service.signals.present(false)
-    service.teardownErrors.push(...errors)
-    finalize(service)
+    unit.signals.present(false)
+    unit.teardownErrors.push(...errors)
+    finalize(unit)
     return
   }
 
-  if (!service.signals.present()) {
-    service.teardownErrors.push(...errors)
-    finalize(service)
+  if (!unit.signals.present()) {
+    unit.teardownErrors.push(...errors)
+    finalize(unit)
     return
   }
   if (intent.failure || errors.length > 0) {
-    service.failure = intent.failure ?? { error: errors[0] }
-    setPhase(service, 'failed', { reason: intent.reason, decision: intent.decision })
+    unit.failure = intent.failure ?? { error: errors[0] }
+    setPhase(unit, 'failed', { reason: intent.reason, decision: intent.decision })
     return
   }
 
-  service.parkedEpoch = intent.parkEpoch
-  setPhase(service, 'pending', { reason: intent.reason, decision: intent.decision })
-  service.container.runtime.reconciler.markDirty(service)
+  unit.parkedEpoch = intent.parkEpoch
+  setPhase(unit, 'pending', { reason: intent.reason, decision: intent.decision })
+  unit.container.runtime.reconciler.markDirty(unit)
 }
 
-export function finalize(service: ServiceNode): void {
-  const { swap, template } = service
-  service.swap = undefined
+export function finalize(unit: UnitNode): void {
+  const { swap, template } = unit
+  unit.swap = undefined
   swap?.settle({ kind: 'cancelled' })
-  service.disposeEffects()
-  service.container.services.delete(service)
+  unit.disposeEffects()
+  unit.container.units.delete(unit)
   batch(() => {
-    removeDeclaration(service)
+    removeDeclaration(unit)
     if (template) {
       const consumers = template.signals.consumers()
-      if (consumers.get(service.container) === service)
-        template.signals.consumers(new Map([...consumers].filter(([, consumer]) => consumer !== service)))
+      if (consumers.get(unit.container) === unit)
+        template.signals.consumers(new Map([...consumers].filter(([, consumer]) => consumer !== unit)))
     }
-    setPhase(service, 'withdrawn')
+    setPhase(unit, 'withdrawn')
   })
-  service.withdrawal.resolve([...service.teardownErrors])
-  // A withdrawn `perConsumer` registration finalizes after its last consumer service.
+  unit.withdrawal.resolve([...unit.teardownErrors])
+  // A withdrawn per-container registration finalizes after its last consumer unit.
   if (template)
-    service.container.runtime.reconciler.markDirty(template)
+    unit.container.runtime.reconciler.markDirty(template)
   // The effect is gone, so no phase change requests a drain. Request one for the drained listeners.
-  service.container.runtime.reconciler.requestDrain()
+  unit.container.runtime.reconciler.requestDrain()
 }

@@ -8,7 +8,7 @@ import { collectRecords, createTestContainer, drained, manualClock, stateOf } fr
 
 type SetStatus = BuildContext['setStatus']
 
-/** Provides a service that exposes its `setStatus` to the test. */
+/** Provides a unit that exposes its `setStatus` to the test. */
 function provideWithStatus(app: ReturnType<typeof createTestContainer>, name: string) {
   const handle: { setStatus: SetStatus } = { setStatus: () => {} }
   const registration = provide(app, name, ({ setStatus }) => {
@@ -165,7 +165,7 @@ describe('effective status', () => {
   })
 
   // Design test 23.
-  it('does not let a service report an effective status better than its required dependencies', async () => {
+  it('does not let a unit report an effective status better than its required dependencies', async () => {
     const app = createTestContainer()
     const llm = provideWithStatus(app, 'airi.llm')
     const speech = provideWithStatus(app, 'voice.speech-base')
@@ -183,7 +183,7 @@ describe('effective status', () => {
     speech.setStatus('ready')
     expect(stateOf(app, consumer).status).toBe('degraded')
 
-    // A service can make its effective status worse than its dependencies.
+    // A unit can make its effective status worse than its dependencies.
     speech.setStatus('unavailable', 'own problem')
     expect(stateOf(app, consumer)).toMatchObject({ status: 'unavailable', reason: 'own problem' })
   })

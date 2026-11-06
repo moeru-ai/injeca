@@ -1,5 +1,5 @@
-import type { ServiceNode } from '../graph/graph'
-import type { OwnerRecord, ServiceBlocker, ServiceExplanation, StatusCause } from '../types'
+import type { UnitNode } from '../graph/graph'
+import type { OwnerRecord, StatusCause, UnitBlocker, UnitExplanation } from '../types'
 
 import { resolveKey } from '../graph/resolvers/plain'
 import { resolutionOf } from '../graph/resolvers/resolvers'
@@ -7,38 +7,38 @@ import { causeOf } from '../graph/status'
 import { withoutUndefined } from '../helpers/without-undefined'
 
 /** The owners of conflicting declarations, in container order. The order of the registrations has no effect. */
-export function ownersOf(declarations: readonly ServiceNode[]): readonly OwnerRecord[] {
+export function ownersOf(declarations: readonly UnitNode[]): readonly OwnerRecord[] {
   return Object.freeze([...declarations].sort((a, b) => a.container.seq - b.container.seq).map(declaration => declaration.container.owner))
 }
 
-/** Explains one service from its current resolution data. It is a pure read. */
-export function explainService(service: ServiceNode): ServiceExplanation {
-  const blockers: ServiceBlocker[] = []
-  const phase = service.signals.phase()
+/** Explains one unit from its current resolution data. It is a pure read. */
+export function explainUnit(unit: UnitNode): UnitExplanation {
+  const blockers: UnitBlocker[] = []
+  const phase = unit.signals.phase()
 
   if (phase === 'failed')
-    blockers.push({ kind: 'failed', error: service.failure?.error })
+    blockers.push({ kind: 'failed', error: unit.failure?.error })
   if (phase === 'retrying') {
-    const previous = service.signals.instance()?.hookStates.get('start')?.previous
+    const previous = unit.signals.instance()?.hookStates.get('start')?.previous
     blockers.push({ kind: 'retrying', attempt: previous?.attempt ?? 1, ...withoutUndefined({ reason: previous?.reason }) })
   }
-  const rivals = service.signals.rivals()
+  const rivals = unit.signals.rivals()
   if (rivals.length > 0) {
-    const registration = service.template ?? service
-    blockers.push({ kind: 'conflict', key: service.name, owners: ownersOf([registration, ...rivals]) })
+    const registration = unit.template ?? unit
+    blockers.push({ kind: 'conflict', key: unit.name, owners: ownersOf([registration, ...rivals]) })
   }
-  if (!service.signals.active() && !service.perConsumer)
+  if (!unit.signals.active() && unit.instances === 'shared')
     blockers.push({ kind: 'not-started' })
 
-  for (const edge of service.edges) {
+  for (const edge of unit.edges) {
     if (edge.optional)
       continue
 
-    const resolution = resolutionOf(service, edge)
+    const resolution = resolutionOf(unit, edge)
     // A fallback edge that does not resolve names each candidate that a condition rejected.
     if (edge.fallback && resolution.kind !== 'resolved') {
       for (const keyName of edge.candidates) {
-        const candidate = resolveKey(service, keyName, edge)
+        const candidate = resolveKey(unit, keyName, edge)
         if (candidate.kind === 'rejected')
           blockers.push({ kind: 'rejected-provider', dependency: edge.name, key: candidate.provider.name, owner: candidate.provider.container.owner, metadata: candidate.provider.metadata })
       }
@@ -57,7 +57,7 @@ export function explainService(service: ServiceNode): ServiceExplanation {
         continue
       case 'resolved': {
         const status = resolution.provider.signals.effective()
-        // A running service keeps an unavailable dependency. Its own status reports it. Only a waiting service lists it as a blocker.
+        // A running unit keeps an unavailable dependency. Its own status reports it. Only a waiting unit lists it as a blocker.
         if (phase !== 'running' && status?.status === 'unavailable')
           blockers.push({ kind: 'unavailable-dependency', dependency: edge.name, key: resolution.provider.name, cause: causeOf(resolution.provider, status) })
         continue
@@ -71,16 +71,16 @@ export function explainService(service: ServiceNode): ServiceExplanation {
     }
   }
 
-  const status = service.signals.effective()
-  const successor = service.successor
+  const status = unit.signals.effective()
+  const successor = unit.successor
   return Object.freeze({
-    name: service.name,
-    kind: service.kind === 'invocation' ? 'invocation' : 'service',
-    owner: service.container.owner,
+    name: unit.name,
+    kind: unit.kind === 'invocation' ? 'invocation' : 'unit',
+    owner: unit.container.owner,
     phase,
     ...withoutUndefined({ status: status?.status, reason: status?.reason, cause: status?.cause }),
     blockers: Object.freeze(blockers),
-    ...withoutUndefined({ replacement: successor?.signals.present() ? explainService(successor) : undefined }),
+    ...withoutUndefined({ replacement: successor?.signals.present() ? explainUnit(successor) : undefined }),
   })
 }
 
@@ -97,7 +97,7 @@ function describeOwners(owners: readonly OwnerRecord[]): string {
   return owners.map(owner => JSON.stringify(owner)).join(', ')
 }
 
-function describeBlocker(blocker: ServiceBlocker): string {
+function describeBlocker(blocker: UnitBlocker): string {
   switch (blocker.kind) {
     case 'missing-provider':
       return `no provider for '${blocker.key}' (${blocker.dependency})`
@@ -114,7 +114,7 @@ function describeBlocker(blocker: ServiceBlocker): string {
     case 'conflict':
       return `the exclusive key '${blocker.key}' has more than one declaration: ${describeOwners(blocker.owners)}`
     case 'failed':
-      return 'the service failed'
+      return 'the unit failed'
     case 'retrying':
       return `its start hook requeued after attempt ${blocker.attempt}${blocker.reason === undefined ? '' : ` (${blocker.reason})`}`
     case 'not-started':
@@ -122,8 +122,8 @@ function describeBlocker(blocker: ServiceBlocker): string {
   }
 }
 
-/** Formats explanations as one line for each service. */
-export function describeExplanations(explanations: readonly ServiceExplanation[]): string {
+/** Formats explanations as one line for each unit. */
+export function describeExplanations(explanations: readonly UnitExplanation[]): string {
   return explanations
     .map((explanation) => {
       const reasons = explanation.blockers.map(describeBlocker)

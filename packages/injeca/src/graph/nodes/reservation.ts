@@ -2,32 +2,32 @@ import type { TransactionEntry, TransactionNode } from '../graph'
 
 import { batch } from '../../helpers/signals'
 import { addDeclaration, removeDeclaration } from '../resolvers/exclusive'
-import { createService } from './service'
+import { createUnit } from './unit'
 
 /**
  * Reserves the exclusive key of a transaction entry until the commit or the abort.
  *
  * The reservation is a declaration without a slot. Consumers cannot resolve it. An exclusive conflict counts it, so a provider of the key in another container of the resolution area goes to `conflict`.
- * The reservation of an exported key counts in the resolution area of the parent container, as the published service does.
- * A plain key needs no reservation. In the same container, `provide` checks the open transactions and fails with `duplicate-service`.
+ * The reservation of a parent-visible key counts in the resolution area of the parent container, as the published unit does.
+ * A plain key needs no reservation. In the same container, `provide` checks the open transactions and fails with `duplicate-unit`.
  */
 export function reserveKey(transaction: TransactionNode, entry: TransactionEntry): void {
   if (!entry.exclusive || entry.replace)
     return
-  // A `tx.provide` with `export` after a `tx.declare` moves the reservation to the resolution area of the parent container.
-  if (entry.reservation?.exported === entry.exported)
+  // A `tx.provide` with `visibility: 'parent'` after a `tx.declare` moves the reservation to the resolution area of the parent container.
+  if (entry.reservation?.visibility === entry.visibility)
     return
   releaseReservation(entry)
 
   batch(() => {
-    const reservation = createService({
+    const reservation = createUnit({
       container: transaction.container,
-      kind: 'service',
+      kind: 'unit',
       name: entry.name,
       edges: [],
       build: () => undefined,
       exclusive: true,
-      exported: entry.exported,
+      visibility: entry.visibility,
       phase: 'declared',
       transaction,
     })

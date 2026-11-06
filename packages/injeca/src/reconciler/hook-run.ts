@@ -1,5 +1,5 @@
-import type { HookState, InstanceNode, RawHookHandler, ServiceNode } from '../graph/graph'
-import type { Decision, HookRun, ServiceHook } from '../primitives/decision'
+import type { HookState, InstanceNode, RawHookHandler, UnitNode } from '../graph/graph'
+import type { Decision, HookRun, UnitHook } from '../primitives/decision'
 import type { TimeoutContext } from '../types'
 
 import { HookTimeoutError } from '../diagnostics/errors'
@@ -13,7 +13,7 @@ import { createDecide, defaultDecision, validateDecision } from '../primitives/d
 import { invokeUser } from './calls'
 import { recordSignalOrigin } from './reentry'
 
-function hookStateOf(instance: InstanceNode, hook: ServiceHook): HookState {
+function hookStateOf(instance: InstanceNode, hook: UnitHook): HookState {
   let state = instance.hookStates.get(hook)
   if (!state) {
     state = { attempt: 1, previous: undefined }
@@ -24,17 +24,17 @@ function hookStateOf(instance: InstanceNode, hook: ServiceHook): HookState {
 }
 
 /** A requeue keeps the attempt count. Any other decision resets it. */
-export function finishRun(instance: InstanceNode, hook: ServiceHook, decision: Decision): void {
+export function finishRun(instance: InstanceNode, hook: UnitHook, decision: Decision): void {
   const state = hookStateOf(instance, hook)
   state.previous = decision
   state.attempt = decision.kind === 'requeue' ? state.attempt + 1 : 1
 }
 
-export function recordDecision(service: ServiceNode, instance: InstanceNode, decision: Decision, ignored: boolean): void {
-  emitRecord(service.container, {
+export function recordDecision(unit: UnitNode, instance: InstanceNode, decision: Decision, ignored: boolean): void {
+  emitRecord(unit.container, {
     type: 'decision',
-    key: service.name,
-    owner: service.container.owner,
+    key: unit.name,
+    owner: unit.container.owner,
     instanceId: instance.id,
     hook: decision.hook,
     decision: decision.kind,
@@ -49,19 +49,19 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
  *
  * A failure with the reason of one of `signals` is not reported, because the callback only followed its abort.
  */
-export function reportLateFailure(service: ServiceNode, source: ServiceHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
+export function reportLateFailure(unit: UnitNode, source: UnitHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
   if (signals.some(signal => signal?.aborted && signal.reason === error))
     return
 
-  const callback = source === 'effect' ? `An effect disposer of '${service.name}'` : `The '${source}' hook of '${service.name}'`
-  service.container.api.logger.warn(`${callback} failed after injeca stopped waiting for it: ${messageOf(error)}`)
+  const callback = source === 'effect' ? `An effect disposer of '${unit.name}'` : `The '${source}' hook of '${unit.name}'`
+  unit.container.api.logger.warn(`${callback} failed after injeca stopped waiting for it: ${messageOf(error)}`)
 }
 
 /** Records the late decision of a hook run that injeca stopped waiting for. A late `fail` is reported with `reportLateFailure`. */
-export function recordLateDecision(service: ServiceNode, instance: InstanceNode, decision: Decision, signals: ReadonlyArray<AbortSignal | undefined>): void {
-  recordDecision(service, instance, decision, true)
+export function recordLateDecision(unit: UnitNode, instance: InstanceNode, decision: Decision, signals: ReadonlyArray<AbortSignal | undefined>): void {
+  recordDecision(unit, instance, decision, true)
   if (decision.kind === 'fail')
-    reportLateFailure(service, decision.hook, decision.error, signals)
+    reportLateFailure(unit, decision.hook, decision.error, signals)
 }
 
 /**
@@ -86,16 +86,16 @@ export function beginHookRun(instance: InstanceNode, timeout?: AbortSignal): { r
 
 /** Calls one handler with a new hook context. A throw becomes `fail`. A value that is not a decision counts as `undefined`. A decision from another run, or of a kind that the hook does not accept, becomes `fail` with `invalid-decision`. */
 export async function callHandler(
-  service: ServiceNode,
+  unit: UnitNode,
   instance: InstanceNode,
-  hook: ServiceHook,
+  hook: UnitHook,
   handler: RawHookHandler,
   runSignal: AbortSignal,
   extras: object,
   call: <T>(fn: () => T | Promise<T>) => Promise<T> = invokeUser,
 ): Promise<Decision> {
   const state = hookStateOf(instance, hook)
-  const run: HookRun = { service: service.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => service.container.runtime.clock.now() }
+  const run: HookRun = { unit: unit.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => unit.container.runtime.clock.now() }
   const hookContext = Object.freeze({
     decide: createDecide(run),
     attempt: run.attempt,
@@ -125,7 +125,7 @@ export interface RunHandlersOptions {
 }
 
 /** Runs the handlers of `hook` in order. It stops at the first decision that is not `handled`, unless `all` is set. */
-export async function runHandlers(service: ServiceNode, instance: InstanceNode, hook: ServiceHook, runSignal: AbortSignal, extras: object, options: RunHandlersOptions = {}): Promise<Decision[]> {
+export async function runHandlers(unit: UnitNode, instance: InstanceNode, hook: UnitHook, runSignal: AbortSignal, extras: object, options: RunHandlersOptions = {}): Promise<Decision[]> {
   const decisions: Decision[] = []
   const handlers = [...instance.hooks[hook]]
   for (let index = options.from ?? 0; index < handlers.length; index++) {
@@ -134,7 +134,7 @@ export async function runHandlers(service: ServiceNode, instance: InstanceNode, 
     if (options.progress)
       options.progress.index = index
 
-    const decision = await callHandler(service, instance, hook, handlers[index]!, runSignal, extras)
+    const decision = await callHandler(unit, instance, hook, handlers[index]!, runSignal, extras)
     decisions.push(decision)
     if (!options.all && decision.kind !== 'handled')
       break
@@ -149,15 +149,15 @@ export async function runHandlers(service: ServiceNode, instance: InstanceNode, 
  * The handler runs synchronously. For `start`, a value that is not a decision of this hook, a promise, or no handler gives `fail` with `hook-timeout`.
  * For `stop`, they give `handled` with the timeout as the reason, so that the stop continues and its callers do not fail. A throw gives `fail` for both hooks.
  */
-export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook: 'start' | 'stop', timeoutMs: number): Decision {
+export function decideTimeout(unit: UnitNode, instance: InstanceNode, hook: 'start' | 'stop', timeoutMs: number): Decision {
   const state = hookStateOf(instance, hook)
-  const run: HookRun = { service: service.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => service.container.runtime.clock.now() }
+  const run: HookRun = { unit: unit.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => unit.container.runtime.clock.now() }
   const decide = createDecide(run)
-  const error = new HookTimeoutError(`The '${hook}' hook of '${service.name}' did not settle within ${timeoutMs}ms.`, hook, timeoutMs)
-  emitRecord(service.container, {
+  const error = new HookTimeoutError(`The '${hook}' hook of '${unit.name}' did not settle within ${timeoutMs}ms.`, hook, timeoutMs)
+  emitRecord(unit.container, {
     type: 'timeout',
-    key: service.name,
-    owner: service.container.owner,
+    key: unit.name,
+    owner: unit.container.owner,
     instanceId: instance.id,
     hook,
     timeoutMs,
@@ -166,7 +166,7 @@ export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook
   })
 
   const fallback = (): Decision => hook === 'stop' ? decide.handled({ reason: error.message }) : decide.fail(error, { reason: error.message })
-  const handler = timeoutHandlerOf(service)
+  const handler = timeoutHandlerOf(unit)
   if (!handler)
     return fallback()
 
@@ -175,6 +175,6 @@ export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook
     return validateDecision(run, value) ?? fallback()
   }
   catch (handlerError) {
-    return decide.fail(handlerError, { reason: `The onTimeout handler of '${service.name}' threw.` })
+    return decide.fail(handlerError, { reason: `The onTimeout handler of '${unit.name}' threw.` })
   }
 }

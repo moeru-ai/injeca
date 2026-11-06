@@ -2,10 +2,10 @@
 name: injeca
 description: >-
   Guide for using injeca 0.3, a pure functional dependency injection library for TypeScript with
-  service lifecycles, run-time changes, status propagation, and child containers, inspired by
+  unit lifecycles, run-time changes, status propagation, and child containers, inspired by
   go.uber.org/fx and go.uber.org/dig. Use this skill when the user imports from 'injeca', mentions
-  injeca, wires services with start and stop hooks, manages startup and shutdown order, adds or
-  withdraws or replaces services at run time, uses transactions, exclusive keys, or graph queries,
+  injeca, wires units with start and stop hooks, manages startup and shutdown order, adds or
+  withdraws or replaces units at run time, uses transactions, exclusive keys, or graph queries,
   configures start retries, hook timeouts, and AbortSignal cancellation, builds a plugin system on a container, or migrates
   from the injeca 0.2 `lifecycle` key. Also use it when the user asks about class-free alternatives to
   tsyringe, inversify, or awilix.
@@ -17,15 +17,15 @@ metadata:
 
 # injeca
 
-Pure functional dependency injection with service lifecycles and run-time convergence. It works in Node.js, Electron, browsers, and workers.
+Pure functional dependency injection with unit lifecycles and run-time convergence. It works in Node.js, Electron, browsers, and workers.
 
 ## Core concepts
 
 1. **No classes, no decorators.** Everything is plain functions and objects.
 2. **One instance for each build.** `build` runs once for each instance. injeca caches the result.
 3. **Lifecycle in `build`.** `on('start')` and `on('stop')` in the build context. Dependents stop before their providers.
-4. **Convergence.** Services can appear, disappear, and change after `start()`. Dependents rebuild or move to the new instance.
-5. **Status.** A running service is `ready`, `degraded`, or `unavailable`. The effective status goes down the graph.
+4. **Convergence.** Units can appear, disappear, and change after `start()`. Dependents rebuild or move to the new instance.
+5. **Status.** A running unit is `ready`, `degraded`, or `unavailable`. The effective status goes down the graph.
 
 ## Global container
 
@@ -75,16 +75,16 @@ A child container uses `createContainer({ parent, owner })`. It resolves keys fr
 
 Logging: `logging: true` writes the lifecycle trace (`provide`, `invoke`, builds, hooks, `running`). It is off by default, and a child inherits it from its parent unless it sets its own. `logger.warn` always writes. To also silence the warnings in tests, pass `logger: createNoopLogger()`. The `enabled` option of 0.3 is removed.
 
-A child registration is invisible to the parent and to the siblings. `export: true` makes it a candidate in the area of the parent container too:
+A child registration is invisible to the parent and to the siblings (`visibility: 'local'`, the default). `visibility: 'parent'` makes it a candidate in the area of the parent container too:
 
 ```ts
-provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() }) // pluginB and the host can depend on it
+provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemoryKit() }) // pluginB and the host can depend on it
 ```
 
-- The registration stays in its container: owner, disposal, own dependencies, and phases. An export goes exactly one level up.
-- At each level, the registration of that container comes before the exports of its children. An export shadows a farther ancestor only while it runs.
-- `isolate: [key]` hides the exports of the siblings, but not the exports of the own children.
-- `perConsumer` and `tx.provide` take `export` too. Consumer instances live in the consumer container. Their `dependsOn` resolves from the exporting container.
+- The registration stays in its container: owner, disposal, own dependencies, and phases. It is visible exactly one level up.
+- At each level, the registration of that container comes before the parent-visible units of its children. A parent-visible unit shadows a farther ancestor only while it runs.
+- `createContainer({ local: [key] })` makes a key local to the container: it does not resolve from the ancestors. A local key hides the parent-visible units of the siblings, but not those of the own children.
+- `instances: 'per-container'` and `tx.provide` take `visibility` too. Consumer instances live in the consumer container. Their `dependsOn` resolves from the container of the registration.
 
 ## Hooks and decisions
 
@@ -129,10 +129,10 @@ injeca.provide('modules:camera', {
 })
 ```
 
-- A `start` requeue keeps the instance. The service is `retrying` and not available. The next attempt runs the handler that requeued again, not `build`.
+- A `start` requeue keeps the instance. The unit is `retrying` and not available. The next attempt runs the handler that requeued again, not `build`.
 - `after` is a fixed delay. `backoff` doubles `initial` up to `max`. `jitter` (0 to 1) uses `createContainer({ random })`, so tests stay deterministic.
-- injeca has no built-in delay, limit, or timeout. Without `maxAttempts`, retries continue. At the limit, the service stops, then goes to `failed`. `start()` or `replace()` moves it out.
-- A withdrawn required dependency or `stop()` cancels the wait and stops the service.
+- injeca has no built-in delay, limit, or timeout. Without `maxAttempts`, retries continue. At the limit, the unit stops, then goes to `failed`. `start()` or `replace()` moves it out.
+- A withdrawn required dependency or `stop()` cancels the wait and stops the unit.
 - A timeout records a `timeout` record in `observe`, then `onTimeout` decides. Without it, a `start` timeout gives `fail` with `hook-timeout`.
 - Without `onTimeout`, a `stop` timeout counts as `handled`. It ends a stuck cleanup with a `logger.warn` warning, and `stop()`, `dispose()`, and `withdraw()` resolve. Only `decide.fail()` from `onTimeout` fails them.
 - A late failure of a callback that injeca stopped waiting for goes to `logger.warn`. It is not an unhandled rejection.
@@ -154,11 +154,11 @@ await dispose(container, { signal: timeout(container, 5_000) })
 ```
 
 - A timeout reason has `name === 'TimeoutError'`. `resolve` and `waitFor` turn it into `WaitTimeoutError` (`wait-timeout`). `start` turns it into `StartTimeoutError` (`start-timeout`). Another reason rejects as it is.
-- `start`, `stop`, `dispose`, and `withdraw` stop only the wait. The services keep converging, and the cleanups keep running. `stop`, `dispose`, and `withdraw` send a `wait-aborted` record for each service that did not stop.
+- `start`, `stop`, `dispose`, and `withdraw` stop only the wait. The units keep converging, and the cleanups keep running. `stop`, `dispose`, and `withdraw` send a `wait-aborted` record for each unit that did not stop.
 - After an aborted `dispose`, the container stays in `disposing`. Call `dispose(container)` again to wait for the result.
 - An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
-- Calling dispose from a cleanup: pass the cleanup `signal`, for example `on('stop', async ({ signal }) => { await dispose(container, { signal }) })`. injeca knows the instance of each signal of builds, hooks, and invocations, also through `withTimeout`. While the teardown of that instance runs, the call warns, sends a `reentrant-call` record, and resolves at once. There is no `reentrant-dispose` error. This also applies to a cleanup of a parent service that holds an export of the disposed or stopped container, directly or through other services, for example a plugin host that disposes a plugin from its own `stop` hook.
-- The same applies to `withdraw({ signal })` from a cleanup of the withdrawn service, or of a dependent that holds it. A re-entrant `withdraw()` resolves `true`.
+- Calling dispose from a cleanup: pass the cleanup `signal`, for example `on('stop', async ({ signal }) => { await dispose(container, { signal }) })`. injeca knows the instance of each signal of builds, hooks, and invocations, also through `withTimeout`. While the teardown of that instance runs, the call warns, sends a `reentrant-call` record, and resolves at once. There is no `reentrant-dispose` error. This also applies to a cleanup of a parent unit that holds a parent-visible unit of the disposed or stopped container, directly or through other units, for example a plugin host that disposes a plugin from its own `stop` hook.
+- The same applies to `withdraw({ signal })` from a cleanup of the withdrawn unit, or of a dependent that holds it. A re-entrant `withdraw()` resolves `true`.
 - Tests: `manualClock()` and `drained(container)` from `injeca/testing` drive `timeout()` and policy timeouts without real time. Call `advance(ms)`, then await `drained(container)`.
 
 ## Run-time changes
@@ -169,8 +169,8 @@ await vision.withdraw() // dependents stop first. A stale registration returns f
 ```
 
 - Without a `dependency-change` handler, a dependent rebuilds when a dependency gets a new instance.
-- A rebuild of a running service has no gap. The new instance builds and starts while the old one serves. Then they swap in one batch, and the dependents get `dependency-change`.
-- A rebuild stops first only when a dependency of the old instance has no provider now. An invocation always stops first, then runs again. A failed new instance stops the old one and moves the service to `failed`.
+- A rebuild of a running unit has no gap. The new instance builds and starts while the old one serves. Then they swap in one batch, and the dependents get `dependency-change`.
+- A rebuild stops first only when a dependency of the old instance has no provider now. An invocation always stops first, then runs again. A failed new instance stops the old one and moves the unit to `failed`.
 - A withdrawn required dependency always stops the dependent.
 
 ### Replacement and transactions
@@ -188,7 +188,7 @@ tx.provide(characterKey, () => createCharacter())
 await tx.commit() // builds in dependency order, publishes in one batch, then runs the start hooks
 ```
 
-- `replace()` resolves `true` after the swap, and `false` for a stale registration. A failed new instance keeps the old one. A service in `stopping` rejects with `replace-while-stopping`.
+- `replace()` resolves `true` after the swap, and `false` for a stale registration. A failed new instance keeps the old one. A unit in `stopping` rejects with `replace-while-stopping`.
 - While the swap waits, `explain(key).replacement` shows the new instance with its phase and blockers.
 - A failed transaction build publishes nothing and runs no `start` hook. `tx.abort()` and a container disposal drop the transaction.
 
@@ -207,11 +207,11 @@ injeca.provide('voice:speech', {
 injeca.provide(llmKey, () => createLocalLlm()) // the build result must match LlmClient
 ```
 
-- `defineKey(name, { exclusive: true })` allows one provider in a resolution area. Two providers both go to `conflict` and run no code. When one leaves, the other converges. An export counts in the area of the parent, so two sibling exports of one exclusive key conflict.
+- `defineKey(name, { exclusive: true })` allows one provider in a resolution area. Two providers both go to `conflict` and run no code. When one leaves, the other converges. A parent-visible registration counts in the area of the parent, so two siblings that make one exclusive key visible to the parent conflict.
 - `where(key, ({ key, owner, metadata }) => boolean)` accepts a provider only when the condition returns `true`. It must be pure and synchronous.
 - `where(firstAvailable(a, b), condition)` filters each candidate. `firstAvailable(where(a, condition), b)` filters `a` only. The selection is the first available candidate that passes. `optional` combines in any order. `explain()` names each rejected candidate.
-- `perConsumer: true` runs `build` once for each consumer container, with `consumer` in the build context. Its `dependsOn` resolves from the container of the registration. `metadata` is a frozen record that conditions and graph queries read.
-- A required, an optional, or a `firstAvailable` edge to a `perConsumer` key demands the consumer instance, also when the key registers later.
+- `instances: 'per-container'` runs `build` once for each consumer container (the default is `'shared'`), with `consumer` in the build context. Its `dependsOn` resolves from the container of the registration. `metadata` is a frozen record that conditions and graph queries read.
+- A required, an optional, or a `firstAvailable` edge to a per-container key demands the consumer instance, also when the key registers later.
 
 ## Status and reading state
 
@@ -233,12 +233,12 @@ observe(container, record => {})
 import { graph } from 'injeca'
 
 const queries = graph(container)
-queries.services()
+queries.units()
 queries.dependencies(server)
 queries.dependents(config)
 queries.order()
 queries.cycles()
-queries.explain(server) // why a service is not running, and its pending replacement
+queries.explain(server) // why a unit is not running, and its pending replacement
 queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }, on a copy of the graph
 ```
 
@@ -258,18 +258,19 @@ else
 const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(container, 5_000) })
 ```
 
-- `waitFor` rejects with `ServiceFailedError` (`service-failed`) when the service fails.
+- `waitFor` rejects with `UnitFailedError` (`unit-failed`) when the unit fails.
 - `invoke()` returns `{ key, withdraw }`. Graph queries accept the key.
 
 ## Key rules
 
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
 2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
-3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start(container, { signal: timeout(container, ms) })` to fail with an explanation.
-4. A cleanup that calls `stop()` or `dispose()` of its own container, of an ancestor, or of a container whose service it holds, or `withdraw()` of a registration that waits for it, passes its `signal`. Then the call warns and resolves at once. Without the signal, after an `await`, only a configured `stop` timeout ends the cleanup.
-5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
-6. Use `replace()`, not `withdraw()` and `provide()`, to change a service without a gap.
+3. A missing provider or a cycle keeps a unit `pending`. `start()` waits. Use `start(container, { signal: timeout(container, ms) })` to fail with an explanation.
+4. A cleanup that calls `stop()` or `dispose()` of its own container, of an ancestor, or of a container whose unit it holds, or `withdraw()` of a registration that waits for it, passes its `signal`. Then the call warns and resolves at once. Without the signal, after an `await`, only a configured `stop` timeout ends the cleanup.
+5. Code that keeps a dependency must be a unit or an invocation, so that it converges. `resolve()` is for one-time code.
+6. Use `replace()`, not `withdraw()` and `provide()`, to change a unit without a gap.
 7. Do not use `Math.random` or real timers in retry and timeout tests. Pass `random` and the `clock` of `manualClock()` from `injeca/testing` to `createContainer`. `timeout(container, ms)` uses that clock.
+8. Use the 0.5 names. There are no aliases for the 0.4 names: `perConsumer: true` is `instances: 'per-container'`, `export: true` is `visibility: 'parent'`, `isolate` is `local`, `graph().services()` is `graph().units()`, and each `Service` type or error is a `Unit` type or error, for example `UnitFailedError` (`unit-failed`).
 
 ## Documentation
 

@@ -1,4 +1,4 @@
-import type { InstanceNode, ServiceNode } from '../graph/graph'
+import type { InstanceNode, UnitNode } from '../graph/graph'
 import type { DependencyChange, DependencyState } from '../types'
 
 import { resolutionOf } from '../graph/resolvers/resolvers'
@@ -14,10 +14,10 @@ export interface SnapshotEntry {
 export type Snapshot = ReadonlyMap<string, SnapshotEntry | undefined>
 
 /** The current snapshot of all dependencies. */
-export function currentSnapshot(service: ServiceNode): Map<string, SnapshotEntry | undefined> {
+export function currentSnapshot(unit: UnitNode): Map<string, SnapshotEntry | undefined> {
   const snapshot = new Map<string, SnapshotEntry | undefined>()
-  for (const edge of service.edges) {
-    const resolution = resolutionOf(service, edge)
+  for (const edge of unit.edges) {
+    const resolution = resolutionOf(unit, edge)
     snapshot.set(edge.name, resolution.kind === 'resolved'
       ? {
           state: Object.freeze({
@@ -34,9 +34,9 @@ export function currentSnapshot(service: ServiceNode): Map<string, SnapshotEntry
 }
 
 /** The difference between the last handled snapshot and `snapshot`. An identity change wins over a status change. */
-export function diffSnapshot(service: ServiceNode, handled: InstanceNode['handled'], snapshot: Snapshot): DependencyChange[] {
+export function diffSnapshot(unit: UnitNode, handled: InstanceNode['handled'], snapshot: Snapshot): DependencyChange[] {
   const changes: DependencyChange[] = []
-  for (const edge of service.edges) {
+  for (const edge of unit.edges) {
     const from = handled.get(edge.name)
     const to = snapshot.get(edge.name)?.state
     if (from?.instanceId !== to?.instanceId || (from && to && from.status !== to.status))
@@ -56,9 +56,9 @@ export function describeChanges(changes: readonly DependencyChange[]): string {
     .join(', ')
 }
 
-export function hookDependsOn(service: ServiceNode, snapshot: Snapshot): Readonly<Record<string, unknown>> {
+export function hookDependsOn(unit: UnitNode, snapshot: Snapshot): Readonly<Record<string, unknown>> {
   const dependsOn: Record<string, unknown> = {}
-  for (const edge of service.edges) {
+  for (const edge of unit.edges) {
     const entry = snapshot.get(edge.name)
     dependsOn[edge.name] = entry ? Object.freeze({ ...entry.state, value: entry.instance.value }) : undefined
   }
@@ -67,7 +67,7 @@ export function hookDependsOn(service: ServiceNode, snapshot: Snapshot): Readonl
 }
 
 /** Marks `snapshot` as handled and moves the bindings to its instances. */
-export function acceptSnapshot(service: ServiceNode, instance: InstanceNode, snapshot: Snapshot): void {
+export function acceptSnapshot(unit: UnitNode, instance: InstanceNode, snapshot: Snapshot): void {
   instance.extraHolds.clear()
   instance.handled = new Map([...snapshot].map(([name, entry]) => [name, entry?.state]))
   instance.bindings.clear()
@@ -75,5 +75,5 @@ export function acceptSnapshot(service: ServiceNode, instance: InstanceNode, sna
     if (entry)
       instance.bindings.set(name, entry.instance)
   }
-  batch(() => syncHolds(service, instance))
+  batch(() => syncHolds(unit, instance))
 }

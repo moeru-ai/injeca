@@ -1,4 +1,4 @@
-import type { OwnerRecord, ServiceStatus } from './service'
+import type { OwnerRecord, UnitStatus } from './unit'
 
 declare const providedType: unique symbol
 declare const optionalType: unique symbol
@@ -12,7 +12,7 @@ export const conditionBrand: unique symbol = Symbol('injeca.condition')
 export type DependencyMap = Record<string, any>
 
 /**
- * A typed identity for a service. `provide` and `defineKey` return one.
+ * A typed identity for a unit. `provide` and `defineKey` return one.
  */
 export interface ProvidedKey<Key, T, _D extends DependencyMap | undefined> {
   key: Key
@@ -31,7 +31,7 @@ export interface KeyOptions {
 }
 
 /** A frozen record on a registration. Resolution conditions and graph queries read it. */
-export type ServiceMetadata = Readonly<Record<string, unknown>>
+export type UnitMetadata = Readonly<Record<string, unknown>>
 
 /** The read-only information about a provider that a resolution condition gets. */
 export interface ProviderInfo {
@@ -39,7 +39,7 @@ export interface ProviderInfo {
   readonly key: string
   /** The owner record of the container of the provider. */
   readonly owner: OwnerRecord
-  readonly metadata: ServiceMetadata
+  readonly metadata: UnitMetadata
 }
 
 /** A resolution condition from `where`. It must be pure and synchronous. A thrown error counts as `false`. */
@@ -94,7 +94,7 @@ export type DependencyDeclarations = Record<string, DependencyDeclaration>
 /** The resolved value of an optional dependency. */
 export interface OptionalValue<T> {
   readonly value: T
-  readonly status: ServiceStatus
+  readonly status: UnitStatus
 }
 
 export type InferProvided<T>

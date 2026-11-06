@@ -1,16 +1,16 @@
 import type { WritableSignal } from '../../helpers/signals'
-import type { ContainerNode, Runtime, ServiceNode } from '../graph'
+import type { ContainerNode, Runtime, UnitNode } from '../graph'
 
 import { computed, signal } from 'alien-signals'
 
-import { areaOf } from './exports'
+import { areaOf } from './visibility'
 
-/** Tells whether `ancestor` is `container` or an ancestor of it, with no container in between that isolates `keyName`. */
+/** Tells whether `ancestor` is `container` or an ancestor of it, with no container in between that has `keyName` as a local key. */
 function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: string): boolean {
   for (let current: ContainerNode | undefined = container; current; current = current.parent) {
     if (current === ancestor)
       return true
-    if (current.isolated.has(keyName))
+    if (current.localKeys.has(keyName))
       return false
   }
 
@@ -19,69 +19,69 @@ function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: str
 
 /**
  * Tells whether two containers share a resolution area of `keyName`.
- * A resolution area is the container that has the key, with its descendants that do not isolate the key.
- * For an exported registration, the caller passes the parent container. See `areaOf`.
+ * A resolution area is the container that has the key, with its descendants that do not have the key as a local key.
+ * For a parent-visible registration, the caller passes the parent container. See `areaOf`.
  */
 export function sameArea(a: ContainerNode, b: ContainerNode, keyName: string): boolean {
   return reaches(a, b, keyName) || reaches(b, a, keyName)
 }
 
-/** The published services of `keyName` in all containers of the runtime. */
-export function declarationsOf(runtime: Runtime, keyName: string): WritableSignal<ReadonlySet<ServiceNode>> {
+/** The published units of `keyName` in all containers of the runtime. */
+export function declarationsOf(runtime: Runtime, keyName: string): WritableSignal<ReadonlySet<UnitNode>> {
   let declarations = runtime.declarations.get(keyName)
   if (!declarations) {
-    declarations = signal<ReadonlySet<ServiceNode>>(new Set())
+    declarations = signal<ReadonlySet<UnitNode>>(new Set())
     runtime.declarations.set(keyName, declarations)
   }
 
   return declarations
 }
 
-export function addDeclaration(service: ServiceNode): void {
-  const declarations = declarationsOf(service.container.runtime, service.name)
-  if (!declarations().has(service))
-    declarations(new Set([...declarations(), service]))
+export function addDeclaration(unit: UnitNode): void {
+  const declarations = declarationsOf(unit.container.runtime, unit.name)
+  if (!declarations().has(unit))
+    declarations(new Set([...declarations(), unit]))
 }
 
-export function removeDeclaration(service: ServiceNode): void {
-  const declarations = declarationsOf(service.container.runtime, service.name)
-  if (declarations().has(service))
-    declarations(new Set([...declarations()].filter(other => other !== service)))
+export function removeDeclaration(unit: UnitNode): void {
+  const declarations = declarationsOf(unit.container.runtime, unit.name)
+  if (declarations().has(unit))
+    declarations(new Set([...declarations()].filter(other => other !== unit)))
 }
 
-function sameList(a: readonly ServiceNode[], b: readonly ServiceNode[]): boolean {
-  return a.length === b.length && a.every((service, index) => service === b[index])
+function sameList(a: readonly UnitNode[], b: readonly UnitNode[]): boolean {
+  return a.length === b.length && a.every((unit, index) => unit === b[index])
 }
 
-const none: readonly ServiceNode[] = Object.freeze([])
+const none: readonly UnitNode[] = Object.freeze([])
 
 /**
- * Creates the conflict of a service: the other present declarations of its key in the same resolution area, when the key is exclusive.
+ * Creates the conflict of a unit: the other present declarations of its key in the same resolution area, when the key is exclusive.
  *
  * The result depends only on the set of declarations. The order of the registrations has no effect.
  * Only one registration of a key exists in one container, so a rival is always in another container.
- * An exported registration counts in the resolution area of its parent container. So two sibling exports of one exclusive key conflict, and an export conflicts with a registration of the parent.
- * A service of a `perConsumer` registration has no conflict of its own. It follows the conflict of its registration.
+ * A parent-visible registration counts in the resolution area of its parent container. So two parent-visible registrations of one exclusive key in sibling containers conflict, and a parent-visible registration conflicts with a registration of the parent.
+ * A unit of a per-container registration has no conflict of its own. It follows the conflict of its registration.
  */
-export function createRivals(service: ServiceNode): () => readonly ServiceNode[] {
-  if (service.template)
-    return () => service.template?.signals.rivals() ?? none
-  if (service.kind !== 'service')
+export function createRivals(unit: UnitNode): () => readonly UnitNode[] {
+  if (unit.template)
+    return () => unit.template?.signals.rivals() ?? none
+  if (unit.kind !== 'unit')
     return () => none
 
-  return computed<readonly ServiceNode[]>((previous) => {
-    const rivals = [...declarationsOf(service.container.runtime, service.name)()]
-      .filter(other => other.container !== service.container
+  return computed<readonly UnitNode[]>((previous) => {
+    const rivals = [...declarationsOf(unit.container.runtime, unit.name)()]
+      .filter(other => other.container !== unit.container
         && other.signals.present()
-        && (service.exclusive || other.exclusive)
-        && sameArea(areaOf(service), areaOf(other), service.name))
+        && (unit.exclusive || other.exclusive)
+        && sameArea(areaOf(unit), areaOf(other), unit.name))
       .sort((a, b) => a.seq - b.seq)
 
     return previous && sameList(previous, rivals) ? previous : rivals
   })
 }
 
-/** Tells whether the key of the service has more than one declaration in its resolution area. */
-export function inConflict(service: ServiceNode): boolean {
-  return service.signals.rivals().length > 0
+/** Tells whether the key of the unit has more than one declaration in its resolution area. */
+export function inConflict(unit: UnitNode): boolean {
+  return unit.signals.rivals().length > 0
 }

@@ -1,11 +1,11 @@
-import type { ContainerNode, Policy, Runtime, ServiceNode } from '../graph/graph'
+import type { ContainerNode, Policy, Runtime, UnitNode } from '../graph/graph'
 import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../types'
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
 import { BuildAfterDisposeError, InvalidArgumentError } from '../diagnostics/errors'
 import { createDefaultLogger } from '../diagnostics/logger'
-import { assertActive, nodeOf, readPolicy, registerNode, releaseService } from '../graph/nodes'
+import { assertActive, nodeOf, readPolicy, registerNode, releaseUnit } from '../graph/nodes'
 import { recordAbortedWait } from '../graph/observers'
 import { abortable, readSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
@@ -45,29 +45,29 @@ function readOwner(owner: unknown): OwnerRecord {
   return deepFreeze(copy as OwnerRecord)
 }
 
-function readIsolated(options: ContainerOptions): ReadonlySet<string> {
-  let isolate: unknown
+function readLocalKeys(options: ContainerOptions): ReadonlySet<string> {
+  let local: unknown
   try {
-    isolate = options.isolate
+    local = options.local
   }
   catch (error) {
-    throw new InvalidArgumentError('Cannot read the isolate option.', { cause: error })
+    throw new InvalidArgumentError('Cannot read the local option.', { cause: error })
   }
-  if (isolate === undefined)
+  if (local === undefined)
     return new Set()
-  if (!Array.isArray(isolate))
-    throw new InvalidArgumentError('The isolate option must be a list of keys or names.')
+  if (!Array.isArray(local))
+    throw new InvalidArgumentError('The local option must be a list of keys or names.')
 
-  return new Set(isolate.map((key: unknown) => {
+  return new Set(local.map((key: unknown) => {
     let name: unknown
     try {
       name = normalizeName(key as string)
     }
     catch (error) {
-      throw new InvalidArgumentError('Cannot read a key of the isolate option.', { cause: error })
+      throw new InvalidArgumentError('Cannot read a key of the local option.', { cause: error })
     }
     if (typeof name !== 'string' || name.length === 0)
-      throw new InvalidArgumentError('Each entry of the isolate option must be a key or a non-empty name.')
+      throw new InvalidArgumentError('Each entry of the local option must be a key or a non-empty name.')
 
     return name
   }))
@@ -142,7 +142,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     assertActive(parent, 'create a child container')
 
   const owner = readOwner(options.owner)
-  const isolated = readIsolated(options)
+  const localKeys = readLocalKeys(options)
   const policy = readContainerPolicy(options)
   const logging = readLogging(options, parent)
   const logger = options.logger ?? parent?.api.logger ?? createDefaultLogger()
@@ -161,13 +161,13 @@ export function createContainer(options: ContainerOptions = {}): Container {
     parent,
     runtime,
     children: new Set(),
-    services: new Set(),
+    units: new Set(),
     signals: {
       started: signal(false),
       slots: new Map(),
-      exports: new Map(),
+      childUnits: new Map(),
     },
-    isolated,
+    localKeys,
     policy,
     listeners: new Map(),
     transactions: new Set(),
@@ -216,7 +216,7 @@ export function effect(container: Container, setup: EffectSetup): void {
 /**
  * Starts the disposal of `container` and of its descendants. The whole subtree enters `disposing` at once, so nothing new registers in it.
  *
- * The child containers dispose first, one after the other, in reverse creation order. Then the services of the container withdraw in one batch, so that dependents stop without a rebuild.
+ * The child containers dispose first, one after the other, in reverse creation order. Then the units of the container withdraw in one batch, so that dependents stop without a rebuild.
  * Then the effects of the container run in reverse order. `after` delays the work until an earlier sibling completed its disposal.
  */
 function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['frame'], after?: Promise<unknown>): Promise<void> {
@@ -241,19 +241,19 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
     return disposal
   })
 
-  const withdrawn = new Set<ServiceNode>()
-  const withdrawServices = (): void => untracked(() => batch(() => {
-    for (const service of container.services) {
-      if (service.signals.present()) {
-        releaseService(service)
-        withdrawn.add(service)
+  const withdrawn = new Set<UnitNode>()
+  const withdrawUnits = (): void => untracked(() => batch(() => {
+    for (const unit of container.units) {
+      if (unit.signals.present()) {
+        releaseUnit(unit)
+        withdrawn.add(unit)
       }
     }
   }))
-  // Without a child or an earlier sibling, the services withdraw in the caller's batch.
+  // Without a child or an earlier sibling, the units withdraw in the caller's batch.
   const immediate = after === undefined && children.length === 0
   if (immediate)
-    withdrawServices()
+    withdrawUnits()
 
   container.disposal = context.run(frame, async () => {
     const errors: unknown[] = []
@@ -269,12 +269,12 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
       }
     }
     if (!immediate)
-      withdrawServices()
+      withdrawUnits()
 
-    for (const service of [...container.services]) {
-      const serviceErrors = await service.withdrawal.promise
-      if (withdrawn.has(service))
-        errors.push(...serviceErrors)
+    for (const unit of [...container.units]) {
+      const unitErrors = await unit.withdrawal.promise
+      if (withdrawn.has(unit))
+        errors.push(...unitErrors)
     }
 
     for (const disposer of container.effects.splice(0).reverse()) {
@@ -315,16 +315,16 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
 export interface DisposeOptions {
   /**
    * Ends the wait when the signal aborts, and rejects with the reason. The disposal continues in the background. There is no default.
-   * Each service that did not stop yet gets a `wait-aborted` record in the observe stream.
+   * Each unit that did not stop yet gets a `wait-aborted` record in the observe stream.
    */
   signal?: AbortSignal
 }
 
-/** The services of `container` and of its descendants that did not finish their withdrawal. */
-function unfinishedServices(container: ContainerNode): ServiceNode[] {
+/** The units of `container` and of its descendants that did not finish their withdrawal. */
+function unfinishedUnits(container: ContainerNode): UnitNode[] {
   return [
-    ...[...container.services].filter(service => service.kind !== 'resolver' && service.signals.phase() !== 'withdrawn'),
-    ...[...container.children].flatMap(unfinishedServices),
+    ...[...container.units].filter(unit => unit.kind !== 'resolver' && unit.signals.phase() !== 'withdrawn'),
+    ...[...container.children].flatMap(unfinishedUnits),
   ]
 }
 
@@ -334,7 +334,7 @@ function unfinishedServices(container: ContainerNode): ServiceNode[] {
  * One error keeps its identity. More than one error becomes an `AggregateError`. A second call from outside without a signal gets the same promise.
  *
  * A call from the cleanup chain of the container or of a descendant cannot wait, because the disposal waits for that cleanup.
- * The same is true for a cleanup of a service that holds a service of the subtree, directly or through other instances, or a consumer service of a `perConsumer` registration of it.
+ * The same is true for a cleanup of a unit that holds a unit of the subtree, directly or through other instances, or a consumer unit of a per-container registration of it.
  * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves at once. The disposal continues.
  *
  * When `options.signal` aborts, the call rejects with the reason and stops waiting. The disposal continues: the container stays in `disposing`, and calls on it fail with `build-after-dispose`.
@@ -362,7 +362,7 @@ export function dispose(container: Container, options?: DisposeOptions): Promise
   }
 
   return abortable(disposal, abortSignal, (reason) => {
-    recordAbortedWait(unfinishedServices(node), 'dispose', reason)
+    recordAbortedWait(unfinishedUnits(node), 'dispose', reason)
     return reason
   })
 }

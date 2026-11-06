@@ -1,13 +1,13 @@
-import type { ServiceExplanation } from '../types/service'
+import type { UnitExplanation } from '../types/unit'
 
 export type InjecaErrorCode
   = | 'build-after-dispose'
-    | 'duplicate-service'
+    | 'duplicate-unit'
     | 'hook-outside-build'
     | 'hook-timeout'
     | 'invalid-argument'
     | 'invalid-decision'
-    | 'service-failed'
+    | 'unit-failed'
     | 'replace-while-stopping'
     | 'stale-registration'
     | 'start-timeout'
@@ -32,16 +32,16 @@ export class InjecaError extends Error {
 }
 
 /** A started container already has a current registration for the key. */
-export class DuplicateServiceError extends InjecaError {
-  declare readonly code: 'duplicate-service'
+export class DuplicateUnitError extends InjecaError {
+  declare readonly code: 'duplicate-unit'
 
   constructor(message: string, options?: InjecaErrorOptions) {
-    super('duplicate-service', message, options)
-    this.name = 'DuplicateServiceError'
+    super('duplicate-unit', message, options)
+    this.name = 'DuplicateUnitError'
   }
 }
 
-/** A registration is no longer the current registration of its service. */
+/** A registration is no longer the current registration of its unit. */
 export class StaleRegistrationError extends InjecaError {
   declare readonly code: 'stale-registration'
 
@@ -81,7 +81,7 @@ export class HookOutsideBuildError extends InjecaError {
   }
 }
 
-/** A transaction commit found a declared service without `provide`. */
+/** A transaction commit found a declared unit without `provide`. */
 export class TransactionIncompleteError extends InjecaError {
   declare readonly code: 'transaction-incomplete'
 
@@ -105,7 +105,7 @@ export class HookTimeoutError extends InjecaError {
   }
 }
 
-/** `replace` was called on a service in `stopping`. */
+/** `replace` was called on a unit in `stopping`. */
 export class ReplaceWhileStoppingError extends InjecaError {
   declare readonly code: 'replace-while-stopping'
 
@@ -115,28 +115,28 @@ export class ReplaceWhileStoppingError extends InjecaError {
   }
 }
 
-/** `start()` did not reach `running` for every service before its configured timeout. */
+/** `start()` did not reach `running` for every unit before its configured timeout. */
 export class StartTimeoutError extends InjecaError {
   declare readonly code: 'start-timeout'
-  /** One entry for each service or invocation that is not `running`. */
-  readonly explanations: readonly ServiceExplanation[]
+  /** One entry for each unit or invocation that is not `running`. */
+  readonly explanations: readonly UnitExplanation[]
 
-  constructor(message: string, explanations: readonly ServiceExplanation[], options?: InjecaErrorOptions) {
+  constructor(message: string, explanations: readonly UnitExplanation[], options?: InjecaErrorOptions) {
     super('start-timeout', message, options)
     this.name = 'StartTimeoutError'
     this.explanations = explanations
   }
 }
 
-/** `waitFor()` found the service in `failed`, or waiting for a required provider in `failed`. `cause` is the failure. */
-export class ServiceFailedError extends InjecaError {
-  declare readonly code: 'service-failed'
+/** `waitFor()` found the unit in `failed`, or waiting for a required provider in `failed`. `cause` is the failure. */
+export class UnitFailedError extends InjecaError {
+  declare readonly code: 'unit-failed'
   /** The key name that the caller waited for. */
   readonly key: string
 
   constructor(message: string, key: string, options?: InjecaErrorOptions) {
-    super('service-failed', message, options)
-    this.name = 'ServiceFailedError'
+    super('unit-failed', message, options)
+    this.name = 'UnitFailedError'
     this.key = key
   }
 }

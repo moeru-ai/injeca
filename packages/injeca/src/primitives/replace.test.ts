@@ -8,7 +8,7 @@ import { graph, provide, resolve, start, stop, timeout } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, trackedController } from '../testing/helpers'
 
 describe('replace', () => {
-  it('does not let a stale registration replace a newer service (design test 1)', async () => {
+  it('does not let a stale registration replace a newer unit (design test 1)', async () => {
     const app = createTestContainer()
     const first = provide(app, 'airi.llm', () => 'first')
     const second = provide(app, 'airi.llm', () => 'second')
@@ -21,7 +21,7 @@ describe('replace', () => {
     await expect(second.replace(() => 'after withdraw')).resolves.toBe(false)
   })
 
-  it('replaces an unavailable service. The new instance is ready after start, and dependents return to ready (design test 24)', async () => {
+  it('replaces an unavailable unit. The new instance is ready after start, and dependents return to ready (design test 24)', async () => {
     const app = createTestContainer()
     let setStatus: BuildContext['setStatus'] = () => {}
     const llm = provide(app, 'airi.llm', (context) => {
@@ -176,7 +176,7 @@ describe('replace', () => {
     expect(stateOf(app, 'voice.slow').phase).toBe('running')
   })
 
-  it('fails with replace-while-stopping for a service in stopping (design test 27)', async () => {
+  it('fails with replace-while-stopping for a unit in stopping (design test 27)', async () => {
     const app = createTestContainer()
     const holdGate = deferred()
     const llm = provide(app, 'airi.llm', () => 'llm')
@@ -199,7 +199,7 @@ describe('replace', () => {
     await stopped
   })
 
-  it('replaces a service that does not run at once', async () => {
+  it('replaces a unit that does not run at once', async () => {
     const app = createTestContainer()
     const build = vi.fn(() => 'new')
     const llm = provide(app, 'airi.llm', {
@@ -298,9 +298,9 @@ describe('replace with a signal', () => {
     expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
   })
 
-  it('cancels a pending perConsumer replacement, and keeps the old consumer services', async () => {
+  it('cancels a pending per-container replacement, and keeps the old consumer units', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    const client = provide(root, 'host.client', { perConsumer: true, build: () => 'v1' })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
     const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
     await start(root)
     await start(extension)

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   BuildAfterDisposeError,
-  DuplicateServiceError,
+  DuplicateUnitError,
   HookOutsideBuildError,
   InvalidArgumentError,
   StartTimeoutError,
@@ -13,7 +13,7 @@ import { createContainer, defineKey, dispose, effect, invoke, optional, provide,
 import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController, warningLogger } from '../testing/helpers'
 
 describe('start and stop', () => {
-  it('builds a service only after its required dependencies run', async () => {
+  it('builds a unit only after its required dependencies run', async () => {
     const app = createTestContainer()
     // The gate holds the start hook of llm, so that the test can check the phases while llm is starting.
     const llmStartGate = deferred()
@@ -128,7 +128,7 @@ describe('start and stop', () => {
   })
 
   // Design test 32.
-  it('builds and starts a service that is provided after start()', async () => {
+  it('builds and starts a unit that is provided after start()', async () => {
     const app = createTestContainer()
     const startHook = vi.fn()
     const config = provide(app, 'config', () => 'config')
@@ -199,7 +199,7 @@ describe('start and stop', () => {
     expect(seen).toEqual(['first', 'second'])
   })
 
-  it('rejects start() with the build error, and tries the failed service again on the next start()', async () => {
+  it('rejects start() with the build error, and tries the failed unit again on the next start()', async () => {
     const app = createTestContainer()
     const error = new Error('boom')
     const disposer = vi.fn()
@@ -280,12 +280,12 @@ describe('registrations', () => {
     expect(firstStart).not.toHaveBeenCalled()
   })
 
-  it('throws duplicate-service for a second provide of the same name after start()', async () => {
+  it('throws duplicate-unit for a second provide of the same name after start()', async () => {
     const app = createTestContainer()
     const first = provide(app, 'config', () => 'first')
     await start(app)
 
-    expect(() => provide(app, 'config', () => 'second')).toThrow(DuplicateServiceError)
+    expect(() => provide(app, 'config', () => 'second')).toThrow(DuplicateUnitError)
 
     await first.withdraw()
     provide(app, 'config', () => 'second')
@@ -293,7 +293,7 @@ describe('registrations', () => {
   })
 
   // Design test 1.
-  it('does not let a stale registration withdraw a newer service', async () => {
+  it('does not let a stale registration withdraw a newer unit', async () => {
     const app = createTestContainer()
     await start(app)
 
@@ -481,7 +481,7 @@ describe('resolve', () => {
     await expect(resolved).resolves.toEqual({ slow: { value: 'slow', status: 'ready' }, broken: undefined })
   })
 
-  it('resolves dependencies without start(), and builds each service once', async () => {
+  it('resolves dependencies without start(), and builds each unit once', async () => {
     const app = createTestContainer()
     const database = provide(app, 'database', () => ({ url: 'memory://' }))
     const modelBuild = vi.fn(({ dependsOn }: BuildContext<{ database: { url: string } }>) => ({ dbUrl: dependsOn.database.url, name: 'User' }))
@@ -672,7 +672,7 @@ describe('build context and hooks', () => {
     await expect(start(app)).rejects.toBe(error)
   })
 
-  it('parks the service when start returns stop, and builds it again only in a new epoch', async () => {
+  it('parks the unit when start returns stop, and builds it again only in a new epoch', async () => {
     const app = createTestContainer()
     const build = vi.fn(() => 'speech')
     const stopHook = vi.fn()
@@ -695,7 +695,7 @@ describe('build context and hooks', () => {
     expect(build).toHaveBeenCalledTimes(1)
     expect(stopHook).toHaveBeenCalledTimes(1)
 
-    // A new dependency instance is a new epoch. The service builds again.
+    // A new dependency instance is a new epoch. The unit builds again.
     stopOnStart = false
     await llm.withdraw()
     provide(app, 'airi.llm', () => 'llm 2')
@@ -877,7 +877,7 @@ describe('child containers', () => {
 })
 
 describe('dispose', () => {
-  it('withdraws services, disposes child containers, then runs container effects in reverse order', async () => {
+  it('withdraws units, disposes child containers, then runs container effects in reverse order', async () => {
     const parent = createTestContainer({ owner: { kind: 'parent' } })
     const child = createTestContainer({ parent, owner: { kind: 'child' } })
     const order: string[] = []
@@ -893,7 +893,7 @@ describe('dispose', () => {
     })
     const llm = provide(parent, 'airi.llm', ({ on }) => {
       on('stop', () => {
-        order.push('parent service stop')
+        order.push('parent unit stop')
       })
       return 'llm'
     })
@@ -901,7 +901,7 @@ describe('dispose', () => {
       dependsOn: { llm },
       build: ({ on }) => {
         on('stop', () => {
-          order.push('child service stop')
+          order.push('child unit stop')
         })
         return 'speech'
       },
@@ -910,13 +910,13 @@ describe('dispose', () => {
     await start(child)
 
     await dispose(parent)
-    // The child container disposes first, with its effects (G11). Then the parent services stop. The parent effects run last, in reverse order.
-    expect(order).toEqual(['child service stop', 'child effect', 'parent service stop', 'parent effect 2', 'parent effect 1'])
+    // The child container disposes first, with its effects (G11). Then the parent units stop. The parent effects run last, in reverse order.
+    expect(order).toEqual(['child unit stop', 'child effect', 'parent unit stop', 'parent effect 2', 'parent effect 1'])
     expect(() => provide(parent, 'airi.llm', () => 'llm')).toThrow(BuildAfterDisposeError)
     expect(() => createTestContainer({ parent: child })).toThrow(BuildAfterDisposeError)
   })
 
-  it('disposes child containers in reverse creation order, each one with its effects, before the parent services (G11)', async () => {
+  it('disposes child containers in reverse creation order, each one with its effects, before the parent units (G11)', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     await start(root)
     const session = createTestContainer({ parent: root, owner: { kind: 'session' } })
@@ -990,7 +990,7 @@ describe('dispose', () => {
   it('collects more than one error into an AggregateError, and runs every cleanup', async () => {
     const app = createTestContainer()
     const child = createTestContainer({ parent: app })
-    const serviceError = new Error('stop failed')
+    const unitError = new Error('stop failed')
     const childError = new Error('child effect failed')
     const effectError = new Error('effect failed')
     const remaining = vi.fn()
@@ -1003,15 +1003,15 @@ describe('dispose', () => {
       throw childError
     })
     provide(app, 'airi.llm', ({ on }) => {
-      on('stop', ({ decide }) => decide.fail(serviceError))
+      on('stop', ({ decide }) => decide.fail(unitError))
       return 'llm'
     })
     await start(app)
 
     const result = await dispose(app).catch((error: unknown) => error)
     expect(result).toBeInstanceOf(AggregateError)
-    // The errors keep the order of the disposal: the child container first, then the services, then the effects (G11).
-    expect((result as AggregateError).errors).toEqual([childError, serviceError, effectError])
+    // The errors keep the order of the disposal: the child container first, then the units, then the effects (G11).
+    expect((result as AggregateError).errors).toEqual([childError, unitError, effectError])
     expect(remaining).toHaveBeenCalledTimes(1)
   })
 

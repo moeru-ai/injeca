@@ -1,12 +1,12 @@
-import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode, TransactionNode } from '../graph/graph'
+import type { ContainerNode, RegistrationNode, TransactionNode, UnitDefinition, UnitNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, DependencyMap, ProvidedKey, ProvideOption, ProvideOptionObject, ProvideOptionWithKeys, Registration, ResolveDependencyDeclaration } from '../types'
 
 import ErrorStackParser from 'error-stack-parser'
 
 import { nanoid } from 'nanoid'
 
-import { DuplicateServiceError, InvalidArgumentError } from '../diagnostics/errors'
-import { assertActive, createRegistration, createService, nodeOf, publishService, readDefinition, releaseService, reservedBy } from '../graph/nodes'
+import { DuplicateUnitError, InvalidArgumentError } from '../diagnostics/errors'
+import { assertActive, createRegistration, createUnit, nodeOf, publishUnit, readDefinition, releaseUnit, reservedBy } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { batch, untracked } from '../helpers/signals'
@@ -65,65 +65,65 @@ function autoName(stackIndex: number, nameOrOption: ProvideNameOrOption, option:
 }
 
 /**
- * Throws `duplicate-service` when a started container already has a registration for `name`,
+ * Throws `duplicate-unit` when a started container already has a registration for `name`,
  * or when an open transaction of the container, other than `except`, declares or provides `name`.
  */
 export function assertNoDuplicate(container: ContainerNode, name: string, except?: TransactionNode): void {
   if (slotOf(container, name)() && container.signals.started())
-    throw new DuplicateServiceError(`The started container already has a registration for '${name}'.`)
+    throw new DuplicateUnitError(`The started container already has a registration for '${name}'.`)
   if (reservedBy(container.transactions, name, except))
-    throw new DuplicateServiceError(`An open transaction of the container reserves '${name}'.`)
+    throw new DuplicateUnitError(`An open transaction of the container reserves '${name}'.`)
 }
 
 /**
- * Publishes `service` as the current registration of its key. Call it inside a batch.
+ * Publishes `unit` as the current registration of its key. Call it inside a batch.
  * Before `start()`, a second provide of the same name replaces the first registration, as in 0.2.
  */
-export function publishRegistration(container: ContainerNode, service: ServiceNode): void {
-  const previous = slotOf(container, service.name)()
+export function publishRegistration(container: ContainerNode, unit: UnitNode): void {
+  const previous = slotOf(container, unit.name)()
   if (previous) {
-    releaseService(previous)
+    releaseUnit(previous)
     emitRecord(container, {
       type: 'registration-replaced',
-      key: service.name,
+      key: unit.name,
       owner: container.owner,
       instanceId: previous.signals.instance()?.id,
-      reason: `A second provide of '${service.name}' replaced the registration before start().`,
+      reason: `A second provide of '${unit.name}' replaced the registration before start().`,
     })
   }
 
-  publishService(service)
+  publishUnit(unit)
 }
 
-/** Creates the service of one registration. It is not published yet. */
-export function serviceOf(container: ContainerNode, name: string, definition: ServiceDefinition, exclusive: boolean, extra: Pick<Parameters<typeof createService>[0], 'phase' | 'transaction' | 'registration'> = {}): ServiceNode {
-  const service = createService({
+/** Creates the unit of one registration. It is not published yet. */
+export function unitOf(container: ContainerNode, name: string, definition: UnitDefinition, exclusive: boolean, extra: Pick<Parameters<typeof createUnit>[0], 'phase' | 'transaction' | 'registration'> = {}): UnitNode {
+  const unit = createUnit({
     container,
-    kind: 'service',
+    kind: 'unit',
     name,
     edges: definition.edges,
     build: definition.build,
     metadata: definition.metadata,
     policy: definition.policy,
     exclusive,
-    exported: definition.exported,
-    perConsumer: definition.perConsumer,
+    visibility: definition.visibility,
+    instances: definition.instances,
     ...extra,
   })
-  container.services.add(service)
+  container.units.add(unit)
 
-  return service
+  return unit
 }
 
-/** Makes the service of one `provide` call the current registration of its key. */
-function register(container: ContainerNode, name: string, definition: ServiceDefinition, exclusive: boolean): RegistrationNode {
+/** Makes the unit of one `provide` call the current registration of its key. */
+function register(container: ContainerNode, name: string, definition: UnitDefinition, exclusive: boolean): RegistrationNode {
   assertNoDuplicate(container, name)
 
   const registration = createRegistration(container, name, exclusive)
   batch(() => {
-    const service = serviceOf(container, name, definition, exclusive, { registration })
-    publishRegistration(container, service)
-    registration.current = service
+    const unit = unitOf(container, name, definition, exclusive, { registration })
+    publishRegistration(container, unit)
+    registration.current = unit
   })
 
   return registration
@@ -156,8 +156,8 @@ export function provideIn(container: Container, stackIndex: number, nameOrOption
 /**
  * Registers a provider and returns its typed key with `withdraw()` and `replace()`.
  *
- * Before `start()`, a second provide of the same name replaces the first registration. After `start()`, it throws `duplicate-service`.
- * After `start()`, a new service builds and starts when its dependencies are available.
+ * Before `start()`, a second provide of the same name replaces the first registration. After `start()`, it throws `duplicate-unit`.
+ * After `start()`, a new unit builds and starts when its dependencies are available.
  */
 export function provide<T, Key extends string, Deps extends DependencyDeclarations>(container: Container, name: Key, option: ProvideOptionWithKeys<T, Deps>): Registration<Key, T, ResolveDependencyDeclaration<Deps>>
 export function provide<T, Key extends string, Deps extends DependencyDeclarations>(container: Container, option: ProvideOptionWithKeys<T, Deps> & { autoNameStackIndex?: number }): Registration<Key, T, ResolveDependencyDeclaration<Deps>>

@@ -1,20 +1,20 @@
-import type { DecisionKind, ServiceHook } from '../primitives/decision'
-import type { OwnerRecord, ServicePhase, ServiceStatus, StatusCause } from './service'
+import type { DecisionKind, UnitHook } from '../primitives/decision'
+import type { OwnerRecord, StatusCause, UnitPhase, UnitStatus } from './unit'
 
 export interface ObserveRecordBase {
-  /** The key name of the service, or the name of the invocation. */
+  /** The key name of the unit, or the name of the invocation. */
   readonly key: string
-  /** The owner record of the container of the service. */
+  /** The owner record of the container of the unit. */
   readonly owner: OwnerRecord
   readonly instanceId: string | undefined
   readonly reason?: string
 }
 
-/** A service moved to another phase. A replayed record has no `from`. */
+/** A unit moved to another phase. A replayed record has no `from`. */
 export interface PhaseObserveRecord extends ObserveRecordBase {
   readonly type: 'phase'
-  readonly from: ServicePhase | undefined
-  readonly to: ServicePhase
+  readonly from: UnitPhase | undefined
+  readonly to: UnitPhase
   /** The decision that caused the move, when a decision caused it. */
   readonly decision?: DecisionKind
 }
@@ -22,15 +22,15 @@ export interface PhaseObserveRecord extends ObserveRecordBase {
 /** The effective status of a running instance changed. A replayed record, or the first status of an instance, has no `from`. */
 export interface StatusObserveRecord extends ObserveRecordBase {
   readonly type: 'status'
-  readonly from: ServiceStatus | undefined
-  readonly to: ServiceStatus
+  readonly from: UnitStatus | undefined
+  readonly to: UnitStatus
   readonly cause?: StatusCause
 }
 
 /** A hook returned a decision. `ignored` is `true` when injeca did not apply it. */
 export interface DecisionObserveRecord extends ObserveRecordBase {
   readonly type: 'decision'
-  readonly hook: ServiceHook
+  readonly hook: UnitHook
   readonly decision: DecisionKind
   readonly attempt: number
   readonly ignored: boolean
@@ -63,13 +63,13 @@ export interface ErrorObserveRecord extends ObserveRecordBase {
 }
 
 /**
- * The `signal` of `stop()`, `dispose()`, or `withdraw()` aborted before this service stopped. The call stopped waiting. The cleanups of the service keep running.
+ * The `signal` of `stop()`, `dispose()`, or `withdraw()` aborted before this unit stopped. The call stopped waiting. The cleanups of the unit keep running.
  * `phase` is the phase at the abort. `abortReason` is the reason of the signal.
  */
 export interface WaitAbortedObserveRecord extends ObserveRecordBase {
   readonly type: 'wait-aborted'
   readonly call: 'stop' | 'dispose' | 'withdraw'
-  readonly phase: ServicePhase
+  readonly phase: UnitPhase
   readonly reason: string
   readonly abortReason: unknown
 }
@@ -77,7 +77,7 @@ export interface WaitAbortedObserveRecord extends ObserveRecordBase {
 /**
  * A cleanup called `stop()` or `dispose()` of its own container, or of an ancestor, or `withdraw()` of a registration that waits for that cleanup.
  * The wait includes that cleanup, so injeca resolved the call at once. The action continues.
- * `key` is the service of the cleanup, or `''` for a container effect.
+ * `key` is the unit of the cleanup, or `''` for a container effect.
  */
 export interface ReentrantCallObserveRecord extends ObserveRecordBase {
   readonly type: 'reentrant-call'

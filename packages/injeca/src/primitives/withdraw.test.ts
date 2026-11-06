@@ -112,7 +112,7 @@ describe('a re-entrant withdraw', () => {
     expect(warnings).toEqual([expect.stringContaining('called withdraw()')])
   })
 
-  it('waits for a signal of a service that the withdrawal does not wait for', async () => {
+  it('waits for a signal of a unit that the withdrawal does not wait for', async () => {
     const { logger, warnings } = warningLogger()
     const app = createTestContainer({ logger })
     const gate = deferred()
@@ -143,12 +143,12 @@ describe('a re-entrant withdraw', () => {
   })
 })
 
-describe('a stop hook that withdraws its exports, then disposes its container', () => {
-  it('withdraws the export, and the stop and the disposal resolve', async () => {
+describe('a stop hook that withdraws its parent-visible units, then disposes its container', () => {
+  it('withdraws the parent-visible unit, and the stop and the disposal resolve', async () => {
     const { logger, warnings } = warningLogger()
     const app = createTestContainer({ logger })
     const plugin = createTestContainer({ parent: app, owner: { plugin: 'weather' }, logger })
-    const tool = provide(plugin, 'plugin.tool', { export: true, build: () => 'tool' })
+    const tool = provide(plugin, 'plugin.tool', { visibility: 'parent', build: () => 'tool' })
     let host: Promise<void> | undefined
     provide(plugin, 'plugin.host', ({ on }) => {
       on('stop', async ({ signal }) => {

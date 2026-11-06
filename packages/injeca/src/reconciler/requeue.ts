@@ -1,4 +1,4 @@
-import type { InstanceNode, ServiceNode, StopIntent } from '../graph/graph'
+import type { InstanceNode, StopIntent, UnitNode } from '../graph/graph'
 import type { RequeueDecision } from '../primitives/decision'
 
 import { maxAttemptsOf } from '../graph/nodes'
@@ -26,28 +26,28 @@ export function requeueDelay(decision: RequeueDecision, random: () => number): n
 }
 
 /**
- * The stop intent of a requeue that reached its attempt limit. The service stops, then goes to `failed` with the last reason.
- * The limit comes from the decision, then the service, then the containers. It is `undefined` when the requeue can wait.
+ * The stop intent of a requeue that reached its attempt limit. The unit stops, then goes to `failed` with the last reason.
+ * The limit comes from the decision, then the unit, then the containers. It is `undefined` when the requeue can wait.
  */
-export function exhaustedIntent(service: ServiceNode, decision: RequeueDecision): StopIntent | undefined {
-  const maxAttempts = maxAttemptsOf(service, decision.maxAttempts)
+export function exhaustedIntent(unit: UnitNode, decision: RequeueDecision): StopIntent | undefined {
+  const maxAttempts = maxAttemptsOf(unit, decision.maxAttempts)
   if (maxAttempts === undefined || decision.attempt < maxAttempts)
     return undefined
 
-  const message = decision.reason ?? `The '${decision.hook}' hook of '${service.name}' reached maxAttempts (${maxAttempts}).`
+  const message = decision.reason ?? `The '${decision.hook}' hook of '${unit.name}' reached maxAttempts (${maxAttempts}).`
   return { failure: { error: new Error(message, { cause: decision }) }, reason: message, decision: 'requeue' }
 }
 
-/** Waits before the next run of a requeued hook. When the wait ends, the service goes back to the work queue. */
-export function scheduleRequeue(service: ServiceNode, instance: InstanceNode, decision: RequeueDecision): void {
-  const { clock, random, reconciler } = service.container.runtime
+/** Waits before the next run of a requeued hook. When the wait ends, the unit goes back to the work queue. */
+export function scheduleRequeue(unit: UnitNode, instance: InstanceNode, decision: RequeueDecision): void {
+  const { clock, random, reconciler } = unit.container.runtime
   const wait: { cancel: () => void } = { cancel: () => {} }
   wait.cancel = clock.setTimeout(() => {
     if (instance.requeueWait !== wait)
       return
 
     instance.requeueWait = undefined
-    reconciler.markDirty(service)
+    reconciler.markDirty(unit)
   }, requeueDelay(decision, random))
   instance.requeueWait = wait
 }

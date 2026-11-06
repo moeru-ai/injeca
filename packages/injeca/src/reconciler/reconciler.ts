@@ -1,4 +1,4 @@
-import type { Reconciler, ServiceNode } from '../graph/graph'
+import type { Reconciler, UnitNode } from '../graph/graph'
 import type { CleanupContext } from '../helpers/cleanup-context'
 
 import { buildLost } from '../graph/resolvers/resolvers'
@@ -20,14 +20,14 @@ export interface ReconcilerOptions {
 /**
  * Creates the execution layer.
  *
- * A work queue holds dirty services, each at most once. The reconciler runs one transition at a time for each service.
+ * A work queue holds dirty units, each at most once. The reconciler runs one transition at a time for each unit.
  * Each transition reads the latest derived values when it starts and when it ends.
  */
 export function createReconciler(options: ReconcilerOptions): Reconciler {
   const { context } = options
-  const queue = new Set<ServiceNode>()
+  const queue = new Set<UnitNode>()
   const drainedListeners = new Set<() => void>()
-  const teardownListeners = new Set<(service: ServiceNode, errors: readonly unknown[]) => void>()
+  const teardownListeners = new Set<(unit: UnitNode, errors: readonly unknown[]) => void>()
   let drainRequested = false
   let draining = false
 
@@ -39,8 +39,8 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
     queueMicrotask(drain)
   }
 
-  function markDirty(service: ServiceNode): void {
-    queue.add(service)
+  function markDirty(unit: UnitNode): void {
+    queue.add(unit)
     requestDrain()
   }
 
@@ -50,9 +50,9 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
     untracked(() => context.run(undefined, () => {
       draining = true
       try {
-        for (const service of queue) {
-          queue.delete(service)
-          reconcile(service)
+        for (const unit of queue) {
+          queue.delete(unit)
+          reconcile(unit)
         }
       }
       finally {
@@ -65,59 +65,59 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
     }))
   }
 
-  function reconcile(service: ServiceNode): void {
-    // A service of an open transaction belongs to the transaction.
-    if (service.transaction)
+  function reconcile(unit: UnitNode): void {
+    // A unit of an open transaction belongs to the transaction.
+    if (unit.transaction)
       return
-    const phase = service.signals.phase()
+    const phase = unit.signals.phase()
     if (phase === 'withdrawn')
       return
-    if (service.perConsumer) {
-      reconcileRegistration(service)
+    if (unit.instances === 'per-container') {
+      reconcileRegistration(unit)
       return
     }
 
-    checkSwap(service)
+    checkSwap(unit)
 
-    if (service.busy) {
+    if (unit.busy) {
       // A transition is in progress. Do not interrupt it. Only abort the signal of a superseded build or hook run.
-      const instance = service.signals.instance()
+      const instance = unit.signals.instance()
       if (!instance)
         return
       if (phase === 'building') {
-        if (buildLost(service, instance))
-          instance.controller.abort(new Error(`The build of '${service.name}' was superseded.`))
+        if (buildLost(unit, instance))
+          instance.controller.abort(new Error(`The build of '${unit.name}' was superseded.`))
       }
-      else if (instance.hookRun && service.signals.targetLost()) {
-        instance.hookRun.abort(new Error(`A newer target superseded the hook run of '${service.name}'.`))
+      else if (instance.hookRun && unit.signals.targetLost()) {
+        instance.hookRun.abort(new Error(`A newer target superseded the hook run of '${unit.name}'.`))
       }
       return
     }
 
     switch (phase) {
       case 'pending':
-        reconcilePending(service)
+        reconcilePending(unit)
         return
       case 'conflict':
-        reconcileConflict(service)
+        reconcileConflict(unit)
         return
       case 'failed':
-        if (!service.signals.present())
-          finalize(service)
+        if (!unit.signals.present())
+          finalize(unit)
         return
       case 'starting':
-        // A consumer service that waits for the batch swap of its replacement stops when the replacement is cancelled.
-        if (service.swap?.held && service.signals.targetLost())
-          enterStopping(service, { reason: 'The replacement was cancelled before the swap.' })
+        // A consumer unit that waits for the batch swap of its replacement stops when the replacement is cancelled.
+        if (unit.swap?.held && unit.signals.targetLost())
+          enterStopping(unit, { reason: 'The replacement was cancelled before the swap.' })
         return
       case 'running':
-        reconcileRunning(service)
+        reconcileRunning(unit)
         return
       case 'retrying':
-        reconcileRetrying(service)
+        reconcileRetrying(unit)
         return
       case 'stopping':
-        reconcileStopping(service)
+        reconcileStopping(unit)
     }
   }
 
@@ -131,7 +131,7 @@ export function createReconciler(options: ReconcilerOptions): Reconciler {
       teardownListeners.add(listener)
       return () => teardownListeners.delete(listener)
     },
-    notifyTeardown: (service, errors) => callListeners(teardownListeners, service, errors),
+    notifyTeardown: (unit, errors) => callListeners(teardownListeners, unit, errors),
     requestDrain,
   }
 }

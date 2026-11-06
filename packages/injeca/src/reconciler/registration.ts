@@ -1,23 +1,23 @@
-import type { ServiceNode } from '../graph/graph'
+import type { UnitNode } from '../graph/graph'
 
 import { setPhase } from '../graph/nodes'
 import { inConflict } from '../graph/resolvers/exclusive'
 import { finalize } from './stop'
 
 /**
- * Handles a `perConsumer` registration. It never builds. The service of each consumer container builds.
- * A withdrawn registration finalizes after its last consumer service.
+ * Handles a per-container registration. It never builds. The unit of each consumer container builds.
+ * A withdrawn registration finalizes after its last consumer unit.
  */
-export function reconcileRegistration(service: ServiceNode): void {
-  const phase = service.signals.phase()
-  if (!service.signals.present()) {
-    if (service.signals.consumers().size === 0)
-      finalize(service)
+export function reconcileRegistration(unit: UnitNode): void {
+  const phase = unit.signals.phase()
+  if (!unit.signals.present()) {
+    if (unit.signals.consumers().size === 0)
+      finalize(unit)
     return
   }
 
-  if (phase === 'pending' && inConflict(service))
-    setPhase(service, 'conflict', { reason: `The exclusive key '${service.name}' has more than one declaration.` })
-  else if (phase === 'conflict' && !inConflict(service))
-    setPhase(service, 'pending', { reason: `Only one declaration of the exclusive key '${service.name}' remains.` })
+  if (phase === 'pending' && inConflict(unit))
+    setPhase(unit, 'conflict', { reason: `The exclusive key '${unit.name}' has more than one declaration.` })
+  else if (phase === 'conflict' && !inConflict(unit))
+    setPhase(unit, 'pending', { reason: `Only one declaration of the exclusive key '${unit.name}' remains.` })
 }

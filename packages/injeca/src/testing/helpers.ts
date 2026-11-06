@@ -1,6 +1,6 @@
 import type { Logger } from '../diagnostics/logger'
 import type { WatchKey } from '../queries/watch'
-import type { BuildContext, Container, ContainerOptions, ObserveRecord, ServicePhase, ServiceState } from '../types'
+import type { BuildContext, Container, ContainerOptions, ObserveRecord, UnitPhase, UnitState } from '../types'
 
 import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer } from '../primitives/container'
@@ -38,8 +38,8 @@ export function warningLogger(): { readonly logger: Logger, readonly warnings: s
 }
 
 /** Reads the current state of a key. `watch` sends it at once. */
-export function stateOf(container: Container, key: WatchKey): ServiceState {
-  let current: ServiceState | undefined
+export function stateOf(container: Container, key: WatchKey): UnitState {
+  let current: UnitState | undefined
   watch(container, key, (state) => {
     current = state
   })()
@@ -52,7 +52,7 @@ export function stateOf(container: Container, key: WatchKey): ServiceState {
  *
  * The public API has no phase getter. A caller subscribes with `watch`. This helper takes one state from `watch` and stops.
  */
-export function phaseOf(container: Container, key: WatchKey): ServicePhase | undefined {
+export function phaseOf(container: Container, key: WatchKey): UnitPhase | undefined {
   return stateOf(container, key).phase
 }
 

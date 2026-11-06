@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { BuildAfterDisposeError, DuplicateServiceError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, DuplicateUnitError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
 import { defineKey, dispose, graph, provide, start, transaction } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, phaseOf, stateOf, trackedController } from '../testing/helpers'
 
@@ -34,7 +34,7 @@ describe('transactions', () => {
       })
       return 'character'
     })
-    expect(graph(app).services()).toEqual([expect.objectContaining({ key: 'kit.status', phase: 'declared' }), expect.objectContaining({ key: 'airi.character', phase: 'declared' })])
+    expect(graph(app).units()).toEqual([expect.objectContaining({ key: 'kit.status', phase: 'declared' }), expect.objectContaining({ key: 'airi.character', phase: 'declared' })])
     expect(stateOf(app, statusKitKey).phase).toBeUndefined()
 
     await tx.commit()
@@ -42,7 +42,7 @@ describe('transactions', () => {
     expect(events).toEqual(['build character', 'build status (character)', 'start character', 'start status'])
     expect(phaseOf(app, statusKitKey)).toBe('running')
 
-    // Both services go to `starting` in one batch, before any of them runs.
+    // Both units go to `starting` in one batch, before any of them runs.
     const phases = records.flatMap(record => record.type === 'phase' && (record.to === 'starting' || record.to === 'running') ? [`${record.key} ${record.to}`] : [])
     expect(phases.slice(0, 2).sort()).toEqual(['airi.character starting', 'kit.status starting'])
     expect(phases.slice(2)).toEqual(['airi.character running', 'kit.status running'])
@@ -73,7 +73,7 @@ describe('transactions', () => {
     expect(disposer).toHaveBeenCalledTimes(1)
     expect(stateOf(app, characterKey).phase).toBeUndefined()
     expect(stateOf(app, statusKitKey).phase).toBeUndefined()
-    expect(graph(app).services()).toEqual([])
+    expect(graph(app).units()).toEqual([])
     await expect(character.withdraw()).resolves.toBe(false)
   })
 
@@ -110,7 +110,7 @@ describe('transactions', () => {
     await expect(tx.commit()).rejects.toThrow()
   })
 
-  it('sends a service without available dependencies to pending at the commit. That is not a failure', async () => {
+  it('sends a unit without available dependencies to pending at the commit. That is not a failure', async () => {
     const app = createTestContainer()
     await start(app)
     const tx = transaction(app)
@@ -123,7 +123,7 @@ describe('transactions', () => {
     expect(phaseOf(app, statusKitKey)).toBe('running')
   })
 
-  it('fails with transaction-incomplete for a declared service without provide, unless the declaration is optional', async () => {
+  it('fails with transaction-incomplete for a declared unit without provide, unless the declaration is optional', async () => {
     const app = createTestContainer()
     const tx = transaction(app)
     tx.declare(statusKitKey)
@@ -134,7 +134,7 @@ describe('transactions', () => {
     second.declare('kit.optional', { optional: true })
     second.provide(statusKitKey, () => 'status')
     await second.commit()
-    expect(graph(app).services().map(service => service.key)).toEqual(['kit.status'])
+    expect(graph(app).units().map(unit => unit.key)).toEqual(['kit.status'])
   })
 
   it('removes everything on abort, and fails a duplicate in a started container', async () => {
@@ -150,7 +150,7 @@ describe('transactions', () => {
     provide(app, characterKey, () => 'character')
     const duplicate = transaction(app)
     duplicate.provide(characterKey, () => 'again')
-    await expect(duplicate.commit()).rejects.toBeInstanceOf(DuplicateServiceError)
+    await expect(duplicate.commit()).rejects.toBeInstanceOf(DuplicateUnitError)
   })
 
   it('aborts with tx.abort() during the commit', async () => {
@@ -167,7 +167,7 @@ describe('transactions', () => {
     expect(stateOf(app, characterKey).phase).toBeUndefined()
   })
 
-  it('replaces a running service at the commit without a gap, and fails for a key without a registration', async () => {
+  it('replaces a running unit at the commit without a gap, and fails for a key without a registration', async () => {
     const app = createTestContainer()
     const character = provide(app, characterKey, () => 'old')
     const dependent = vi.fn(({ dependsOn }: { dependsOn: { character: string } }) => dependsOn.character)
@@ -189,7 +189,7 @@ describe('transactions', () => {
     await expect(stale.commit()).rejects.toBeInstanceOf(StaleRegistrationError)
   })
 
-  it('publishes the services of a container that is not started as pending', async () => {
+  it('publishes the units of a container that is not started as pending', async () => {
     const app = createTestContainer()
     const build = vi.fn(() => 'character')
     const tx = transaction(app)
@@ -216,7 +216,7 @@ describe('withdraw before the commit (B4)', () => {
     await expect(status.withdraw()).resolves.toBe(false)
     await expect(tx.commit()).rejects.toBeInstanceOf(TransactionIncompleteError)
     expect(build).not.toHaveBeenCalled()
-    expect(graph(app).services()).toEqual([])
+    expect(graph(app).units()).toEqual([])
   })
 
   it('drops a provide without a declaration, and keeps an optional declaration', async () => {
@@ -232,12 +232,12 @@ describe('withdraw before the commit (B4)', () => {
     await expect(character.withdraw()).resolves.toBe(true)
     await tx.commit()
     await drained(app)
-    expect(graph(app).services().map(service => `${service.key}:${service.phase}`)).toEqual(['kept:running'])
+    expect(graph(app).units().map(unit => `${unit.key}:${unit.phase}`)).toEqual(['kept:running'])
     // The key is free again after the withdrawal.
     provide(app, characterKey, () => 'other')
   })
 
-  it('withdraws the published service when it is called during the commit', async () => {
+  it('withdraws the published unit when it is called during the commit', async () => {
     const app = createTestContainer()
     await start(app)
     const gate = deferred()
@@ -250,7 +250,7 @@ describe('withdraw before the commit (B4)', () => {
 
     await expect(withdrawn).resolves.toBe(true)
     await drained(app)
-    expect(graph(app).services()).toEqual([])
+    expect(graph(app).units()).toEqual([])
   })
 })
 
@@ -261,9 +261,9 @@ describe('declare reserves the key (G5)', () => {
     const tx = transaction(app)
     tx.declare(statusKitKey)
 
-    expect(() => provide(app, statusKitKey, () => 'other')).toThrow(DuplicateServiceError)
-    expect(() => transaction(app).declare(statusKitKey)).toThrow(DuplicateServiceError)
-    expect(() => transaction(app).provide(statusKitKey, () => 'other')).toThrow(DuplicateServiceError)
+    expect(() => provide(app, statusKitKey, () => 'other')).toThrow(DuplicateUnitError)
+    expect(() => transaction(app).declare(statusKitKey)).toThrow(DuplicateUnitError)
+    expect(() => transaction(app).provide(statusKitKey, () => 'other')).toThrow(DuplicateUnitError)
 
     await tx.abort()
     provide(app, statusKitKey, () => 'other')
@@ -334,7 +334,7 @@ describe('commit with a signal', () => {
     // The rollback ends when the build settles. Then the key is free.
     gate.resolve()
     await drained(app)
-    expect(graph(app).services()).toEqual([])
+    expect(graph(app).units()).toEqual([])
     provide(app, 'airi.llm', () => 'other')
     await drained(app)
     expect(phaseOf(app, 'airi.llm')).toBe('running')
@@ -350,7 +350,7 @@ describe('commit with a signal', () => {
     await expect(tx.commit({ signal: AbortSignal.abort('closed') })).rejects.toBe('closed')
     await drained(app)
     expect(build).not.toHaveBeenCalled()
-    expect(graph(app).services()).toEqual([])
+    expect(graph(app).units()).toEqual([])
     await expect(tx.commit()).rejects.toThrow('aborted')
   })
 

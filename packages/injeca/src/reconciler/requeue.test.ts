@@ -1,4 +1,4 @@
-import type { HookHandler, OptionalValue, ServiceStatus } from '../types'
+import type { HookHandler, OptionalValue, UnitStatus } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -29,7 +29,7 @@ describe('dependency hook requeue', () => {
 
   // Design test 8, for dependency hooks.
   it('merges the changes during a waiting requeue into one run with the latest snapshot', async () => {
-    const runs: { attempt: number, previous: string | undefined, llm: ServiceStatus, tts: ServiceStatus | undefined, changes: string[] }[] = []
+    const runs: { attempt: number, previous: string | undefined, llm: UnitStatus, tts: UnitStatus | undefined, changes: string[] }[] = []
     const { app, llm, tts, advance, builds } = setup(({ attempt, previous, dependsOn, changes, decide }) => {
       runs.push({ attempt, previous: previous?.kind, llm: dependsOn.llm.status, tts: dependsOn.tts?.status, changes: changes.map(change => change.key) })
       return runs.length === 1 ? decide.requeue({ after: 100, reason: 'warming up' }) : decide.handled()
@@ -63,7 +63,7 @@ describe('dependency hook requeue', () => {
   })
 
   // Design test 29, dependency hook part.
-  it('stops a running service when a requeue reaches maxAttempts, then moves it to failed with the last reason', async () => {
+  it('stops a running unit when a requeue reaches maxAttempts, then moves it to failed with the last reason', async () => {
     const { app, llm, advance, stopHook } = setup(({ decide }) => decide.requeue({ after: 10, maxAttempts: 3, reason: 'llm is not ready' }))
     await start(app)
 
@@ -170,7 +170,7 @@ describe('dependency hook requeue', () => {
     expect(random).not.toHaveBeenCalled()
   })
 
-  it('uses the maxAttempts of the service for a dependency hook requeue', async () => {
+  it('uses the maxAttempts of the unit for a dependency hook requeue', async () => {
     const manual = manualClock()
     const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, maxAttempts: 10 })
     const llm = provideWithStatus(app, 'airi.llm')

@@ -11,17 +11,17 @@ import {
 export type { InjecaErrorCode, InjecaErrorOptions } from './diagnostics/errors'
 export {
   BuildAfterDisposeError,
-  DuplicateServiceError,
+  DuplicateUnitError,
   HookOutsideBuildError,
   HookTimeoutError,
   InjecaError,
   InvalidArgumentError,
   InvalidDecisionError,
   ReplaceWhileStoppingError,
-  ServiceFailedError,
   StaleRegistrationError,
   StartTimeoutError,
   TransactionIncompleteError,
+  UnitFailedError,
   WaitTimeoutError,
 } from './diagnostics/errors'
 
@@ -52,8 +52,8 @@ export type {
   RebuildDecision,
   RequeueDecision,
   RequeueOptions,
-  ServiceHook,
   StopDecision,
+  UnitHook,
 } from './primitives/decision'
 
 export { observe } from './queries/observe'
@@ -106,7 +106,7 @@ export type {
   Graph,
   GraphDependency,
   GraphResolution,
-  GraphService,
+  GraphUnit,
   HookTimeouts,
   HookContext,
   HookContextFor,
@@ -155,12 +155,6 @@ export type {
   ReplaceOptions,
   ResolutionCondition,
   ResolveDependencyDeclaration,
-  ServiceBlocker,
-  ServiceExplanation,
-  ServiceMetadata,
-  ServicePhase,
-  ServiceState,
-  ServiceStatus,
   SetStatusOptions,
   StatusCause,
   StatusObserveRecord,
@@ -171,6 +165,12 @@ export type {
   TransactionCommitOptions,
   TransactionProvide,
   TransactionReplace,
+  UnitBlocker,
+  UnitExplanation,
+  UnitMetadata,
+  UnitPhase,
+  UnitState,
+  UnitStatus,
   WaitAbortedObserveRecord,
   WithdrawOptions,
 } from './types'

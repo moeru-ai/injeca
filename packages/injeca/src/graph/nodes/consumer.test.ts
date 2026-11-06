@@ -3,6 +3,7 @@ import type { OwnerRecord } from '../../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { InvalidArgumentError } from '../../diagnostics/errors'
 import { waitFor } from '../../queries/watch'
 import { dispose, firstAvailable, graph, invoke, optional, provide, resolve, start, stop, transaction } from '../../scoped'
 import { createTestContainer, deferred, drained, phaseOf } from '../../testing/helpers'
@@ -12,7 +13,7 @@ function hostClient() {
   const builds: (OwnerRecord | undefined)[] = []
   const disposed: (OwnerRecord | undefined)[] = []
   const client = provide(root, 'host.client', {
-    perConsumer: true,
+    instances: 'per-container',
     metadata: { api: 'v1' },
     build: ({ consumer, effect }) => {
       builds.push(consumer)
@@ -26,7 +27,7 @@ function hostClient() {
   return { root, client, builds, disposed }
 }
 
-describe('perConsumer', () => {
+describe('per-container instances', () => {
   it('builds once for each consumer container, and disposes with that container (design test 13)', async () => {
     const { root, client, builds, disposed } = hostClient()
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
@@ -45,7 +46,7 @@ describe('perConsumer', () => {
       ['a.two', { kind: 'extension', id: 'a' }],
       ['b.one', { kind: 'extension', id: 'b' }],
     ])
-    expect(graph(root).services().filter(service => service.key === 'host.client').map(service => service.consumer)).toEqual([
+    expect(graph(root).units().filter(unit => unit.key === 'host.client').map(unit => unit.consumer)).toEqual([
       undefined,
       { kind: 'extension', id: 'a' },
       { kind: 'extension', id: 'b' },
@@ -65,7 +66,7 @@ describe('perConsumer', () => {
     expect(builds).toEqual([{ kind: 'host' }])
   })
 
-  it('withdraws each consumer service with the registration', async () => {
+  it('withdraws each consumer unit with the registration', async () => {
     const { root, client, disposed } = hostClient()
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     provide(a, 'a.one', { dependsOn: { client }, build: () => 'one' })
@@ -79,7 +80,7 @@ describe('perConsumer', () => {
     await stop(a)
   })
 
-  it('replaces each running consumer service without a gap', async () => {
+  it('replaces each running consumer unit without a gap', async () => {
     const { root, client } = hostClient()
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const values: unknown[] = []
@@ -104,17 +105,23 @@ describe('perConsumer', () => {
     expect(values).toEqual([{ owner: { kind: 'extension', id: 'a' } }, { owner: { kind: 'extension', id: 'a' }, version: 2 }])
     expect(phaseOf(a, 'a.one')).toBe('running')
   })
+
+  it('rejects an instances option other than shared or per-container', () => {
+    const root = createTestContainer()
+    expect(() => provide(root, 'host.client', { instances: true as unknown as 'per-container', build: () => 'client' })).toThrow(InvalidArgumentError)
+    expect(() => provide(root, 'host.client', { instances: 'shared', build: () => 'client' })).not.toThrow()
+  })
 })
 
-describe('perConsumer dependencies', () => {
-  it('resolves the dependencies of a perConsumer registration from its own container, not from the consumer container', async () => {
+describe('per-container dependencies', () => {
+  it('resolves the dependencies of a per-container registration from its own container, not from the consumer container', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     provide(root, 'runtime', () => 'runtime of host')
     // The consumer container has a key of the same name. The registration does not see it.
     provide(a, 'runtime', () => 'runtime of a')
     provide(root, 'host.client', {
-      perConsumer: true,
+      instances: 'per-container',
       dependsOn: { runtime: 'runtime' },
       build: ({ dependsOn, consumer }) => ({ runtime: dependsOn.runtime, consumer }),
     })
@@ -124,11 +131,11 @@ describe('perConsumer dependencies', () => {
     await expect(resolve(a, { client: 'host.client' })).resolves.toEqual({ client: { runtime: 'runtime of host', consumer: { kind: 'extension', id: 'a' } } })
   })
 
-  it('keeps a consumer service pending when only the consumer container has its dependency', async () => {
+  it('keeps a consumer unit pending when only the consumer container has its dependency', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     provide(a, 'runtime', () => 'runtime of a')
-    provide(root, 'host.client', { perConsumer: true, dependsOn: { runtime: 'runtime' }, build: ({ dependsOn }) => dependsOn.runtime })
+    provide(root, 'host.client', { instances: 'per-container', dependsOn: { runtime: 'runtime' }, build: ({ dependsOn }) => dependsOn.runtime })
     provide(a, 'a.user', { dependsOn: { client: 'host.client' }, build: ({ dependsOn }) => dependsOn.client })
     await start(root)
     void start(a)
@@ -140,8 +147,8 @@ describe('perConsumer dependencies', () => {
   })
 })
 
-describe('an optional dependency on a perConsumer key', () => {
-  it('demands the consumer service when the key registers after the dependent', async () => {
+describe('an optional dependency on a per-container key', () => {
+  it('demands the consumer unit when the key registers after the dependent', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const b = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'b' } })
@@ -156,17 +163,17 @@ describe('an optional dependency on a perConsumer key', () => {
     expect(inA).toEqual([undefined])
     expect(inB).toEqual([undefined])
 
-    provide(root, 'kit:x', { perConsumer: true, build: ({ consumer }) => ({ consumer }) })
+    provide(root, 'kit:x', { instances: 'per-container', build: ({ consumer }) => ({ consumer }) })
     await drained(root)
     expect(inA).toEqual([undefined, { consumer: { kind: 'extension', id: 'a' } }])
     expect(inB).toEqual([undefined, { consumer: { kind: 'extension', id: 'b' } }])
   })
 })
 
-describe('perConsumer replace (B1)', () => {
+describe('per-container replace (B1)', () => {
   it('swaps no consumer when one consumer build fails, and keeps the old template and instances', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    const client = provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => ({ owner: consumer, version: 1 }) })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => ({ owner: consumer, version: 1 }) })
     const good = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'good' } })
     const bad = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'bad' } })
     await start(root)
@@ -174,7 +181,7 @@ describe('perConsumer replace (B1)', () => {
     await start(bad)
     await resolve(good, { client })
     await resolve(bad, { client })
-    const before = graph(root).services().filter(service => service.key === 'host.client').map(service => service.instanceId)
+    const before = graph(root).units().filter(unit => unit.key === 'host.client').map(unit => unit.instanceId)
 
     const successorStop = vi.fn()
     const failBad = deferred()
@@ -198,7 +205,7 @@ describe('perConsumer replace (B1)', () => {
     expect(successorStop).toHaveBeenCalledTimes(1)
     await expect(resolve(good, { client })).resolves.toEqual({ client: { owner: { kind: 'extension', id: 'good' }, version: 1 } })
     await expect(resolve(bad, { client })).resolves.toEqual({ client: { owner: { kind: 'extension', id: 'bad' }, version: 1 } })
-    expect(graph(root).services().filter(service => service.key === 'host.client').map(service => service.instanceId)).toEqual(before)
+    expect(graph(root).units().filter(unit => unit.key === 'host.client').map(unit => unit.instanceId)).toEqual(before)
 
     // A new consumer still builds from the old template.
     const late = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'late' } })
@@ -209,7 +216,7 @@ describe('perConsumer replace (B1)', () => {
   it('swaps every consumer in one batch after each successor completes start', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const gates = new Map<string, Deferred>([['a', deferred()], ['b', deferred()]])
-    const client = provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => ({ owner: consumer, version: 1 }) })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => ({ owner: consumer, version: 1 }) })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const b = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'b' } })
     const seen: string[] = []
@@ -243,10 +250,10 @@ describe('perConsumer replace (B1)', () => {
   })
 })
 
-describe('perConsumer replace (B1), cancellation and transactions', () => {
+describe('per-container replace (B1), cancellation and transactions', () => {
   it('resolves false when a newer replace supersedes it, and stops the waiting successors', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    const client = provide(root, 'host.client', { perConsumer: true, build: () => 'v1' })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     await start(root)
     await start(a)
@@ -268,9 +275,9 @@ describe('perConsumer replace (B1), cancellation and transactions', () => {
     await expect(resolve(a, { client })).resolves.toEqual({ client: 'v3' })
   })
 
-  it('keeps the old consumer services when a tx.replace fails for one consumer', async () => {
+  it('keeps the old consumer units when a tx.replace fails for one consumer', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    const client = provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => `v1:${String(consumer?.id)}` })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => `v1:${String(consumer?.id)}` })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const b = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'b' } })
     await start(root)
@@ -292,12 +299,12 @@ describe('perConsumer replace (B1), cancellation and transactions', () => {
   })
 })
 
-describe('a failed consumer service (G6)', () => {
+describe('a failed consumer unit (G6)', () => {
   it('builds again on the next demand from its container', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     let allow = false
     const client = provide(root, 'host.client', {
-      perConsumer: true,
+      instances: 'per-container',
       build: ({ consumer }) => {
         if (!allow)
           throw new Error('permission-denied')
@@ -310,7 +317,7 @@ describe('a failed consumer service (G6)', () => {
 
     await expect(resolve(extension, { client })).rejects.toThrow('permission-denied')
     allow = true
-    // A new resolve call is a new demand. The failed consumer service builds again.
+    // A new resolve call is a new demand. The failed consumer unit builds again.
     await expect(resolve(extension, { client })).resolves.toEqual({ client: { owner: { kind: 'extension', id: 'e' } } })
   })
 
@@ -319,7 +326,7 @@ describe('a failed consumer service (G6)', () => {
     const build = vi.fn(() => {
       throw new Error('denied')
     })
-    const client = provide(root, 'host.client', { perConsumer: true, build })
+    const client = provide(root, 'host.client', { instances: 'per-container', build })
     await start(root)
     const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
     provide(extension, 'user', { dependsOn: { client }, build: () => 'user' })
@@ -328,7 +335,7 @@ describe('a failed consumer service (G6)', () => {
     expect(build).toHaveBeenCalledTimes(1)
 
     // A new demand from a waitFor subscription builds again once.
-    await expect(waitFor(extension, client)).rejects.toMatchObject({ code: 'service-failed' })
+    await expect(waitFor(extension, client)).rejects.toMatchObject({ code: 'unit-failed' })
     await drained(root)
     expect(build).toHaveBeenCalledTimes(2)
   })

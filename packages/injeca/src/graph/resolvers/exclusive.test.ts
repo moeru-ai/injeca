@@ -75,9 +75,9 @@ describe('exclusive keys', () => {
     expect(phaseOf(root, whiteboardKey)).toBe('conflict')
   })
 
-  it('does not conflict across sibling containers or with a container that isolates the key', async () => {
+  it('does not conflict across sibling containers or with a container that has the key as a local key', async () => {
     const { root, a, b } = plugins()
-    const isolated = createTestContainer({ parent: root, isolate: [whiteboardKey] })
+    const local = createTestContainer({ parent: root, local: [whiteboardKey] })
     provide(a, whiteboardKey, () => 'a')
     provide(b, whiteboardKey, () => 'b')
     await start(a)
@@ -86,13 +86,13 @@ describe('exclusive keys', () => {
     expect(phaseOf(b, whiteboardKey)).toBe('running')
 
     provide(root, whiteboardKey, () => 'root')
-    provide(isolated, whiteboardKey, () => 'isolated')
-    await start(isolated)
+    provide(local, whiteboardKey, () => 'local')
+    await start(local)
     await drained(root)
-    // The root declaration shares its area with `a` and `b`, but not with the isolated container.
+    // The root declaration shares its area with `a` and `b`, but not with the container that has the key as a local key.
     expect(phaseOf(root, whiteboardKey)).toBe('conflict')
     expect(phaseOf(a, whiteboardKey)).toBe('conflict')
-    expect(phaseOf(isolated, whiteboardKey)).toBe('running')
+    expect(phaseOf(local, whiteboardKey)).toBe('running')
   })
 
   it('treats a plain name as a rival of an exclusive key', async () => {

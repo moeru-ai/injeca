@@ -41,7 +41,7 @@ function chain(topHandler: boolean) {
 }
 
 describe('make-before-break rebuild', () => {
-  it('builds and starts the successor of an intermediate service before the old one stops, so a dependent sees an identity change', async () => {
+  it('builds and starts the successor of an intermediate unit before the old one stops, so a dependent sees an identity change', async () => {
     const { app, leaf, events } = chain(true)
     await start(app)
     const oldMiddle = stateOf(app, 'middle').instanceId
@@ -125,7 +125,7 @@ describe('make-before-break rebuild', () => {
     expect(events).toEqual(['stop tts', 'build none'])
   })
 
-  it('stops the old instance and fails the service when the successor fails', async () => {
+  it('stops the old instance and fails the unit when the successor fails', async () => {
     const app = createTestContainer()
     const events: string[] = []
     const leaf = provide(app, 'leaf', () => 1)
@@ -165,13 +165,13 @@ describe('make-before-break rebuild', () => {
     expect(events).toEqual(['run 1', 'stop 1', 'run 2'])
   })
 
-  it('rebuilds a consumer service of a perConsumer registration make-before-break', async () => {
+  it('rebuilds a consumer unit of a per-container registration make-before-break', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const events: string[] = []
     const leaf = provide(root, 'leaf', () => 1)
     provide(root, 'client', {
-      perConsumer: true,
+      instances: 'per-container',
       dependsOn: { leaf },
       build: ({ dependsOn, on, consumer }) => {
         events.push(`client build ${dependsOn.leaf}`)
@@ -228,12 +228,12 @@ describe('make-before-break rebuild', () => {
     await expect(resolve(app, { middle })).resolves.toEqual({ middle: 'replaced 2' })
   })
 
-  it('moves the watch demand of a consumer service to its rebuild successor', async () => {
+  it('moves the watch demand of a consumer unit to its rebuild successor', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
     const leaf = provide(root, 'leaf', () => 1)
-    provide(root, 'client', { perConsumer: true, dependsOn: { leaf }, build: ({ dependsOn }) => dependsOn.leaf })
-    // Neither container is started. Only the watch demands the consumer service of `a`.
+    provide(root, 'client', { instances: 'per-container', dependsOn: { leaf }, build: ({ dependsOn }) => dependsOn.leaf })
+    // Neither container is started. Only the watch demands the consumer unit of `a`.
     const phases: string[] = []
     const stopWatch = watch(a, 'client', state => void phases.push(state.phase ?? 'missing'))
     await drained(root)

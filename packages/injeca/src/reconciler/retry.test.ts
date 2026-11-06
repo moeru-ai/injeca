@@ -63,7 +63,7 @@ describe('start requeue', () => {
     expect(stateOf(ctx.app, 'voice.speech')).toMatchObject({ phase: 'retrying', status: undefined })
     expect(lastPhase(records, 'voice.speech')).toMatchObject({ to: 'retrying', reason: 'port is busy', decision: 'requeue' })
     expect(stateOf(ctx.app, 'voice.ui').phase).toBe('pending')
-    // The retrying service still holds its dependency. A withdrawal waits for it.
+    // The retrying unit still holds its dependency. A withdrawal waits for it.
     expect(stateOf(ctx.app, 'airi.llm').phase).toBe('running')
 
     await tick(ctx, ctx.app, 100)
@@ -81,7 +81,7 @@ describe('start requeue', () => {
   })
 
   // Design test 9, start hook part.
-  it('moves the service to failed when the requeue reaches maxAttempts, after its stop', async () => {
+  it('moves the unit to failed when the requeue reaches maxAttempts, after its stop', async () => {
     const ctx = setup(({ decide }) => decide.requeue({ after: 10, maxAttempts: 3, reason: 'device is busy' }))
     const { records } = collectRecords(ctx.app)
     const started = start(ctx.app)
@@ -116,7 +116,7 @@ describe('start requeue', () => {
   })
 
   // Design test 28.
-  it('cancels the retry and stops the service when a required dependency is withdrawn during the wait', async () => {
+  it('cancels the retry and stops the unit when a required dependency is withdrawn during the wait', async () => {
     const ctx = setup(({ decide }) => decide.requeue({ after: 1_000 }))
     const { records } = collectRecords(ctx.app)
     void start(ctx.app)
@@ -142,7 +142,7 @@ describe('start requeue', () => {
   })
 
   // Design test 8, for start hooks.
-  it('merges the changes during the wait into one attempt, and the running service then handles the latest snapshot', async () => {
+  it('merges the changes during the wait into one attempt, and the running unit then handles the latest snapshot', async () => {
     const statusRuns: string[][] = []
     const manual = manualClock()
     const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
@@ -213,7 +213,7 @@ describe('maxAttempts precedence', () => {
     expect(attempts.length).toBeGreaterThan(0)
   }
 
-  it('uses the container value, then the service value, then the decision value', async () => {
+  it('uses the container value, then the unit value, then the decision value', async () => {
     const cases = [
       { options: { containerMaxAttempts: 2 }, decision: undefined, expected: 2 },
       { options: { containerMaxAttempts: 2, maxAttempts: 4 }, decision: undefined, expected: 4 },

@@ -1,5 +1,5 @@
 import type { Logger } from '../diagnostics/logger'
-import type { ServiceNode } from '../graph/graph'
+import type { UnitNode } from '../graph/graph'
 import type { Container } from '../types'
 
 import { untracked } from '../helpers/signals'
@@ -19,9 +19,9 @@ export function traceLoggerOf(container: Container): Logger | undefined {
   return container.logging ? container.logger : undefined
 }
 
-/** Only services with a key write the lifecycle trace. Invocations and resolvers do not. */
-export function loggerOf(service: ServiceNode): Logger | undefined {
-  return service.kind === 'service' ? traceLoggerOf(service.container.api) : undefined
+/** Only units with a key write the lifecycle trace. Invocations and resolvers do not. */
+export function loggerOf(unit: UnitNode): Logger | undefined {
+  return unit.kind === 'unit' ? traceLoggerOf(unit.container.api) : undefined
 }
 
 export function callListeners<A extends unknown[]>(listeners: ReadonlySet<(...args: A) => void>, ...args: A): void {

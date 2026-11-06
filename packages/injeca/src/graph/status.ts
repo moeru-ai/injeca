@@ -1,15 +1,15 @@
-import type { ServicePhase, ServiceStatus, StatusCause } from '../types'
-import type { DependencyEdge, InstanceNode, Resolution, ServiceNode, StatusValue } from './graph'
+import type { StatusCause, UnitPhase, UnitStatus } from '../types'
+import type { DependencyEdge, InstanceNode, Resolution, StatusValue, UnitNode } from './graph'
 
 import { computed } from 'alien-signals'
 
 import { withoutUndefined } from '../helpers/without-undefined'
 import { emitRecord } from './observers'
 
-const statusRank: Readonly<Record<ServiceStatus, number>> = { ready: 0, degraded: 1, unavailable: 2 }
+const statusRank: Readonly<Record<UnitStatus, number>> = { ready: 0, degraded: 1, unavailable: 2 }
 
 /** Tells whether `a` is worse than `b`. The order is `ready`, then `degraded`, then `unavailable`. */
-export function worseThan(a: ServiceStatus, b: ServiceStatus): boolean {
+export function worseThan(a: UnitStatus, b: UnitStatus): boolean {
   return statusRank[a] > statusRank[b]
 }
 
@@ -37,7 +37,7 @@ export function statusFields(status: StatusValue): { reason?: string, cause?: St
 }
 
 /** The cause that a dependent reports when `provider` makes its effective status worse. */
-export function causeOf(provider: ServiceNode, status: StatusValue): StatusCause {
+export function causeOf(provider: UnitNode, status: StatusValue): StatusCause {
   return Object.freeze({
     key: provider.name,
     owner: provider.container.owner,
@@ -47,14 +47,14 @@ export function causeOf(provider: ServiceNode, status: StatusValue): StatusCause
 }
 
 export interface EffectiveStatusInput {
-  readonly phase: () => ServicePhase
+  readonly phase: () => UnitPhase
   readonly instance: () => InstanceNode | undefined
   readonly edges: readonly DependencyEdge[]
   readonly resolutions: ReadonlyMap<string, () => Resolution>
 }
 
 /**
- * Creates the effective status of a service: the worst of the own status and the effective status of each required dependency.
+ * Creates the effective status of a unit: the worst of the own status and the effective status of each required dependency.
  * An optional dependency does not count. It is `undefined` outside `running`.
  */
 export function createEffectiveStatus(input: EffectiveStatusInput): () => StatusValue | undefined {
@@ -83,18 +83,18 @@ export function createEffectiveStatus(input: EffectiveStatusInput): () => Status
   })
 }
 
-/** Reports a change of the effective status. The status effect of each service calls it. */
-export function reportStatus(service: ServiceNode, next: StatusValue | undefined): void {
-  const previous = service.reportedStatus
-  service.reportedStatus = next
+/** Reports a change of the effective status. The status effect of each unit calls it. */
+export function reportStatus(unit: UnitNode, next: StatusValue | undefined): void {
+  const previous = unit.reportedStatus
+  unit.reportedStatus = next
   if (!next || sameStatus(previous, next))
     return
 
-  emitRecord(service.container, {
+  emitRecord(unit.container, {
     type: 'status',
-    key: service.name,
-    owner: service.container.owner,
-    instanceId: service.signals.instance()?.id,
+    key: unit.name,
+    owner: unit.container.owner,
+    instanceId: unit.signals.instance()?.id,
     from: previous?.status,
     to: next.status,
     ...statusFields(next),

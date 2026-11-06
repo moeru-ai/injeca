@@ -1,6 +1,6 @@
 import type { DecisionKind } from '../../primitives/decision'
-import type { OwnerRecord, ServiceMetadata, ServicePhase } from '../../types'
-import type { BuildFunction, ContainerNode, DependencyEdge, InstanceNode, Policy, RegistrationNode, Resolution, ServiceKind, ServiceNode, SwapState, TransactionNode } from '../graph'
+import type { OwnerRecord, UnitMetadata, UnitPhase } from '../../types'
+import type { BuildFunction, ContainerNode, DependencyEdge, InstanceNode, Policy, RegistrationNode, Resolution, SwapState, TransactionNode, UnitKind, UnitNode } from '../graph'
 
 import { computed, effect, signal } from 'alien-signals'
 
@@ -20,21 +20,21 @@ export interface PhaseDetails {
 }
 
 /** Writes the phase and sends the change to the observe stream. */
-export function setPhase(service: ServiceNode, to: ServicePhase, details: PhaseDetails = {}): void {
-  const from = service.signals.phase()
+export function setPhase(unit: UnitNode, to: UnitPhase, details: PhaseDetails = {}): void {
+  const from = unit.signals.phase()
   if (from === to)
     return
 
   batch(() => {
-    service.signals.phase(to)
-    if (service.kind === 'resolver')
+    unit.signals.phase(to)
+    if (unit.kind === 'resolver')
       return
 
-    emitRecord(service.container, {
+    emitRecord(unit.container, {
       type: 'phase',
-      key: service.name,
-      owner: service.container.owner,
-      instanceId: service.signals.instance()?.id,
+      key: unit.name,
+      owner: unit.container.owner,
+      instanceId: unit.signals.instance()?.id,
       from,
       to,
       ...withoutUndefined({ reason: details.reason, decision: details.decision }),
@@ -60,35 +60,35 @@ function sameResolution(a: Resolution, b: Resolution): boolean {
 }
 
 /** Creates the resolution of one declared edge. It keeps the previous value when nothing changed. */
-function resolveEdge(consumer: ServiceNode, edge: DependencyEdge): () => Resolution {
+function resolveEdge(consumer: UnitNode, edge: DependencyEdge): () => Resolution {
   return computed<Resolution>((previous) => {
     const next = edge.fallback ? resolveFallback(consumer, edge) : resolvePlain(consumer, edge)
     return previous && sameResolution(previous, next) ? previous : next
   })
 }
 
-export interface CreateServiceInput {
+export interface CreateUnitInput {
   readonly container: ContainerNode
-  readonly kind: ServiceKind
+  readonly kind: UnitKind
   readonly name: string
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
-  readonly metadata?: ServiceMetadata
+  readonly metadata?: UnitMetadata
   /** The retry and timeout options of the registration. An invocation has none. */
   readonly policy?: Policy
   readonly exclusive?: boolean
-  /** `true` for an exported registration. A consumer service of a `perConsumer` registration is never exported. */
-  readonly exported?: boolean
-  readonly perConsumer?: boolean
-  readonly template?: ServiceNode
+  /** `'parent'` for a registration that is visible to the parent. A consumer unit of a per-container registration is always `'local'`. */
+  readonly visibility?: 'local' | 'parent'
+  readonly instances?: 'shared' | 'per-container'
+  readonly template?: UnitNode
   readonly consumer?: OwnerRecord
   readonly transaction?: TransactionNode
   readonly registration?: RegistrationNode
-  /** Set for a new service that replaces another service after it completes `start`. */
+  /** Set for a new unit that replaces another unit after it completes `start`. */
   readonly swap?: SwapState
-  /** The first phase. It defaults to `pending`. A transaction starts its services in `declared`. */
-  readonly phase?: ServicePhase
-  /** The place in registration order. A rebuild successor keeps the place of the service that it replaces. */
+  /** The first phase. It defaults to `pending`. A transaction starts its units in `declared`. */
+  readonly phase?: UnitPhase
+  /** The place in registration order. A rebuild successor keeps the place of the unit that it replaces. */
   readonly seq?: number
 }
 
@@ -96,16 +96,16 @@ const emptyMetadata = Object.freeze({})
 const emptyPolicy: Policy = Object.freeze({})
 
 /**
- * Creates a service with its signals, its derived values, and its effects.
+ * Creates a unit with its signals, its derived values, and its effects.
  *
- * The main effect reads the derived values of the service and only marks the service dirty.
+ * The main effect reads the derived values of the unit and only marks the unit dirty.
  * The status effect sends each change of the effective status to the observe stream.
  */
-export function createService(input: CreateServiceInput): ServiceNode {
+export function createUnit(input: CreateUnitInput): UnitNode {
   const { container } = input
   const { runtime } = container
   const present = signal(true)
-  const phase = signal<ServicePhase>(input.phase ?? 'pending')
+  const phase = signal<UnitPhase>(input.phase ?? 'pending')
   const instance = signal<InstanceNode | undefined>(undefined)
   // A resolver always converges. It exists only while its `resolve` call waits.
   const demanded = signal(input.kind === 'resolver')
@@ -113,10 +113,10 @@ export function createService(input: CreateServiceInput): ServiceNode {
   const resolutions = new Map<string, () => Resolution>()
 
   const effective = createEffectiveStatus({ phase, instance, edges: input.edges, resolutions })
-  // The conflict reads the service, so it is created after the service object.
-  let rivals: () => readonly ServiceNode[] = () => []
+  // The conflict reads the unit, so it is created after the unit object.
+  let rivals: () => readonly UnitNode[] = () => []
 
-  const service: ServiceNode = {
+  const unit: UnitNode = {
     seq: input.seq ?? runtime.nextSeq(),
     kind: input.kind,
     name: input.name,
@@ -127,8 +127,8 @@ export function createService(input: CreateServiceInput): ServiceNode {
     metadata: input.metadata ?? emptyMetadata,
     policy: input.policy ?? emptyPolicy,
     exclusive: input.exclusive ?? false,
-    exported: input.template === undefined && (input.exported ?? false),
-    perConsumer: input.perConsumer ?? false,
+    visibility: input.template === undefined ? input.visibility ?? 'local' : 'local',
+    instances: input.instances ?? 'shared',
     template: input.template,
     consumer: input.consumer,
     registration: input.registration,
@@ -143,14 +143,14 @@ export function createService(input: CreateServiceInput): ServiceNode {
       instance,
       demanded,
       subscribers,
-      // Only a service with a key can be demanded. An invocation waits for `start()`.
+      // Only a unit with a key can be demanded. An invocation waits for `start()`.
       active: computed(() => container.signals.started() || (input.kind !== 'invocation' && (demanded() || subscribers().size > 0))),
       serving: computed(() => present() && phase() === 'running'),
       resolutions,
       effective,
       rivals: () => rivals(),
-      consumers: signal<ReadonlyMap<ContainerNode, ServiceNode>>(new Map()),
-      targetLost: computed(() => !present() || !service.signals.active() || service.signals.rivals().length > 0 || requiredWithdrawn(service)),
+      consumers: signal<ReadonlyMap<ContainerNode, UnitNode>>(new Map()),
+      targetLost: computed(() => !present() || !unit.signals.active() || unit.signals.rivals().length > 0 || requiredWithdrawn(unit)),
     },
     busy: false,
     stopIntent: {},
@@ -164,28 +164,28 @@ export function createService(input: CreateServiceInput): ServiceNode {
   }
 
   for (const edge of input.edges)
-    resolutions.set(edge.name, resolveEdge(service, edge))
-  rivals = createRivals(service)
+    resolutions.set(edge.name, resolveEdge(unit, edge))
+  rivals = createRivals(unit)
 
   const stopMain = withOwner(container.reactiveOwner, () => effect(() => {
     present()
     phase()
-    service.signals.active()
-    service.signals.rivals()
+    unit.signals.active()
+    unit.signals.rivals()
     instance()?.signals.holders()
-    // A new service that waits to replace another one follows the old service.
-    service.swap?.target.signals.present()
+    // A new unit that waits to replace another one follows the old unit.
+    unit.swap?.target.signals.present()
     for (const resolution of resolutions.values()) {
       const current = resolution()
       // A provider that is not running yet can still fail. A pending `resolve` call needs to see that.
       if (current.kind === 'not-running')
         current.provider.signals.phase()
-      // A pending service waits for an available provider. A running one handles status changes.
+      // A pending unit waits for an available provider. A running one handles status changes.
       if (current.kind === 'resolved')
         current.provider.signals.effective()
     }
 
-    runtime.reconciler.markDirty(service)
+    runtime.reconciler.markDirty(unit)
   }))
 
   const stopStatus = input.kind === 'resolver'
@@ -193,13 +193,13 @@ export function createService(input: CreateServiceInput): ServiceNode {
     : withOwner(container.reactiveOwner, () => effect(() => {
         const status = effective()
         // The report reads the instance. It must not track it.
-        untracked(() => reportStatus(service, status))
+        untracked(() => reportStatus(unit, status))
       }))
 
-  service.disposeEffects = () => {
+  unit.disposeEffects = () => {
     stopMain()
     stopStatus()
   }
 
-  return service
+  return unit
 }

@@ -5,10 +5,10 @@ import { checkDecision, createHookContext } from '../testing/testing'
 
 describe('decide in a hook context', () => {
   it('creates frozen decisions with the fields of the context', () => {
-    const context = createHookContext('dependency-status-change', { service: 'voice.speech', instanceId: 'i7', attempt: 3, now: () => 42 })
+    const context = createHookContext('dependency-status-change', { unit: 'voice.speech', instanceId: 'i7', attempt: 3, now: () => 42 })
     const decision = context.decide.requeue({ after: 100, reason: 'warming up' })
 
-    expect(decision).toEqual({ kind: 'requeue', after: 100, reason: 'warming up', service: 'voice.speech', instanceId: 'i7', hook: 'dependency-status-change', attempt: 3, issuedAt: 42 })
+    expect(decision).toEqual({ kind: 'requeue', after: 100, reason: 'warming up', unit: 'voice.speech', instanceId: 'i7', hook: 'dependency-status-change', attempt: 3, issuedAt: 42 })
     expect(Object.isFrozen(decision)).toBe(true)
     expect(checkDecision(context, decision)).toBe(decision)
     expect(context.attempt).toBe(3)
@@ -32,7 +32,7 @@ describe('decide in a hook context', () => {
     expect(checkDecision(start, null)).toBeUndefined()
     expect(checkDecision(start, { ...start.decide.handled() })).toBeUndefined()
     expect(() => checkDecision(start, other.decide.handled())).toThrow(expect.objectContaining({ code: 'invalid-decision' }))
-    // Another hook of the same service is another run.
+    // Another hook of the same unit is another run.
     expect(() => checkDecision(createHookContext('stop'), start.decide.handled())).toThrow(InvalidDecisionError)
   })
 

@@ -1,9 +1,9 @@
-import type { RegistrationNode, ServiceDefinition, ServiceNode, SwapOutcome } from '../graph/graph'
+import type { RegistrationNode, SwapOutcome, UnitDefinition, UnitNode } from '../graph/graph'
 import type { PendingSwap } from '../reconciler/swap'
 import type { Registration, WithdrawOptions } from '../types'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
-import { cancelPending, cancelSuccessor, createService, currentService, publishService, readDefinition, releaseService } from '../graph/nodes'
+import { cancelPending, cancelSuccessor, createUnit, currentUnit, publishUnit, readDefinition, releaseUnit } from '../graph/nodes'
 import { onAbort, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
@@ -23,54 +23,54 @@ function outcomeResult(outcome: SwapOutcome, name: string): boolean {
   }
 }
 
-/** Makes `service` the current registration in place of `target`, in the caller's batch. */
-export function takeOver(registration: RegistrationNode, target: ServiceNode, service: ServiceNode): void {
+/** Makes `unit` the current registration in place of `target`, in the caller's batch. */
+export function takeOver(registration: RegistrationNode, target: UnitNode, unit: UnitNode): void {
   cancelPending(registration)
-  target.replacedBy = service
-  releaseService(target)
-  publishService(service)
-  registration.current = service
+  target.replacedBy = unit
+  releaseUnit(target)
+  publishUnit(unit)
+  registration.current = unit
 }
 
-/** Replaces a service that has no serving instance. The new service takes the slot at once. */
-export function replaceAtOnce(registration: RegistrationNode, target: ServiceNode, definition: ServiceDefinition): ServiceNode {
-  let service: ServiceNode | undefined
+/** Replaces a unit that has no serving instance. The new unit takes the slot at once. */
+export function replaceAtOnce(registration: RegistrationNode, target: UnitNode, definition: UnitDefinition): UnitNode {
+  let unit: UnitNode | undefined
   batch(() => {
-    service = createService({
+    unit = createUnit({
       container: target.container,
-      kind: 'service',
+      kind: 'unit',
       name: target.name,
       edges: definition.edges,
       build: definition.build,
       metadata: definition.metadata,
       policy: definition.policy,
       exclusive: target.exclusive,
-      exported: target.exported,
-      perConsumer: target.perConsumer,
+      visibility: target.visibility,
+      instances: target.instances,
       registration,
     })
-    service.signals.demanded(target.signals.demanded())
-    target.container.services.add(service)
-    takeOver(registration, target, service)
+    unit.signals.demanded(target.signals.demanded())
+    target.container.units.add(unit)
+    takeOver(registration, target, unit)
   })
 
-  return service!
+  return unit!
 }
 
 /**
- * Replaces the `perConsumer` registration `target` with the unpublished registration `template`. Resolves with the outcome.
+ * Replaces the per-container registration `target` with the unpublished registration `template`. Resolves with the outcome.
  *
- * Each running consumer service gets a successor that builds and starts from `definition`. A successor that completes `start` waits.
- * When every successor waits, one batch publishes `template` and swaps in all successors. The other consumer services leave and build again on demand.
- * When one successor fails, all successors leave, `template` leaves, and the old registration and its consumer services do not change.
- * A consumer service that leaves during the replacement, for example with its container, drops out of the batch.
+ * Each running consumer unit gets a successor that builds and starts from `definition`. A successor that completes `start` waits.
+ * When every successor waits, one batch publishes `template` and swaps in all successors. The other consumer units leave and build again on demand.
+ * When one successor fails, all successors leave, `template` leaves, and the old registration and its consumer units do not change.
+ * A consumer unit that leaves during the replacement, for example with its container, drops out of the batch.
  * A newer `replace` or a withdrawal cancels the replacement.
  */
-export function replaceTemplate(registration: RegistrationNode, target: ServiceNode, template: ServiceNode): Promise<SwapOutcome> {
-  const definition: ServiceDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, perConsumer: true, exported: false, policy: template.policy }
+export function replaceTemplate(registration: RegistrationNode, target: UnitNode, template: UnitNode): Promise<SwapOutcome> {
+  const definition: UnitDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, instances: 'per-container', visibility: 'local', policy: template.policy }
   const outcome = createDeferred<SwapOutcome>()
-  const waiting = new Set<ServiceNode>()
-  const held = new Set<ServiceNode>()
+  const waiting = new Set<UnitNode>()
+  const held = new Set<UnitNode>()
   let settled = false
 
   const finish = (result: SwapOutcome): void => {
@@ -93,7 +93,7 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
         successor.signals.present(false)
         successor.container.runtime.reconciler.markDirty(successor)
       }
-      releaseService(template)
+      releaseUnit(template)
     })
   }
   const commitIfReady = (): void => {
@@ -119,9 +119,9 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
       if (!consumer.signals.serving())
         continue
 
-      // A make-before-break rebuild of the consumer service gives way to the replacement.
+      // A make-before-break rebuild of the consumer unit gives way to the replacement.
       cancelSuccessor(consumer)
-      const { service } = createSuccessor(consumer, definition, {
+      const { unit } = createSuccessor(consumer, definition, {
         template,
         onSettle: (successor, result) => {
           waiting.delete(successor)
@@ -137,7 +137,7 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
           commitIfReady()
         },
       })
-      waiting.add(service)
+      waiting.add(unit)
     }
   })
   commitIfReady()
@@ -146,24 +146,24 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
 }
 
 /** Settles a replacement for its registration. */
-function settleRegistration(registration: RegistrationNode): (service: ServiceNode, outcome: SwapOutcome) => void {
-  return (service, outcome) => {
-    if (registration.pending === service)
+function settleRegistration(registration: RegistrationNode): (unit: UnitNode, outcome: SwapOutcome) => void {
+  return (unit, outcome) => {
+    if (registration.pending === unit)
       registration.pending = undefined
     if (outcome.kind === 'swapped')
-      registration.current = service
+      registration.current = unit
   }
 }
 
 /**
- * Starts the replacement of a running service. The old instance serves until the new one completes `start`.
+ * Starts the replacement of a running unit. The old instance serves until the new one completes `start`.
  * A transaction passes `extra`, and it sets `registration.pending` at its publish.
  */
-export function replaceRunning(registration: RegistrationNode, target: ServiceNode, definition: ServiceDefinition, extra?: Pick<Parameters<typeof createService>[0], 'phase' | 'transaction'>): PendingSwap {
+export function replaceRunning(registration: RegistrationNode, target: UnitNode, definition: UnitDefinition, extra?: Pick<Parameters<typeof createUnit>[0], 'phase' | 'transaction'>): PendingSwap {
   const pending = createSuccessor(target, definition, { onSettle: settleRegistration(registration), extra })
   if (!extra?.transaction) {
     cancelPending(registration)
-    registration.pending = pending.service
+    registration.pending = pending.unit
   }
 
   return pending
@@ -173,7 +173,7 @@ export function replaceRunning(registration: RegistrationNode, target: ServiceNo
  * Waits for the outcome of the pending replacement `pending`. When `signal` aborts first, it cancels the replacement, as a newer `replace` does.
  * The cancel settles the outcome as `cancelled`. The listener goes when the outcome settles.
  */
-async function awaitOutcome(registration: RegistrationNode, pending: ServiceNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
+async function awaitOutcome(registration: RegistrationNode, pending: UnitNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
   const removeAbort = onAbort(signal, () => {
     if (registration.pending === pending)
       batch(() => cancelPending(registration))
@@ -189,7 +189,7 @@ async function awaitOutcome(registration: RegistrationNode, pending: ServiceNode
 /** The `replace()` of a registration. */
 async function replace(registration: RegistrationNode, option: unknown, options: unknown): Promise<boolean> {
   const signal = readSignal(options as { readonly signal?: unknown } | undefined, 'replace')
-  const target = untracked(() => currentService(registration))
+  const target = untracked(() => currentUnit(registration))
   if (!target)
     return false
 
@@ -200,24 +200,24 @@ async function replace(registration: RegistrationNode, option: unknown, options:
   if (phase === 'stopping')
     throw new ReplaceWhileStoppingError(`'${registration.name}' is stopping. Wait until it stops, then call provide.`)
 
-  if (target.perConsumer) {
-    let template: ServiceNode | undefined
+  if (target.instances === 'per-container') {
+    let template: UnitNode | undefined
     const outcome = untracked(() => {
       batch(() => {
-        template = createService({
+        template = createUnit({
           container: target.container,
-          kind: 'service',
+          kind: 'unit',
           name: target.name,
           edges: definition.edges,
           build: definition.build,
           metadata: definition.metadata,
           policy: definition.policy,
           exclusive: target.exclusive,
-          exported: target.exported,
-          perConsumer: true,
+          visibility: target.visibility,
+          instances: 'per-container',
           registration,
         })
-        target.container.services.add(template)
+        target.container.units.add(template)
       })
       return replaceTemplate(registration, target, template!)
     })
@@ -229,7 +229,7 @@ async function replace(registration: RegistrationNode, option: unknown, options:
   }
 
   const pending = untracked(() => replaceRunning(registration, target, definition))
-  return awaitOutcome(registration, pending.service, pending.outcome, signal)
+  return awaitOutcome(registration, pending.unit, pending.outcome, signal)
 }
 
 const registrations = new WeakMap<object, RegistrationNode>()

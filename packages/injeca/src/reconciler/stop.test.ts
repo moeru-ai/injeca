@@ -6,7 +6,7 @@ import { collectRecords, createTestContainer, deferred, drained, manualClock, st
 
 describe('serial transitions', () => {
   // Design test 6.
-  it('builds the service again after its stop ends when the dependency returns during the stop', async () => {
+  it('builds the unit again after its stop ends when the dependency returns during the stop', async () => {
     const app = createTestContainer()
     const stopGate = deferred()
     const seen: string[] = []
@@ -71,7 +71,7 @@ describe('superseded runs', () => {
     await withdrawal
     // The withdrawal does not wait for the start run (G2). The late decision arrives after it.
     await drained(app)
-    // The fail decision is ignored. The service waits for a provider again. It is not failed.
+    // The fail decision is ignored. The unit waits for a provider again. It is not failed.
     expect(stateOf(app, 'voice.speech').phase).toBe('pending')
     expect(records).toContainEqual(expect.objectContaining({ type: 'decision', key: 'voice.speech', hook: 'start', decision: 'fail', ignored: true }))
   })
@@ -114,7 +114,7 @@ describe('stop timeouts', () => {
     expect(cleanupDone).toBe(true)
   })
 
-  it('resolves stop() for every caller at a stop timeout, and the service can start again', async () => {
+  it('resolves stop() for every caller at a stop timeout, and the unit can start again', async () => {
     const manual = manualClock()
     const { logger, warnings } = warningLogger()
     const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 50 } })
@@ -137,7 +137,7 @@ describe('stop timeouts', () => {
     expect(stateOf(app, 'airi.tray').phase).toBe('running')
   })
 
-  it('warns without the hint when only the service stops', async () => {
+  it('warns without the hint when only the unit stops', async () => {
     const manual = manualClock()
     const { logger, warnings } = warningLogger()
     const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 50 } })

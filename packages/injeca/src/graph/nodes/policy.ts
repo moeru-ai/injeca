@@ -1,5 +1,5 @@
 import type { TimeoutHandler } from '../../types'
-import type { ContainerNode, Policy, ServiceNode } from '../graph'
+import type { ContainerNode, Policy, UnitNode } from '../graph'
 
 import { InvalidArgumentError } from '../../diagnostics/errors'
 
@@ -78,17 +78,17 @@ function fromContainers<T>(container: ContainerNode | undefined, pick: (policy: 
   return undefined
 }
 
-/** The attempt limit of a requeue: the decision, then the service, then the containers. `undefined` means no limit. */
-export function maxAttemptsOf(service: ServiceNode, fromDecision: number | undefined): number | undefined {
-  return fromDecision ?? service.policy.maxAttempts ?? fromContainers(service.container, policy => policy.maxAttempts)
+/** The attempt limit of a requeue: the decision, then the unit, then the containers. `undefined` means no limit. */
+export function maxAttemptsOf(unit: UnitNode, fromDecision: number | undefined): number | undefined {
+  return fromDecision ?? unit.policy.maxAttempts ?? fromContainers(unit.container, policy => policy.maxAttempts)
 }
 
-/** The timeout of a hook: the service, then the containers. `undefined` means no timeout. */
-export function timeoutOf(service: ServiceNode, hook: 'start' | 'stop'): number | undefined {
-  return service.policy.timeouts?.[hook] ?? fromContainers(service.container, policy => policy.timeouts?.[hook])
+/** The timeout of a hook: the unit, then the containers. `undefined` means no timeout. */
+export function timeoutOf(unit: UnitNode, hook: 'start' | 'stop'): number | undefined {
+  return unit.policy.timeouts?.[hook] ?? fromContainers(unit.container, policy => policy.timeouts?.[hook])
 }
 
-/** The `onTimeout` handler: the service, then the containers. */
-export function timeoutHandlerOf(service: ServiceNode): TimeoutHandler | undefined {
-  return service.policy.onTimeout ?? fromContainers(service.container, policy => policy.onTimeout)
+/** The `onTimeout` handler: the unit, then the containers. */
+export function timeoutHandlerOf(unit: UnitNode): TimeoutHandler | undefined {
+  return unit.policy.onTimeout ?? fromContainers(unit.container, policy => policy.onTimeout)
 }

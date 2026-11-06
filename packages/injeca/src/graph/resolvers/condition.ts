@@ -1,5 +1,5 @@
 import type { ProviderInfo, ResolutionCondition } from '../../types'
-import type { DependencyEdge, ResolutionConsumer, ServiceNode } from '../graph'
+import type { DependencyEdge, ResolutionConsumer, UnitNode } from '../graph'
 
 import { untracked } from '../../helpers/signals'
 import { reportCallbackError } from '../observers'
@@ -8,10 +8,10 @@ import { reportCallbackError } from '../observers'
  * The verdict of each condition for each provider registration.
  * The input of a condition is frozen, and a condition must be pure. So each pair runs once, and a throw is reported once.
  */
-const verdicts = new WeakMap<ResolutionCondition, WeakMap<ServiceNode, boolean>>()
+const verdicts = new WeakMap<ResolutionCondition, WeakMap<UnitNode, boolean>>()
 
 /** The read-only information about a provider registration that a condition gets. */
-export function providerInfo(registration: ServiceNode): ProviderInfo {
+export function providerInfo(registration: UnitNode): ProviderInfo {
   return Object.freeze({ key: registration.name, owner: registration.container.owner, metadata: registration.metadata })
 }
 
@@ -19,7 +19,7 @@ export function providerInfo(registration: ServiceNode): ProviderInfo {
  * Tells whether `condition` accepts the provider registration.
  * A thrown error counts as `false` and goes to the observe stream of the consumer.
  */
-export function acceptsProvider(consumer: ResolutionConsumer, keyName: string, condition: ResolutionCondition, registration: ServiceNode): boolean {
+export function acceptsProvider(consumer: ResolutionConsumer, keyName: string, condition: ResolutionCondition, registration: UnitNode): boolean {
   let byProvider = verdicts.get(condition)
   if (!byProvider) {
     byProvider = new WeakMap()
@@ -58,6 +58,6 @@ export function conditionsOf(edge: DependencyEdge | undefined, keyName: string):
 }
 
 /** Tells whether the provider registration passes each condition of the candidate `keyName` of `edge`. */
-export function acceptsCandidate(consumer: ResolutionConsumer, edge: DependencyEdge | undefined, keyName: string, registration: ServiceNode): boolean {
+export function acceptsCandidate(consumer: ResolutionConsumer, edge: DependencyEdge | undefined, keyName: string, registration: UnitNode): boolean {
   return conditionsOf(edge, keyName).every(condition => acceptsProvider(consumer, keyName, condition, registration))
 }

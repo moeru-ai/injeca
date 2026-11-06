@@ -108,7 +108,7 @@ describe('a cleanup that awaits the disposal of its own container with its signa
     expect(phaseOf(app, 'airi.window')).toBe('pending')
   })
 
-  it('waits as usual for a signal of a service that is not stopping', async () => {
+  it('waits as usual for a signal of a unit that is not stopping', async () => {
     const { logger, warnings } = warningLogger()
     const app = createTestContainer({ logger })
     let buildSignal: AbortSignal | undefined
@@ -135,7 +135,7 @@ describe('a cleanup that awaits the disposal of its own container with its signa
 })
 
 describe('a re-entrant call during a rebuild', () => {
-  it('resolves at once from a cleanup of a successor whose build failed, while the service is not stopping', async () => {
+  it('resolves at once from a cleanup of a successor whose build failed, while the unit is not stopping', async () => {
     const { logger, warnings } = warningLogger()
     const app = createTestContainer({ logger })
     const { records } = collectRecords(app)
@@ -211,9 +211,9 @@ describe('a re-entrant call during a rebuild', () => {
   })
 })
 
-describe('a cleanup outside the subtree that holds a service of it', () => {
-  // The parent service holds the export of a plugin container. Its stop hook disposes the plugin, as a plugin host does with `host.stop(id, { signal })`.
-  // The disposal of the plugin withdraws the export, and the export waits for its holders. So the disposal waits for the cleanup that called it.
+describe('a cleanup outside the subtree that holds a unit of it', () => {
+  // The parent unit holds a parent-visible unit of a plugin container. Its stop hook disposes the plugin, as a plugin host does with `host.stop(id, { signal })`.
+  // The disposal of the plugin withdraws that unit, and the unit waits for its holders. So the disposal waits for the cleanup that called it.
   function setup() {
     const manual = manualClock()
     const { logger, warnings } = warningLogger()
@@ -222,7 +222,7 @@ describe('a cleanup outside the subtree that holds a service of it', () => {
     const { records } = collectRecords(app)
     const toolStopGate = deferred()
     provide(plugin, 'plugin.tool', {
-      export: true,
+      visibility: 'parent',
       build: ({ on }) => {
         on('stop', () => toolStopGate.promise)
         return 'tool'
@@ -293,13 +293,13 @@ describe('a cleanup outside the subtree that holds a service of it', () => {
     expect(records.filter(record => record.type === 'reentrant-call')).toEqual([expect.objectContaining({ call: 'stop', key: 'airi.panel' })])
   })
 
-  it('resolves at once when the holder holds a consumer service of a perConsumer export', async () => {
+  it('resolves at once when the holder holds a consumer unit of a parent-visible per-container registration', async () => {
     const { clock, pending } = manualClock()
     const { logger, warnings } = warningLogger()
     const app = createTestContainer({ clock, logger, timeouts: { stop: 1_000 } })
     const plugin = createTestContainer({ parent: app, owner: { plugin: 'weather' }, logger })
-    provide(plugin, 'plugin.client', { export: true, perConsumer: true, build: () => 'client' })
-    // The panel holds a service that holds the consumer service. The consumer service lives in `app`, but the disposal of the plugin withdraws it.
+    provide(plugin, 'plugin.client', { visibility: 'parent', instances: 'per-container', build: () => 'client' })
+    // The panel holds a unit that holds the consumer unit. The consumer unit lives in `app`, but the disposal of the plugin withdraws it.
     provide(app, 'airi.session', { dependsOn: { client: 'plugin.client' }, build: () => 'session' })
     provide(app, 'airi.panel', {
       dependsOn: { session: 'airi.session' },
@@ -356,7 +356,7 @@ describe('a cleanup outside the subtree that holds a service of it', () => {
     expect(warnings).toEqual([])
   })
 
-  it('waits for a signal of a stopping service that holds nothing of the plugin', async () => {
+  it('waits for a signal of a stopping unit that holds nothing of the plugin', async () => {
     const { app, plugin, records, warnings, toolStopGate } = setup()
     let traySignal: AbortSignal | undefined
     const tray = provide(app, 'airi.tray', ({ on, signal }) => {

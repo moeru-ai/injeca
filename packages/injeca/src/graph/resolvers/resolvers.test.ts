@@ -33,7 +33,7 @@ describe('shadowing', () => {
     })
     await drained(root)
     // The child provider is starting. The dependent keeps the root provider and does not stop.
-    expect(graph(child).services().find(service => service.key === 'airi.tts')?.phase).toBe('starting')
+    expect(graph(child).units().find(unit => unit.key === 'airi.tts')?.phase).toBe('starting')
     expect(phaseOf(child, 'voice.speech')).toBe('running')
     // A consumer in the child sees the root provider until the child provider runs.
     expect(stateOf(child, ttsKey).instanceId).toBe(stateOf(root, ttsKey).instanceId)
@@ -51,24 +51,24 @@ describe('shadowing', () => {
   })
 })
 
-describe('key isolation', () => {
-  it('does not resolve an isolated key from the ancestors', async () => {
+describe('local keys', () => {
+  it('does not resolve a local key from the ancestors', async () => {
     const root = createTestContainer()
-    const isolated = createTestContainer({ parent: root, isolate: [ttsKey, 'airi.llm'] })
+    const local = createTestContainer({ parent: root, local: [ttsKey, 'airi.llm'] })
     provide(root, ttsKey, () => 'root tts')
     provide(root, 'airi.llm', () => 'root llm')
     provide(root, 'airi.config', () => 'config')
-    provide(isolated, 'voice.speech', { dependsOn: { tts: ttsKey }, build: ({ dependsOn }) => dependsOn.tts })
-    provide(isolated, 'voice.config', { dependsOn: { config: 'airi.config' }, build: ({ dependsOn }) => dependsOn.config })
+    provide(local, 'voice.speech', { dependsOn: { tts: ttsKey }, build: ({ dependsOn }) => dependsOn.tts })
+    provide(local, 'voice.config', { dependsOn: { config: 'airi.config' }, build: ({ dependsOn }) => dependsOn.config })
     await start(root)
-    void start(isolated)
+    void start(local)
     await drained(root)
 
-    expect(phaseOf(isolated, 'voice.speech')).toBe('pending')
-    expect(phaseOf(isolated, 'voice.config')).toBe('running')
+    expect(phaseOf(local, 'voice.speech')).toBe('pending')
+    expect(phaseOf(local, 'voice.config')).toBe('running')
 
-    provide(isolated, ttsKey, () => 'own tts')
+    provide(local, ttsKey, () => 'own tts')
     await drained(root)
-    expect(phaseOf(isolated, 'voice.speech')).toBe('running')
+    expect(phaseOf(local, 'voice.speech')).toBe('running')
   })
 })
