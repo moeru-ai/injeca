@@ -53,8 +53,9 @@ export interface ReplaceFunction<T> {
 /** The options of `replace()`. */
 export interface ReplaceOptions {
   /**
-   * Cancels the pending replacement when the signal aborts, as a newer `replace` does. The old instance stays, and `replace()` resolves `false`.
-   * An aborted signal resolves `false` at once and changes nothing. After the swap, the signal has no effect.
+   * Cancels the pending replacement when the signal aborts, as a newer `replace` does. The old instance stays, and `replace()` rejects.
+   * A timeout reason (`name === 'TimeoutError'`) rejects with `wait-timeout`, with the reason as `cause`. Its message tells what the new instance waits for.
+   * Another reason rejects as it is. An aborted signal rejects at once and changes nothing. After the swap, the signal has no effect. There is no default.
    */
   signal?: AbortSignal
 }
@@ -85,8 +86,9 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
    * Replaces the instance of the unit without a gap.
    *
    * The old instance keeps serving with its status while the new instance runs `build` and `start`. The swap is one batch.
-   * Resolves `true` after the swap. Resolves `false` for a stale registration, when a newer `replace` or a withdrawal supersedes this call, or when `options.signal` aborts before the swap.
+   * Resolves `true` after the swap. Resolves `false` for a stale registration, or when a newer `replace` or a withdrawal supersedes this call.
    * Rejects with the build or start error of the new instance, and the old instance does not change.
+   * Rejects when `options.signal` aborts before the swap. See `ReplaceOptions.signal`.
    * Rejects with `replace-while-stopping` when the unit is in `stopping`.
    */
   readonly replace: ReplaceFunction<T>

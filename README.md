@@ -128,6 +128,8 @@ npx skills add moeru-ai/injeca
 - [Migration from 0.2](#migration-from-02)
 - [Migration from 0.3 to 0.4](#migration-from-03-to-04)
 - [Migration from 0.4 to 0.5](#migration-from-04-to-05)
+  - [Service is now unit](#service-is-now-unit)
+  - [An aborted replace() rejects](#an-aborted-replace-rejects)
 - [Documentation automation](#documentation-automation)
 - [Development](#development)
 - [License](#license)
@@ -355,10 +357,12 @@ await stop(container, { signal: timeout(container, 5_000) })
 | `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The units that did not stop stay in `stopping` until their cleanups settle. |
 | `dispose(container, { signal })` | Rejects with the reason. The disposal continues in the background, and the container stays in `disposing`. A later `dispose(container)` waits for the same disposal and gets its result. |
 | `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The unit gets a `wait-aborted` record when it did not finish. `invoke()` handles take the same option. |
-| `registration.replace(option, { signal })` | Cancels a pending replacement, as a newer `replace()` does. The old instance stays, and `replace()` resolves `false`. After the swap, the abort has no effect. |
-| `tx.commit({ signal })` | Before the publish, the transaction aborts and rolls back, and `commit()` rejects at once with the reason. After the publish, the abort has no effect. |
+| `registration.replace(option, { signal })` | Cancels a pending replacement, as a newer `replace()` does. The old instance stays, and `replace()` rejects. A timeout reason gives `WaitTimeoutError` (`wait-timeout`). Its message tells what the new instance waits for. Another reason rejects as it is. An aborted signal rejects at once and changes nothing. After the swap, the abort has no effect. |
+| `tx.commit({ signal })` | Before the publish, the transaction aborts and rolls back, and `commit()` rejects at once with the reason. A `tx.replace` keeps the old instance. After the publish, the abort has no effect. The commit does not wait for the swap of a `tx.replace`. |
 
 - For `stop`, `dispose`, and `withdraw`, each unit that did not stop gets a `wait-aborted` record in `observe`, with the phase at the abort and the reason.
+- `replace` and `tx.commit` send no `wait-aborted` record. Their abort cancels the work, so no work continues without a waiter. The new instance leaves with its usual phase records.
+- `resolve`, `waitFor`, `start`, and `replace` turn a timeout reason into a typed error, because they wait for a state. The error tells which state did not come.
 - For `start`, `stop`, `dispose`, and `withdraw`, an aborted signal still starts the action. Only the wait ends.
 
 ### Calling dispose from a cleanup
@@ -492,7 +496,23 @@ await tts.replace(() => createTtsV2())
 - The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the units above it.
 - `graph(container).explain(key)` shows the new instance as `replacement` while the swap waits, with its phase and blockers.
 - A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A unit in `stopping` rejects with `ReplaceWhileStoppingError`.
-- `replace(option, { signal })` cancels the pending replacement when the signal aborts, and resolves `false`. See [Cancellation](#cancellation).
+- `replace(option, { signal })` cancels the pending replacement when the signal aborts, and rejects. A newer `replace()` still resolves `false`, so a caller can tell a timeout from a supersede. See [Cancellation](#cancellation).
+
+```ts
+try {
+  await extension.replace({ dependsOn: { gateway: gatewayKey }, build: createExtension }, { signal: timeout(container, 5_000) })
+}
+catch (error) {
+  if (error instanceof WaitTimeoutError)
+    // replace('extension') timed out before the swap. The replacement is not running:
+    // - extension is pending: no provider for 'airi.gateway' (gateway)
+    report(error.message)
+  else
+    throw error
+}
+```
+
+- The message of the `WaitTimeoutError` explains the new instance at the timeout. For a per-container registration, it has one line for each consumer unit that did not complete `start`. The replacement is gone after the abort, so `graph(container).explain()` no longer shows it.
 
 ### Transactions
 
@@ -934,7 +954,11 @@ createContainer({ logging: true }) // lifecycle logs
 
 ## Migration from 0.4 to 0.5
 
-0.5 renames "service" to "unit". A unit is a registration that `provide()` makes, with the instances that it builds. 0.5 also renames the options for sharing and visibility. The behavior does not change.
+0.5 has two breaking changes. It renames "service" to "unit", and an aborted `replace()` signal rejects.
+
+### Service is now unit
+
+0.5 renames "service" to "unit". A unit is a registration that `provide()` makes, with the instances that it builds. 0.5 also renames the options for sharing and visibility. The rename does not change the behavior.
 
 ```ts
 // 0.4
@@ -966,6 +990,36 @@ graph(container).units()
 - `instances` and `visibility` accept only the values in the table. Another value, for example `true`, throws `InvalidArgumentError`.
 - An old option such as `perConsumer: true` or `export: true` is not read any more, and the type check rejects it in an object literal. Without the type check, the registration is shared and local.
 - Check the error codes in your own `catch` blocks and the `kind` values in your own code that reads graph queries.
+
+### An aborted replace() rejects
+
+0.5 changes the result of `registration.replace(option, { signal })` when the signal aborts before the swap. In 0.4, it resolved `false`, the same result as for a newer `replace()`. Now it rejects:
+
+```ts
+// 0.4
+const replaced = await registration.replace(option, { signal: timeout(container, 5_000) })
+if (!replaced)
+  console.warn('superseded or timed out') // cannot tell which
+
+// 0.5
+try {
+  const replaced = await registration.replace(option, { signal: timeout(container, 5_000) })
+  if (!replaced)
+    console.warn('a newer replace() or a withdrawal superseded it, or the registration is stale')
+}
+catch (error) {
+  if (!(error instanceof WaitTimeoutError))
+    throw error
+  console.warn(error.message) // names the unmet dependencies of the new option
+}
+```
+
+- A timeout reason rejects with `WaitTimeoutError` (`wait-timeout`). Its `cause` is the reason. Its message tells what the new instance waited for.
+- Another reason rejects as it is, as for `resolve`.
+- An aborted signal rejects at once and changes nothing. In 0.4, it resolved `false`.
+- A stale registration, a newer `replace()`, and a withdrawal still resolve `false`. A swap still resolves `true`.
+- Remove a `resolve()` of the new dependencies before `replace()` that only gave a timeout error. The `replace()` error has the same information now.
+- `tx.commit({ signal })` does not change.
 
 ## Documentation automation
 

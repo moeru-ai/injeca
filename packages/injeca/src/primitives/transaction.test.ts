@@ -367,4 +367,30 @@ describe('commit with a signal', () => {
     await drained(app)
     expect(phaseOf(app, 'airi.llm')).toBe('running')
   })
+
+  it('rejects a commit with tx.replace with the reason before the publish. The old instance stays', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const oldId = stateOf(app, llm).instanceId
+    const gate = deferred()
+    const tx = transaction(app)
+    tx.replace(llm, async () => {
+      await gate.promise
+      return 'new'
+    })
+    const { controller, signal, listeners } = trackedController()
+    const reason = new Error('the user cancelled')
+
+    const committed = tx.commit({ signal })
+    await drained(app)
+    controller.abort(reason)
+    await expect(committed).rejects.toBe(reason)
+    expect(listeners()).toBe(0)
+
+    gate.resolve()
+    await drained(app)
+    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
+    await expect(llm.replace(() => 'newer')).resolves.toBe(true)
+  })
 })

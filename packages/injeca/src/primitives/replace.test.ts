@@ -2,7 +2,7 @@ import type { BuildContext } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { ReplaceWhileStoppingError } from '../diagnostics/errors'
+import { ReplaceWhileStoppingError, WaitTimeoutError } from '../diagnostics/errors'
 import { describeExplanations } from '../diagnostics/explain'
 import { graph, provide, resolve, start, stop, timeout } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, trackedController } from '../testing/helpers'
@@ -275,12 +275,39 @@ describe('replace', () => {
 })
 
 describe('replace with a signal', () => {
-  it('cancels a pending replacement when the signal aborts. The old instance stays, and replace resolves false', async () => {
+  it('rejects with wait-timeout and a message that names the missing dependency for a timeout reason. The old instance stays', async () => {
     const { clock, advance } = manualClock()
     const app = createTestContainer({ clock })
     const llm = provide(app, 'airi.llm', () => 'old')
     await start(app)
     const oldId = stateOf(app, llm).instanceId
+    const { records } = collectRecords(app)
+    const signal = timeout(app, 50)
+
+    const replaced = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' }, { signal })
+    const rejection = expect(replaced).rejects
+    await drained(app)
+    expect(graph(app).explain('airi.llm').replacement).toMatchObject({ phase: 'pending' })
+    advance(50)
+
+    await rejection.toBeInstanceOf(WaitTimeoutError)
+    const error = await replaced.catch((caught: unknown) => caught) as WaitTimeoutError
+    expect(error.code).toBe('wait-timeout')
+    expect(error.cause).toBe(signal.reason)
+    expect(error.message).toBe(`replace('airi.llm') timed out before the swap. The replacement is not running:\n- airi.llm is pending: no provider for 'airi.gateway' (gateway)`)
+
+    await drained(app)
+    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
+    expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
+    // The abort cancels the replacement. No work continues without a waiter, so there is no `wait-aborted` record.
+    expect(records.filter(record => record.type === 'wait-aborted')).toEqual([])
+  })
+
+  it('names a start hook that did not settle in the timeout error', async () => {
+    const { clock, advance } = manualClock()
+    const app = createTestContainer({ clock })
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
     const newStop = vi.fn()
 
     const replaced = llm.replace(({ on }) => {
@@ -288,46 +315,75 @@ describe('replace with a signal', () => {
       on('stop', newStop)
       return 'new'
     }, { signal: timeout(app, 50) })
+    const rejection = expect(replaced).rejects.toThrow(`replace('airi.llm') timed out before the swap. The replacement is not running:\n- airi.llm is starting`)
     await drained(app)
-    expect(graph(app).explain('airi.llm').replacement).toMatchObject({ phase: 'starting' })
     advance(50)
-    await expect(replaced).resolves.toBe(false)
+    await rejection
     await drained(app)
 
-    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
-    expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
+    expect(newStop).toHaveBeenCalledTimes(1)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
   })
 
-  it('cancels a pending per-container replacement, and keeps the old consumer units', async () => {
-    const root = createTestContainer({ owner: { kind: 'host' } })
-    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
-    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
-    await start(root)
-    await start(extension)
-    await resolve(extension, { client })
+  it('rejects with the reason as it is for another reason, and cancels the replacement', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const { controller, signal, listeners } = trackedController()
+    const reason = new Error('the user closed the window')
 
-    const controller = new AbortController()
-    const replaced = client.replace(({ on }) => {
-      on('start', () => new Promise<void>(() => {}))
-      return 'v2'
-    }, { signal: controller.signal })
-    await drained(root)
-    controller.abort('cancelled')
-    await expect(replaced).resolves.toBe(false)
-    await drained(root)
-    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+    const replaced = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' }, { signal })
+    await drained(app)
+    controller.abort(reason)
+    await expect(replaced).rejects.toBe(reason)
+    expect(listeners()).toBe(0)
+
+    provide(app, 'airi.gateway', () => 'gateway')
+    await drained(app)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
   })
 
-  it('resolves false at once for an aborted signal and changes nothing', async () => {
+  it('rejects at once for an aborted signal and changes nothing', async () => {
     const app = createTestContainer()
     const build = vi.fn(() => 'new')
     const llm = provide(app, 'airi.llm', () => 'old')
     await start(app)
 
-    await expect(llm.replace(build, { signal: AbortSignal.abort('closed') })).resolves.toBe(false)
+    await expect(llm.replace(build, { signal: AbortSignal.abort('closed') })).rejects.toBe('closed')
+    const timedOut = AbortSignal.abort(new DOMException('The time ran out.', 'TimeoutError'))
+    const error = await llm.replace(build, { signal: timedOut }).catch((caught: unknown) => caught) as WaitTimeoutError
+    expect(error).toBeInstanceOf(WaitTimeoutError)
+    expect(error.message).toBe(`replace('airi.llm') timed out before the swap.`)
+    expect(error.cause).toBe(timedOut.reason)
+
     await drained(app)
     expect(build).not.toHaveBeenCalled()
     await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
+  })
+
+  it('resolves false for a stale registration, also with an aborted signal', async () => {
+    const app = createTestContainer()
+    const first = provide(app, 'airi.llm', () => 'first')
+    provide(app, 'airi.llm', () => 'second')
+    await start(app)
+
+    await expect(first.replace(() => 'stale', { signal: AbortSignal.abort('closed') })).resolves.toBe(false)
+  })
+
+  it('resolves false when a newer replace supersedes it. A later abort has no effect, and the listener goes', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const { controller, signal, listeners } = trackedController()
+
+    const first = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'first' }, { signal })
+    await drained(app)
+    const second = llm.replace(() => 'second')
+    await expect(first).resolves.toBe(false)
+    expect(listeners()).toBe(0)
+    controller.abort('late')
+    await expect(second).resolves.toBe(true)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'second' })
   })
 
   it('removes its listener after the swap, and an abort then has no effect', async () => {
@@ -341,5 +397,51 @@ describe('replace with a signal', () => {
     controller.abort('late')
     await drained(app)
     await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'new' })
+  })
+
+  it('cancels a pending per-container replacement and rejects with the reason. The old consumer units stay', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    await start(root)
+    await start(extension)
+    await resolve(extension, { client })
+
+    const { controller, signal, listeners } = trackedController()
+    const replaced = client.replace(({ on }) => {
+      on('start', () => new Promise<void>(() => {}))
+      return 'v2'
+    }, { signal })
+    await drained(root)
+    controller.abort('cancelled')
+    await expect(replaced).rejects.toBe('cancelled')
+    expect(listeners()).toBe(0)
+    await drained(root)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+  })
+
+  it('names each waiting consumer unit in the timeout error of a per-container replacement', async () => {
+    const { clock, advance } = manualClock()
+    const root = createTestContainer({ owner: { kind: 'host' }, clock })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    const other = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'f' } })
+    await start(root)
+    await start(extension)
+    await start(other)
+    await resolve(extension, { client })
+    await resolve(other, { client })
+
+    const replaced = client.replace({ dependsOn: { gateway: 'host.gateway' }, build: () => 'v2' }, { signal: timeout(root, 50) })
+    const rejection = replaced.catch((caught: unknown) => caught)
+    await drained(root)
+    advance(50)
+    const error = await rejection as WaitTimeoutError
+
+    expect(error).toBeInstanceOf(WaitTimeoutError)
+    expect(error.message).toBe(`replace('host.client') timed out before the swap. The replacement is not running:\n- host.client is pending: no provider for 'host.gateway' (gateway)\n- host.client is pending: no provider for 'host.gateway' (gateway)`)
+    await drained(root)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+    await expect(resolve(other, { client })).resolves.toEqual({ client: 'v1' })
   })
 })
