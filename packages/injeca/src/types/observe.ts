@@ -74,6 +74,16 @@ export interface WaitAbortedObserveRecord extends ObserveRecordBase {
   readonly abortReason: unknown
 }
 
+/**
+ * A cleanup called `stop()` or `dispose()` of its own container, or of an ancestor. The wait includes that cleanup, so injeca resolved the call at once. The action continues.
+ * `key` is the service of the cleanup, or `''` for a container effect.
+ */
+export interface ReentrantCallObserveRecord extends ObserveRecordBase {
+  readonly type: 'reentrant-call'
+  readonly call: 'stop' | 'dispose'
+  readonly reason: string
+}
+
 /** One record of the observe stream. */
 export type ObserveRecord
   = | PhaseObserveRecord
@@ -84,3 +94,4 @@ export type ObserveRecord
     | RegistrationReplacedObserveRecord
     | ErrorObserveRecord
     | WaitAbortedObserveRecord
+    | ReentrantCallObserveRecord

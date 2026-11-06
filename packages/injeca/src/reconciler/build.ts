@@ -12,6 +12,7 @@ import { createBuildContext } from './build-context'
 import { invokeUser, loggerOf } from './calls'
 import { demandProviders } from './demand'
 import { syncHolds } from './holds'
+import { recordSignalOrigin } from './reentry'
 import { currentSnapshot } from './snapshot'
 import { runStart } from './start'
 import { finalize, mergeIntent, teardown } from './stop'
@@ -95,6 +96,7 @@ export function prepareInstance(service: ServiceNode, snapshot: Snapshot): Insta
     disposed: false,
   }
 
+  recordSignalOrigin(instance.controller.signal, service)
   service.busy = true
   batch(() => {
     syncHolds(service, instance)

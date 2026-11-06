@@ -8,6 +8,7 @@ import { recordAbortedWait } from '../graph/observers'
 import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
 import { errorFrom } from '../helpers/error-from'
 import { batch, untracked } from '../helpers/signals'
+import { findReentry, reportReentry } from '../reconciler/reentry'
 
 const visibleKinds: ReadonlySet<ServiceNode['kind']> = new Set(['service', 'invocation'])
 
@@ -125,10 +126,31 @@ export function start(container: Container, options?: StartOptions): Promise<voi
  *
  * When `options.signal` aborts, it rejects with the reason and stops waiting. The container stays stopped: a later `start()` builds again.
  * The services that did not stop yet stay in `stopping` until their cleanups settle.
+ *
+ * A call from the cleanup chain of the container or of a descendant cannot wait, because the stop waits for that cleanup.
+ * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves at once. The stop continues.
  */
-export async function stop(container: Container, options?: StopOptions): Promise<void> {
-  const node = nodeOf(container)
-  const signal = readSignal(options, 'stop')
+export function stop(container: Container, options?: StopOptions): Promise<void> {
+  let node: ContainerNode
+  let signal: AbortSignal | undefined
+  try {
+    node = nodeOf(container)
+    signal = readSignal(options, 'stop')
+  }
+  catch (error) {
+    return Promise.reject(error)
+  }
+
+  const reentry = untracked(() => findReentry(node, signal))
+  if (!reentry)
+    return stopAndWait(node, signal)
+
+  untracked(() => reportReentry(node, 'stop', reentry))
+  stopAndWait(node, undefined).catch(() => {})
+  return Promise.resolve()
+}
+
+async function stopAndWait(node: ContainerNode, signal: AbortSignal | undefined): Promise<void> {
   const containers = affectedContainers(node)
   const affected = new Set(containers)
   // The container that the caller stops leaves the start set of its parent. Its started children stay in its own start set.

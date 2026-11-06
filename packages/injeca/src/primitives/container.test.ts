@@ -7,11 +7,10 @@ import {
   DuplicateServiceError,
   HookOutsideBuildError,
   InvalidArgumentError,
-  ReentrantDisposeError,
   StartTimeoutError,
 } from '../diagnostics/errors'
 import { defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop, timeout } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController } from '../testing/helpers'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController, warningLogger } from '../testing/helpers'
 
 describe('start and stop', () => {
   it('builds a service only after its required dependencies run', async () => {
@@ -1017,9 +1016,11 @@ describe('dispose', () => {
   })
 
   // Design test 12.
-  // The check sees only the synchronous part of a cleanup, in every runtime. A call after an `await` is not detected.
-  it('rejects a re-entrant dispose from the synchronous part of an async cleanup, and gives an outside caller the same promise', async () => {
-    const app = createTestContainer()
+  // The synchronous part of a cleanup is found in every runtime. After an `await`, only the signal of the cleanup tells injeca who calls.
+  it('resolves a re-entrant dispose from the synchronous part of an async cleanup at once, warns, and gives an outside caller the same promise', async () => {
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ logger })
+    const { records } = collectRecords(app)
     const remaining = vi.fn()
     let inner: Promise<void> | undefined
 
@@ -1033,31 +1034,35 @@ describe('dispose', () => {
     const second = dispose(app)
     expect(second).toBe(first)
 
-    await expect(first).rejects.toBeInstanceOf(ReentrantDisposeError)
-    await expect(inner).rejects.toMatchObject({ code: 'reentrant-dispose' })
+    await expect(first).resolves.toBeUndefined()
+    await expect(inner).resolves.toBeUndefined()
     expect(remaining).toHaveBeenCalledTimes(1)
+    expect(warnings).toEqual([expect.stringContaining('called dispose()')])
+    expect(records).toContainEqual(expect.objectContaining({ type: 'reentrant-call', call: 'dispose', key: '' }))
   })
 
-  it('rejects a synchronous re-entrant dispose from a stop hook and from a child container effect', async () => {
-    const parent = createTestContainer()
+  it('resolves a synchronous re-entrant dispose from a stop hook and from a child container effect at once', async () => {
+    const { logger, warnings } = warningLogger()
+    const parent = createTestContainer({ logger })
     const child = createTestContainer({ parent })
-    const reentrant: unknown[] = []
+    const calls: Promise<void>[] = []
 
     provide(parent, 'airi.llm', ({ on }) => {
       on('stop', () => {
-        dispose(parent).catch((error: unknown) => reentrant.push(error))
+        calls.push(dispose(parent))
       })
       return 'llm'
     })
     effect(child, () => () => {
       // The child cleanup belongs to the cleanup chain of the parent.
-      dispose(parent).catch((error: unknown) => reentrant.push(error))
+      calls.push(dispose(parent))
     })
     await start(parent)
 
     await dispose(parent)
-    expect(reentrant).toHaveLength(2)
-    expect(reentrant.every(error => error instanceof ReentrantDisposeError)).toBe(true)
+    expect(calls).toHaveLength(2)
+    await expect(Promise.all(calls)).resolves.toEqual([undefined, undefined])
+    expect(warnings).toHaveLength(2)
   })
 
   it('aborts a running build when its container is disposed, and the late result does not publish', async () => {

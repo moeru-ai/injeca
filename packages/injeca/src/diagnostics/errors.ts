@@ -7,7 +7,6 @@ export type InjecaErrorCode
     | 'hook-timeout'
     | 'invalid-argument'
     | 'invalid-decision'
-    | 'reentrant-dispose'
     | 'service-failed'
     | 'replace-while-stopping'
     | 'stale-registration'
@@ -89,16 +88,6 @@ export class TransactionIncompleteError extends InjecaError {
   constructor(message: string, options?: InjecaErrorOptions) {
     super('transaction-incomplete', message, options)
     this.name = 'TransactionIncompleteError'
-  }
-}
-
-/** `dispose()` was called from the cleanup chain of the same container. */
-export class ReentrantDisposeError extends InjecaError {
-  declare readonly code: 'reentrant-dispose'
-
-  constructor(message: string, options?: InjecaErrorOptions) {
-    super('reentrant-dispose', message, options)
-    this.name = 'ReentrantDisposeError'
   }
 }
 

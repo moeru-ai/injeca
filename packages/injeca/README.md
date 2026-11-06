@@ -172,7 +172,7 @@ provide(container, 'modules:camera', {
 - The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
 - When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
 - `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
-- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 - At a `start` timeout, the `signal` of the hook aborts with the `HookTimeoutError`. A `stop` handler sees the `stop` timeout on its `signal` in the same way.
 
@@ -205,6 +205,25 @@ await stop(container, { signal: timeout(container, 5_000) })
 
 - For `stop` and `dispose`, each service that did not stop gets a `wait-aborted` record in `observe`, with the phase at the abort and the reason.
 - For `start`, `stop`, and `dispose`, an aborted signal still starts the action. Only the wait ends.
+
+### Calling dispose from a cleanup
+
+A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. Pass the `signal` of the cleanup, so that injeca knows the caller:
+
+```ts
+provide(plugin, 'plugin:window', ({ on }) => {
+  on('stop', async ({ signal }) => {
+    await window.close()
+    await dispose(plugin, { signal }) // resolves at once, and the disposal continues
+  })
+  return createWindow()
+})
+```
+
+- injeca knows the signals that it gives to a build, a hook, and an invocation. A signal from `withTimeout(signal, ms, container)` keeps that origin. A signal from `AbortSignal.any()` does not.
+- A call with such a signal while the service is `stopping` does not wait. A call from the synchronous part of a cleanup does not wait either.
+- Such a call writes a warning with `logger.warn`, sends a `reentrant-call` record to `observe`, and resolves at once. The stop or the disposal continues. Other callers get a promise that settles when it ends.
+- A call without a signal after an `await` is not found. It waits for itself until a configured `stop` timeout ends the cleanup.
 
 ## Changes at run time
 
@@ -421,7 +440,7 @@ await dispose(plugin)
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
-- A dispose call from the synchronous part of a cleanup of the same container, or of a descendant, rejects with `ReentrantDisposeError` (`reentrant-dispose`). injeca behaves the same in every runtime, so it does not detect such a call after an `await`. A configured `stop` timeout ends that cleanup.
+- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 
 ### Exported registrations
 
@@ -585,7 +604,9 @@ await start(container, { signal: timeout(container, 10_000) })
 - A `TimeoutError` reason from your own signal, for example `AbortSignal.timeout()`, now also gives `WaitTimeoutError` or `StartTimeoutError`. Another reason rejects as it is, as before.
 - `stop`, `dispose`, `replace`, and `tx.commit` take `{ signal }` too. See [Cancellation](#cancellation).
 - `timeouts: { start, stop }` and `onTimeout` do not change. A `stop` handler now sees the `stop` timeout on its `signal`.
-- `observe` has a new record type, `wait-aborted`. A `switch` on `record.type` with an exhaustive check needs a case for it.
+- `observe` has two new record types, `wait-aborted` and `reentrant-call`. A `switch` on `record.type` with an exhaustive check needs a case for each.
+- `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()` or `dispose()` from a cleanup of its own container resolves at once with a warning. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- A custom `Logger` needs `warn(message)`. `createDefaultLogger`, `createLoggLogger`, and `createNoopLogger` have it.
 
 ## License
 

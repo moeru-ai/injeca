@@ -48,6 +48,9 @@ export function forwardAbort(controller: AbortController, sources: readonly Abor
   return release
 }
 
+/** The signals that each combined signal of `anySignal` comes from. A derived signal keeps the origin of its sources. */
+const parents = new WeakMap<AbortSignal, readonly AbortSignal[]>()
+
 /**
  * Returns a signal that aborts when one of `signals` aborts, with the reason of the first one. `undefined` entries are skipped.
  *
@@ -57,12 +60,34 @@ export function anySignal(...signals: ReadonlyArray<AbortSignal | undefined>): A
   const sources = signals.filter((signal): signal is AbortSignal => signal !== undefined)
   if (sources.length === 1)
     return sources[0]!
-  if (typeof AbortSignal.any === 'function')
-    return AbortSignal.any(sources)
 
-  const controller = new AbortController()
-  forwardAbort(controller, sources)
-  return controller.signal
+  let signal: AbortSignal
+  if (typeof AbortSignal.any === 'function') {
+    signal = AbortSignal.any(sources)
+  }
+  else {
+    const controller = new AbortController()
+    forwardAbort(controller, sources)
+    signal = controller.signal
+  }
+  parents.set(signal, sources)
+  return signal
+}
+
+/** Lists `signal` and each signal that it comes from through `anySignal`, `withTimeout` included, nearest first. */
+export function signalSources(signal: AbortSignal): AbortSignal[] {
+  const seen = new Set<AbortSignal>([signal])
+  const queue = [signal]
+  for (let index = 0; index < queue.length; index++) {
+    for (const parent of parents.get(queue[index]!) ?? []) {
+      if (!seen.has(parent)) {
+        seen.add(parent)
+        queue.push(parent)
+      }
+    }
+  }
+
+  return queue
 }
 
 /** A signal that aborts after `ms` of `clock`. `cancel` stops the timer, and the signal then never aborts. */

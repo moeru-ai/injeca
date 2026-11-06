@@ -9,6 +9,7 @@ import { batch } from '../helpers/signals'
 import { invokeUser, loggerOf } from './calls'
 import { syncHolds } from './holds'
 import { callHandler, decideTimeout, finishRun, recordDecision } from './hook-run'
+import { serviceFrame } from './reentry'
 import { cancelRequeueWait } from './requeue'
 
 export function mergeIntent(current: StopIntent, next: StopIntent): StopIntent {
@@ -49,12 +50,12 @@ export function reconcileStopping(service: ServiceNode): void {
  *
  * A configured `stop` timeout covers all of them. It is a timeout signal on the container clock. The `stop` handlers get it in their `signal`.
  * When it aborts, injeca records it, applies the `onTimeout` decision, and stops waiting.
- * The callback in progress is abandoned. The remaining callbacks still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+ * The callback in progress is abandoned. The remaining callbacks still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
  */
 async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
   const errors: unknown[] = []
   const { clock, context } = service.container.runtime
-  // Each callback runs inside the cleanup frame, so that a re-entrant dispose from it is detected.
+  // Each callback runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
   const call = <T>(fn: () => T | Promise<T>): Promise<T> => context.run(frame, () => invokeUser(fn))
 
   const timeoutMs = timeoutOf(service, 'stop')
@@ -125,8 +126,10 @@ export async function teardown(service: ServiceNode, instance: InstanceNode, sto
   if (phase)
     setPhase(service, phase, { reason: service.stopIntent.reason })
 
-  const frame = service.container.frame
+  // The frame of the teardown names the service, so that a synchronous `stop()` or `dispose()` from a cleanup is found, also outside a disposal.
+  const frame = serviceFrame(service, service.container.frame)
   const errors = await service.container.runtime.context.run(frame, () => runTeardownCallbacks(service, instance, stopHooks, frame))
+  frame.active = false
 
   instance.disposed = true
   instance.controller.abort(new Error(`The instance '${instance.id}' of '${service.name}' was disposed.`))

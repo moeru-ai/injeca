@@ -1,7 +1,9 @@
+import type { Logger } from '../diagnostics/logger'
 import type { Clock } from '../helpers/clock'
 import type { WatchKey } from '../queries/watch'
 import type { BuildContext, Container, KeyReference, ObserveRecord, OwnerRecord, ServicePhase, ServiceState } from '../types'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { nodeOf } from '../graph/nodes'
 import { createContainer } from '../primitives/container'
 import { provide } from '../primitives/provide'
@@ -78,9 +80,15 @@ export function manualClock(): ManualClock {
   }
 }
 
-/** Creates a container for a test. Logging is off, unless `enabled` is `true`. */
-export function createTestContainer(options: { parent?: Container, owner?: OwnerRecord, clock?: Clock, enabled?: boolean, isolate?: readonly KeyReference[] } = {}): Container {
-  return createContainer({ enabled: false, ...options })
+/** Creates a container for a test. Logging is off, unless `enabled` is `true` or `logger` is set. */
+export function createTestContainer(options: { parent?: Container, owner?: OwnerRecord, clock?: Clock, enabled?: boolean, isolate?: readonly KeyReference[], logger?: Logger } = {}): Container {
+  return createContainer({ enabled: options.logger !== undefined, ...options })
+}
+
+/** A logger that writes nothing and collects the messages of `warn`. */
+export function warningLogger(): { readonly logger: Logger, readonly warnings: string[] } {
+  const warnings: string[] = []
+  return { logger: { ...createNoopLogger(), warn: message => warnings.push(message) }, warnings }
 }
 
 /** Reads the current state of a key. `watch` sends it at once. */

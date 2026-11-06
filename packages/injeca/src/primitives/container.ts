@@ -3,7 +3,7 @@ import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../t
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
-import { BuildAfterDisposeError, InvalidArgumentError, ReentrantDisposeError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, InvalidArgumentError } from '../diagnostics/errors'
 import { createDefaultLogger, createNoopLogger } from '../diagnostics/logger'
 import { assertActive, nodeOf, readPolicy, registerNode, releaseService } from '../graph/nodes'
 import { recordAbortedWait } from '../graph/observers'
@@ -15,6 +15,7 @@ import { errorFrom } from '../helpers/error-from'
 import { batch, untracked, withOwner } from '../helpers/signals'
 import { abortTransaction } from '../reconciler/commit'
 import { createReconciler } from '../reconciler/reconciler'
+import { findReentry, reportReentry } from '../reconciler/reentry'
 import { normalizeName } from './keys'
 
 function deepFreeze<T>(value: T): T {
@@ -317,8 +318,10 @@ function unfinishedServices(container: ContainerNode): ServiceNode[] {
 /**
  * Withdraws the registrations and invocations of the container, disposes the child containers, and runs the container effects in reverse order.
  *
- * One error keeps its identity. More than one error becomes an `AggregateError`.
- * A call from the cleanup chain of the same container rejects with `reentrant-dispose`. A second call from outside without a signal gets the same promise.
+ * One error keeps its identity. More than one error becomes an `AggregateError`. A second call from outside without a signal gets the same promise.
+ *
+ * A call from the cleanup chain of the container or of a descendant cannot wait, because the disposal waits for that cleanup.
+ * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves at once. The disposal continues.
  *
  * When `options.signal` aborts, the call rejects with the reason and stops waiting. The disposal continues: the container stays in `disposing`, and calls on it fail with `build-after-dispose`.
  * A later `dispose()` waits for the same disposal and gets its result. An aborted signal starts the disposal, then rejects at once.
@@ -327,8 +330,7 @@ export function dispose(container: Container, options?: DisposeOptions): Promise
   const node = nodeOf(container)
   const abortSignal = readSignal(options, 'dispose')
   const { context } = node.runtime
-  if (context.isActive(node))
-    return Promise.reject(new ReentrantDisposeError('dispose() was called from the cleanup chain of the same container.'))
+  const reentry = untracked(() => findReentry(node, abortSignal))
 
   const disposal = node.disposal ?? untracked(() => {
     let started: Promise<void> | undefined
@@ -338,6 +340,12 @@ export function dispose(container: Container, options?: DisposeOptions): Promise
 
     return started!
   })
+  if (reentry) {
+    untracked(() => reportReentry(node, 'dispose', reentry))
+    // A later `dispose()` gets the result. This call does not report it.
+    disposal.catch(() => {})
+    return Promise.resolve()
+  }
 
   return abortable(disposal, abortSignal, (reason) => {
     recordAbortedWait(unfinishedServices(node), 'dispose', reason)

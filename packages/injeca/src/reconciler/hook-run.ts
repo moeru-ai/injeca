@@ -10,6 +10,7 @@ import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { createDecide, defaultDecision, validateDecision } from '../primitives/decision'
 import { invokeUser } from './calls'
+import { recordSignalOrigin } from './reentry'
 
 function hookStateOf(instance: InstanceNode, hook: ServiceHook): HookState {
   let state = instance.hookStates.get(hook)
@@ -49,6 +50,7 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
 export function beginHookRun(instance: InstanceNode, timeout?: AbortSignal): { readonly signal: AbortSignal, readonly end: () => void } {
   const controller = new AbortController()
   const release = forwardAbort(controller, timeout ? [instance.controller.signal, timeout] : [instance.controller.signal])
+  recordSignalOrigin(controller.signal, instance.service)
   instance.hookRun = controller
 
   return {

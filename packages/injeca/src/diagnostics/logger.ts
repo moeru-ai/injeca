@@ -12,6 +12,8 @@ export interface Logger {
   hookOnStop: (name: string) => void
   hookOnStopComplete: (name: string, duration: number) => void
   running: () => void
+  /** A call that injeca handled in another way than the caller asked, for example a re-entrant `dispose()` that resolved at once. */
+  warn: (message: string) => void
 }
 
 export interface LoggerOptions {
@@ -77,6 +79,10 @@ export function createDefaultLogger(): Logger {
       // eslint-disable-next-line no-console
       console.log(`[${name}] RUNNING`)
     },
+
+    warn: (message: string) => {
+      console.warn(`[${name}] WARN       ${message}`)
+    },
   }
 }
 
@@ -119,6 +125,10 @@ export function createLoggLogger(logg: LoggLogger): Logger {
     running: () => {
       logg.log(`RUNNING`)
     },
+
+    warn: (message: string) => {
+      logg.warn(message)
+    },
   }
 }
 
@@ -133,5 +143,6 @@ export function createNoopLogger(): Logger {
     hookOnStop: () => {},
     hookOnStopComplete: () => {},
     running: () => {},
+    warn: () => {},
   }
 }
