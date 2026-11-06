@@ -9,6 +9,7 @@ import { batch } from '../helpers/signals'
 import { demandProviders } from './demand'
 import { releaseExtraHolds, syncHolds } from './holds'
 import { beginHookRun, finishRun, recordDecision, runHandlers } from './hook-run'
+import { rebuild } from './rebuild'
 import { cancelRequeueWait, exhaustedIntent, scheduleRequeue } from './requeue'
 import { acceptSnapshot, currentSnapshot, describeChanges, diffSnapshot, hookDependsOn, isIdentityChange } from './snapshot'
 import { enterStopping } from './stop'
@@ -44,6 +45,10 @@ export function reconcileRunning(service: ServiceNode): void {
     return
   }
 
+  // The successor of a make-before-break rebuild builds. The old instance serves unchanged until the swap.
+  if (service.successor?.swap?.rebuild)
+    return
+
   const changes = diffSnapshot(service, instance.handled, snapshot)
   // A waiting requeue merges the new changes. Its run reads the latest snapshot.
   if (changes.length === 0 || instance.requeueWait)
@@ -53,7 +58,7 @@ export function reconcileRunning(service: ServiceNode): void {
   const hook: ServiceHook = identity ? 'dependency-change' : 'dependency-status-change'
   if (instance.hooks[hook].length === 0) {
     if (identity)
-      enterStopping(service, { reason: `A dependency changed without a handler: ${describeChanges(changes)}.`, decision: 'rebuild' })
+      rebuild(service, instance, { reason: `A dependency changed without a handler: ${describeChanges(changes)}.`, decision: 'rebuild' })
     else
       acceptSnapshot(service, instance, snapshot)
     return
@@ -129,7 +134,7 @@ async function runDependencyHook(service: ServiceNode, instance: InstanceNode, h
     }
     case 'rebuild':
       releaseExtraHolds(service, instance)
-      enterStopping(service, { reason: decision.reason, decision: 'rebuild' })
+      rebuild(service, instance, { reason: decision.reason, decision: 'rebuild' })
       return
     case 'stop':
       releaseExtraHolds(service, instance)

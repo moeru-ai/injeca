@@ -167,6 +167,8 @@ export interface SwapState {
   readonly ready?: (service: ServiceNode) => void
   /** `true` after the service completed `start` and waits for the batch swap of its replacement. */
   held: boolean
+  /** `true` for the successor of a make-before-break rebuild. It has the options of `target`. */
+  readonly rebuild?: boolean
 }
 
 /**

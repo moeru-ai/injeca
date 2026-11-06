@@ -94,7 +94,9 @@ function subscribe(node: ContainerNode, name: string, callback: (state: ServiceS
   const stopEffect = withOwner(node.reactiveOwner, () => effect(() => {
     const current = findProvider(node, name)
     // A `perConsumer` registration has no service for this container yet, for example after a replacement. Demand it after this run, outside the effect.
-    if (current?.perConsumer && !demandQueued) {
+    // A new consumer service, for example after a rebuild, takes over the demand too.
+    const moved = demand !== undefined && current?.template !== undefined && current !== demand
+    if ((current?.perConsumer || moved) && !demandQueued) {
       demandQueued = true
       queueMicrotask(() => untracked(() => {
         demandQueued = false

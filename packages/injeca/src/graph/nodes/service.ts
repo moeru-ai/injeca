@@ -88,6 +88,8 @@ export interface CreateServiceInput {
   readonly swap?: SwapState
   /** The first phase. It defaults to `pending`. A transaction starts its services in `declared`. */
   readonly phase?: ServicePhase
+  /** The place in registration order. A rebuild successor keeps the place of the service that it replaces. */
+  readonly seq?: number
 }
 
 const emptyMetadata = Object.freeze({})
@@ -115,7 +117,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
   let rivals: () => readonly ServiceNode[] = () => []
 
   const service: ServiceNode = {
-    seq: runtime.nextSeq(),
+    seq: input.seq ?? runtime.nextSeq(),
     kind: input.kind,
     name: input.name,
     container,
