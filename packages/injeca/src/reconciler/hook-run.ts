@@ -71,7 +71,7 @@ export function recordLateDecision(service: ServiceNode, instance: InstanceNode,
 export function beginHookRun(instance: InstanceNode, timeout?: AbortSignal): { readonly signal: AbortSignal, readonly end: () => void } {
   const controller = new AbortController()
   const release = forwardAbort(controller, timeout ? [instance.controller.signal, timeout] : [instance.controller.signal])
-  recordSignalOrigin(controller.signal, instance.service)
+  recordSignalOrigin(controller.signal, instance)
   instance.hookRun = controller
 
   return {

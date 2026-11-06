@@ -140,6 +140,7 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
 
 export async function teardown(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, phase?: 'stopping'): Promise<void> {
   service.busy = true
+  instance.tearingDown = true
   cancelRequeueWait(instance)
   instance.extraHolds.clear()
   if (phase)

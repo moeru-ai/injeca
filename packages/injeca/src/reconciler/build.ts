@@ -93,10 +93,11 @@ export function prepareInstance(service: ServiceNode, snapshot: Snapshot): Insta
     startFrom: 0,
     value: undefined,
     building: true,
+    tearingDown: false,
     disposed: false,
   }
 
-  recordSignalOrigin(instance.controller.signal, service)
+  recordSignalOrigin(instance.controller.signal, instance)
   service.busy = true
   batch(() => {
     syncHolds(service, instance)

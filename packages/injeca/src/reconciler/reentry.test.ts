@@ -133,3 +133,80 @@ describe('a cleanup that awaits the disposal of its own container with its signa
     expect(warnings).toEqual([])
   })
 })
+
+describe('a re-entrant call during a rebuild', () => {
+  it('resolves at once from a cleanup of a successor whose build failed, while the service is not stopping', async () => {
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ logger })
+    const { records } = collectRecords(app)
+    const llm = provide(app, 'airi.llm', () => 'llm 1')
+    let builds = 0
+    let cleanupDone = false
+    provide(app, 'airi.window', {
+      dependsOn: { llm: 'airi.llm' },
+      build: ({ effect, signal }) => {
+        builds++
+        if (builds === 2) {
+          effect(() => async () => {
+            await Promise.resolve()
+            await dispose(app, { signal })
+            cleanupDone = true
+          })
+          throw new Error('The second window did not open.')
+        }
+        return 'window'
+      },
+    })
+    await start(app)
+
+    // The new provider instance rebuilds the window make-before-break. The successor fails in build, so its teardown runs in `building`.
+    await llm.replace(() => 'llm 2')
+    await drained(app)
+    expect(builds).toBe(2)
+    expect(cleanupDone).toBe(true)
+    expect(warnings).toEqual([expect.stringContaining('The cleanup of \'airi.window\' in {} called dispose()')])
+    expect(records).toContainEqual(expect.objectContaining({ type: 'reentrant-call', call: 'dispose', key: 'airi.window' }))
+    await expect(dispose(app)).resolves.toBeUndefined()
+  })
+
+  it('waits for a signal of the new running instance while the old instance stops', async () => {
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ logger })
+    const llm = provide(app, 'airi.llm', () => 'llm 1')
+    const signals: AbortSignal[] = []
+    const panelStopGate = deferred()
+    provide(app, 'airi.window', {
+      dependsOn: { llm: 'airi.llm' },
+      build: ({ signal }) => {
+        signals.push(signal)
+        return 'window'
+      },
+    })
+    // The panel holds the window. Its stop hooks wait, so the old window instance and later the new one wait for their holders.
+    provide(app, 'airi.panel', {
+      dependsOn: { window: 'airi.window' },
+      build: ({ on }) => {
+        on('stop', () => panelStopGate.promise)
+        return 'panel'
+      },
+    })
+    await start(app)
+    await llm.replace(() => 'llm 2')
+    await drained(app)
+    expect(signals).toHaveLength(2)
+    expect(phaseOf(app, 'airi.window')).toBe('running')
+
+    let settled = false
+    const stopped = stop(app, { signal: signals[1] }).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(false)
+    expect(warnings).toEqual([])
+
+    panelStopGate.resolve()
+    // The signal of the new instance aborts when that instance is disposed. That ends the wait, as for any other signal.
+    await expect(stopped).rejects.toThrow('was disposed')
+    expect(warnings).toEqual([])
+  })
+})
