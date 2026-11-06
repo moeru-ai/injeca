@@ -228,7 +228,8 @@ describe('call-site types', () => {
     transaction(app).provide(defineKey<Tts>('airi.tts.other'), () => 1)
     tx.replace(llm, () => ({ chat: () => 'v3' }))
     expectTypeOf(tx.commit()).resolves.toEqualTypeOf<void>()
-    expectTypeOf(tx.commit({ signal: timeout(app, 1_000) })).resolves.toEqualTypeOf<void>()
+    // A second commit rejects, so the check does not call it.
+    expectTypeOf(tx.commit).toBeCallableWith({ signal: timeout(app, 1_000) })
     expectTypeOf(llm.replace(() => ({ chat: () => 'v4' }), { signal: withTimeout(undefined, 1_000, app) })).resolves.toEqualTypeOf<boolean>()
     // @ts-expect-error `timeoutMs` was removed. Pass a signal from `timeout(container, ms)`.
     void resolve(app, { llm }, { timeoutMs: 1_000 })
