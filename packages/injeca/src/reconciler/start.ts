@@ -6,7 +6,7 @@ import { setPhase, timeoutOf } from '../graph/nodes'
 import { epochOf } from '../graph/resolvers/resolvers'
 import { raceAbort, timeoutSignal } from '../helpers/abort'
 import { loggerOf } from './calls'
-import { beginHookRun, decideTimeout, finishRun, recordDecision, runHandlers } from './hook-run'
+import { beginHookRun, decideTimeout, finishRun, recordDecision, recordLateDecision, runHandlers } from './hook-run'
 import { exhaustedIntent, scheduleRequeue } from './requeue'
 import { enterStopping } from './stop'
 import { completeSwap } from './swap'
@@ -44,10 +44,10 @@ async function runAttempt(service: ServiceNode, instance: InstanceNode): Promise
     return { decisions: result.value, superseded: false }
 
   abandoned = true
-  // The handler in progress can still return. Its decision is ignored.
+  // The handler in progress can still return. Its decision is ignored. A late failure is reported, unless it is the abort of the run.
   void running.then((late) => {
     for (const decision of late)
-      recordDecision(service, instance, decision, true)
+      recordLateDecision(service, instance, decision, [run.signal])
   })
   if (!timedOut)
     return { decisions: [], superseded: true }

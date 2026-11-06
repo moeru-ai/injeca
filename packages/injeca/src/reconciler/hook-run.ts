@@ -6,6 +6,7 @@ import { HookTimeoutError } from '../diagnostics/errors'
 import { timeoutHandlerOf } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
 import { forwardAbort } from '../helpers/abort'
+import { messageOf } from '../helpers/error-from'
 import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { createDecide, defaultDecision, validateDecision } from '../primitives/decision'
@@ -41,6 +42,26 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
     ignored,
     ...withoutUndefined({ reason: decision.reason }),
   })
+}
+
+/**
+ * Reports a failure of a callback that injeca stopped waiting for, after a timeout or a newer target. Nothing else gets the error, so injeca writes it with `logger.warn`.
+ *
+ * A failure with the reason of one of `signals` is not reported, because the callback only followed its abort.
+ */
+export function reportLateFailure(service: ServiceNode, source: ServiceHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
+  if (signals.some(signal => signal?.aborted && signal.reason === error))
+    return
+
+  const callback = source === 'effect' ? `An effect disposer of '${service.name}'` : `The '${source}' hook of '${service.name}'`
+  service.container.api.logger.warn(`${callback} failed after injeca stopped waiting for it: ${messageOf(error)}`)
+}
+
+/** Records the late decision of a hook run that injeca stopped waiting for. A late `fail` is reported with `reportLateFailure`. */
+export function recordLateDecision(service: ServiceNode, instance: InstanceNode, decision: Decision, signals: ReadonlyArray<AbortSignal | undefined>): void {
+  recordDecision(service, instance, decision, true)
+  if (decision.kind === 'fail')
+    reportLateFailure(service, decision.hook, decision.error, signals)
 }
 
 /**

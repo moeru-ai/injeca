@@ -238,3 +238,114 @@ describe('stop timeouts', () => {
     expect(stateOf(app, 'airi.tray').phase).toBe('pending')
   })
 })
+
+describe('late failures of abandoned cleanups', () => {
+  /** Lets the callbacks that injeca abandoned settle. */
+  const settleLate = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  it('warns and records a stop hook that rejects after the stop timeout', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 40 } })
+    const gate = deferred()
+    provide(app, 'airi.tray', ({ on }) => {
+      on('stop', async () => {
+        await gate.promise
+        throw new Error('The tray closed late.')
+      })
+      return 'tray'
+    })
+    await start(app)
+    const { records } = collectRecords(app)
+
+    const stopped = stop(app)
+    await drained(app)
+    manual.advance(40)
+    await expect(stopped).resolves.toBeUndefined()
+
+    gate.resolve()
+    await settleLate()
+    expect(warnings).toEqual([
+      expect.stringContaining('did not settle within the stop timeout'),
+      'The \'stop\' hook of \'airi.tray\' failed after injeca stopped waiting for it: The tray closed late.',
+    ])
+    expect(records).toContainEqual(expect.objectContaining({ type: 'decision', key: 'airi.tray', hook: 'stop', decision: 'fail', ignored: true }))
+  })
+
+  it('warns for an effect disposer that rejects after the stop timeout, also when injeca did not wait for it at all', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 40 } })
+    const gate = deferred()
+    provide(app, 'airi.window', ({ effect }) => {
+      effect(() => async () => {
+        await gate.promise
+        throw new Error('second')
+      })
+      effect(() => async () => {
+        await gate.promise
+        throw new Error('first')
+      })
+      return 'window'
+    })
+    await start(app)
+
+    const disposal = dispose(app)
+    await drained(app)
+    manual.advance(40)
+    await expect(disposal).resolves.toBeUndefined()
+
+    gate.resolve()
+    await settleLate()
+    expect(warnings.slice(1)).toEqual([
+      'An effect disposer of \'airi.window\' failed after injeca stopped waiting for it: first',
+      'An effect disposer of \'airi.window\' failed after injeca stopped waiting for it: second',
+    ])
+  })
+
+  it('does not warn twice for a cleanup that rethrows the timeout of its signal', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 40 } })
+    provide(app, 'airi.tray', ({ on }) => {
+      on('stop', ({ signal }) => new Promise<void>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }))
+      return 'tray'
+    })
+    await start(app)
+
+    const stopped = stop(app)
+    await drained(app)
+    manual.advance(40)
+    await expect(stopped).resolves.toBeUndefined()
+    await settleLate()
+    expect(warnings).toEqual([expect.stringContaining('did not settle within the stop timeout')])
+  })
+
+  it('warns for a superseded start hook that rejects later, but not for one that follows its abort', async () => {
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ logger })
+    const gate = deferred()
+    provide(app, 'airi.server', ({ on }) => {
+      on('start', async () => {
+        await gate.promise
+        throw new Error('The port is busy.')
+      })
+      return 'server'
+    })
+    provide(app, 'airi.client', ({ on }) => {
+      on('start', ({ signal }) => new Promise<void>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }))
+      return 'client'
+    })
+    void start(app).catch(() => {})
+    await drained(app)
+
+    await stop(app)
+    gate.resolve()
+    await settleLate()
+    expect(warnings).toEqual(['The \'start\' hook of \'airi.server\' failed after injeca stopped waiting for it: The port is busy.'])
+  })
+})
