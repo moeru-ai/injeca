@@ -17,7 +17,6 @@ export {
   InjecaError,
   InvalidArgumentError,
   InvalidDecisionError,
-  ReentrantDisposeError,
   ReplaceWhileStoppingError,
   ServiceFailedError,
   StaleRegistrationError,
@@ -78,11 +77,13 @@ export {
   resolve,
   start,
   stop,
+  timeout,
   transaction,
   where,
+  withTimeout,
 } from './scoped'
 
-export type { ResolveOptions, StartOptions } from './scoped'
+export type { DisposeOptions, ResolveOptions, StartOptions, StopOptions } from './scoped'
 export type {
   BuildContext,
   ConditionalDependency,
@@ -148,8 +149,10 @@ export type {
   ProvideOptionWithKeys,
   Registration,
   RegistrationOptions,
+  ReentrantCallObserveRecord,
   RegistrationReplacedObserveRecord,
   ReplaceFunction,
+  ReplaceOptions,
   ResolutionCondition,
   ResolveDependencyDeclaration,
   ServiceBlocker,
@@ -165,8 +168,11 @@ export type {
   TimeoutHandler,
   TimeoutObserveRecord,
   Transaction,
+  TransactionCommitOptions,
   TransactionProvide,
   TransactionReplace,
+  WaitAbortedObserveRecord,
+  WithdrawOptions,
 } from './types'
 
 export const injeca = {

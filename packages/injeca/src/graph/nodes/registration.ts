@@ -1,7 +1,7 @@
 import type { ContainerNode, RegistrationNode, ServiceNode } from '../graph'
 
 import { batch, untracked } from '../../helpers/signals'
-import { awaitWithdrawal, releaseService } from './container'
+import { releaseService } from './container'
 
 export function createRegistration(container: ContainerNode, name: string, exclusive: boolean): RegistrationNode {
   return { container, name, exclusive, current: undefined, pending: undefined }
@@ -38,9 +38,9 @@ export function cancelSuccessor(service: ServiceNode): void {
   releaseService(successor)
 }
 
-/** The `withdraw()` of a registration. Resolves `false` for a stale registration. Rejects with the teardown errors. */
-export async function withdrawRegistration(registration: RegistrationNode): Promise<boolean> {
-  const service = untracked(() => {
+/** Releases the current service of a registration and cancels its pending replacement. Returns the service, or `undefined` for a stale registration. */
+export function releaseRegistration(registration: RegistrationNode): ServiceNode | undefined {
+  return untracked(() => {
     const current = currentService(registration)
     if (current) {
       batch(() => {
@@ -51,9 +51,4 @@ export async function withdrawRegistration(registration: RegistrationNode): Prom
 
     return current
   })
-  if (!service)
-    return false
-
-  await awaitWithdrawal(service)
-  return true
 }

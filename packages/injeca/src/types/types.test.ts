@@ -1,10 +1,10 @@
 import type { Decision, FailDecision, HandledDecision, ServiceHook } from '../primitives/decision'
-import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
+import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus, WithdrawOptions } from './index'
 
 import { describe, expectTypeOf, it } from 'vitest'
 
 import { waitFor, watch } from '../queries/watch'
-import { createContainer, defineKey, firstAvailable, graph, invoke, listeners, optional, provide, resolve, transaction, where } from '../scoped'
+import { createContainer, defineKey, firstAvailable, graph, invoke, listeners, optional, provide, resolve, timeout, transaction, where, withTimeout } from '../scoped'
 import { createHookContext } from '../testing/testing'
 
 // Design test 35. The checks run in `pnpm typecheck`. The cases do not start the container.
@@ -19,7 +19,7 @@ interface Tts {
 
 describe('call-site types', () => {
   it('infers the key type of provide by name from build', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', { build: (): Llm => ({ chat: () => 'hi' }) })
     const shorthand = provide(app, 'airi.count', () => 1)
     const asyncShorthand = provide(app, 'airi.async', async () => 'value')
@@ -27,10 +27,11 @@ describe('call-site types', () => {
     expectTypeOf(llm.key).toEqualTypeOf<'airi.llm'>()
     expectTypeOf(resolve(app, { llm, shorthand, asyncShorthand })).resolves.toEqualTypeOf<{ llm: Llm, shorthand: number, asyncShorthand: string }>()
     expectTypeOf(llm.withdraw).returns.resolves.toEqualTypeOf<boolean>()
+    expectTypeOf(llm.withdraw).parameter(0).toEqualTypeOf<WithdrawOptions | undefined>()
   })
 
   it('infers each dependsOn value, and types an optional dependency as { value, status } | undefined', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
     const ttsKey = defineKey<Tts>('airi.tts')
 
@@ -59,7 +60,7 @@ describe('call-site types', () => {
   })
 
   it('checks the build result against the type of a defineKey key', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const ttsKey = defineKey<Tts>('airi.tts')
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
 
@@ -78,7 +79,7 @@ describe('call-site types', () => {
   })
 
   it('types the hook context of each hook', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llm = provide(app, 'airi.llm', (): Llm => ({ chat: () => 'hi' }))
     const ttsKey = defineKey<Tts>('airi.tts')
 
@@ -148,7 +149,7 @@ describe('call-site types', () => {
   })
 
   it('types decisions, firstAvailable, and the state readers', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const remote = defineKey<Llm>('airi.llm.remote')
     const local = defineKey<{ chat: () => string, local: true }>('airi.llm.local')
     const context = createHookContext('stop')
@@ -180,7 +181,7 @@ describe('call-site types', () => {
   })
 
   it('types where, replace, transactions, perConsumer, and the step 3 readers', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer()
     const llmKey = defineKey<Llm>('airi.llm', { exclusive: true })
     const llm = provide(app, llmKey, { metadata: { version: '1.0.0' }, build: () => ({ chat: () => 'hi' }) })
 
@@ -228,12 +229,17 @@ describe('call-site types', () => {
     transaction(app).provide(defineKey<Tts>('airi.tts.other'), () => 1)
     tx.replace(llm, () => ({ chat: () => 'v3' }))
     expectTypeOf(tx.commit()).resolves.toEqualTypeOf<void>()
+    // A second commit rejects, so the check does not call it.
+    expectTypeOf(tx.commit).toBeCallableWith({ signal: timeout(app, 1_000) })
+    expectTypeOf(llm.replace(() => ({ chat: () => 'v4' }), { signal: withTimeout(undefined, 1_000, app) })).resolves.toEqualTypeOf<boolean>()
+    // @ts-expect-error `timeoutMs` was removed. Pass a signal from `timeout(container, ms)`.
+    void resolve(app, { llm }, { timeoutMs: 1_000 })
 
     expectTypeOf(graph(app).services()).toEqualTypeOf<readonly GraphService[]>()
     expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()
   })
   it('types the retry and timeout options', () => {
-    const app = createContainer({ enabled: false, maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
+    const app = createContainer({ maxAttempts: 5, timeouts: { start: 1_000, stop: 500 }, random: () => 0.5 })
     provide(app, 'airi.device', {
       maxAttempts: 3,
       timeouts: { start: 2_000 },
@@ -251,5 +257,13 @@ describe('call-site types', () => {
     // @ts-expect-error A timeout is a number of milliseconds.
     const wrong: PolicyOptions = { timeouts: { start: '1s' } }
     void wrong
+  })
+
+  it('types the logging option, and enabled is gone', () => {
+    const app = createContainer({ logging: true })
+    expectTypeOf(app.logging).toEqualTypeOf<boolean>()
+
+    // @ts-expect-error `enabled` was removed. Lifecycle logs are off by default. Pass `logging: true` to write them.
+    void createContainer({ enabled: false })
   })
 })

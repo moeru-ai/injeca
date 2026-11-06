@@ -1,15 +1,17 @@
 import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode, TransactionEntry, TransactionNode } from '../graph/graph'
 import type { TransactionMembers } from '../reconciler/commit'
-import type { Container, DeclareOptions, KeyReference, Registration, Transaction, TransactionProvide, TransactionReplace } from '../types'
+import type { Container, DeclareOptions, KeyReference, Registration, Transaction, TransactionCommitOptions, TransactionProvide, TransactionReplace, WithdrawOptions } from '../types'
 
 import { DuplicateServiceError, InvalidArgumentError, ReplaceWhileStoppingError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
-import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase, withdrawRegistration } from '../graph/nodes'
+import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase } from '../graph/nodes'
 import { slotOf } from '../graph/resolvers/resolvers'
+import { onAbort, readSignal } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
 import { abortTransaction, buildMembers, orderMembers, rollbackMembers, startMembers } from '../reconciler/commit'
 import { isExclusiveKey, normalizeName } from './keys'
 import { assertNoDuplicate, publishRegistration, serviceOf } from './provide'
 import { registrationApi, registrationOf, replaceRunning, replaceTemplate, takeOver } from './replace'
+import { withdrawRegistration } from './withdraw'
 
 function readName(key: unknown, action: string): string {
   let name: unknown
@@ -149,12 +151,27 @@ async function commit(transaction: TransactionNode): Promise<void> {
   void startMembers(order, outcome.built)
 }
 
-function startCommit(transaction: TransactionNode): Promise<void> {
+/**
+ * Commits `transaction`. When `signal` aborts before the publish, the transaction aborts with the reason, and the result rejects at once.
+ * The rollback continues: the build in progress gets the abort on its `signal`, and the key reservations end when the rollback settles.
+ */
+function startCommit(transaction: TransactionNode, options: unknown): Promise<void> {
+  let signal: AbortSignal | undefined
+  try {
+    signal = readSignal(options as { readonly signal?: unknown } | undefined, 'commit')
+  }
+  catch (error) {
+    return Promise.reject(error)
+  }
   if (transaction.state !== 'open')
     return Promise.reject(new InvalidArgumentError(`The transaction is ${transaction.state === 'aborted' ? 'aborted' : 'already committed'}.`))
+  if (signal?.aborted) {
+    void abortTransaction(transaction, signal.reason)
+    return Promise.reject(signal.reason)
+  }
 
   transaction.state = 'committing'
-  const result = commit(transaction).catch((error: unknown) => {
+  const committed = commit(transaction).catch((error: unknown) => {
     if (transaction.state !== 'done') {
       transaction.state = 'aborted'
       transaction.container.transactions.delete(transaction)
@@ -162,9 +179,27 @@ function startCommit(transaction: TransactionNode): Promise<void> {
     }
     throw error
   })
-  transaction.settled = result.then(() => {}, () => {})
+  transaction.settled = committed.then(() => {}, () => {})
+  if (!signal)
+    return committed
 
-  return result
+  return new Promise((resolve, reject) => {
+    const removeAbort = onAbort(signal, (reason) => {
+      // After the publish, the abort has no effect.
+      if (transaction.state !== 'committing')
+        return
+
+      void abortTransaction(transaction, reason)
+      reject(reason)
+    })
+    committed.then((value) => {
+      removeAbort()
+      resolve(value)
+    }, (error: unknown) => {
+      removeAbort()
+      reject(error)
+    })
+  })
 }
 
 /** Throws `duplicate-service` when another open transaction of the container declares or provides `name`. */
@@ -225,9 +260,9 @@ export function transaction(container: Container): Transaction {
   /**
    * The `withdraw()` of a registration from `tx.provide`. Before the commit, it removes the provide from the transaction and resolves `true`.
    * A declaration of the key stays, so the commit fails with `transaction-incomplete` unless the declaration is optional.
-   * During the commit, it waits for the commit, then withdraws the published service.
+   * During the commit, it waits for the commit, then withdraws the published service with `options`.
    */
-  const withdrawEntry = async (entry: TransactionEntry, registration: RegistrationNode): Promise<boolean> => {
+  const withdrawEntry = async (entry: TransactionEntry, registration: RegistrationNode, options: WithdrawOptions | undefined): Promise<boolean> => {
     if (state.state === 'open') {
       if (entry.registration !== registration)
         return false
@@ -250,7 +285,7 @@ export function transaction(container: Container): Transaction {
     if (state.state === 'committing')
       await state.settled
 
-    return withdrawRegistration(registration)
+    return withdrawRegistration(registration, options)
   }
 
   const provide = ((key: KeyReference, option: unknown): Registration<string, unknown, undefined> => {
@@ -272,7 +307,7 @@ export function transaction(container: Container): Transaction {
     entry.exported = definition.exported
     untracked(() => reserveKey(state, entry))
 
-    return registrationApi(registration, { withdraw: () => withdrawEntry(entry, registration) })
+    return registrationApi(registration, { withdraw: options => withdrawEntry(entry, registration, options) })
   }) as TransactionProvide
 
   const replace = ((key: KeyReference, option: unknown): void => {
@@ -294,7 +329,7 @@ export function transaction(container: Container): Transaction {
     declare,
     provide,
     replace,
-    commit: () => untracked(() => startCommit(state)),
+    commit: (options?: TransactionCommitOptions) => untracked(() => startCommit(state, options)),
     abort: () => untracked(() => abortTransaction(state, new TransactionIncompleteError('The transaction was aborted before the commit completed.'))),
   })
 }

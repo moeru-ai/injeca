@@ -71,6 +71,7 @@ process.once('SIGINT', async () => {
 - `provide` returns a typed key. Use it in `dependsOn`. injeca infers the type of each dependency.
 - `start()` builds each service when its dependencies are running, then runs its `start` hooks. It resolves when everything is running.
 - `stop()` stops dependents before their providers. The registrations stay, so a later `start()` builds them again.
+- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Logging](#logging).
 
 > [!WARNING]
 >
@@ -163,17 +164,110 @@ provide(container, 'modules:camera', {
   onTimeout: (context) => {
     if (context.hook === 'start')
       return context.decide.requeue({ after: 1_000, maxAttempts: 3 })
-    return context.decide.fail(new Error('The camera did not close.'))
+    return undefined // a stop timeout counts as handled
   },
   build: () => createCamera(),
 })
 ```
 
 - The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
-- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
+- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides.
+- Without `onTimeout`, a `start` timeout gives `fail` with a `HookTimeoutError` (`hook-timeout`).
+- Without `onTimeout`, a `stop` timeout counts as `handled`. injeca writes a warning with `logger.warn`, and `stop()`, `dispose()`, and `withdraw()` resolve as usual. Only `decide.fail()` from `onTimeout` fails them.
+- During a stop or a disposal of the container, the warning tells that a cleanup can be waiting for its own container. Then that cleanup must pass its signal. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 - `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
-- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+- After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
+- A cleanup or a `start` hook that injeca stopped waiting for can still fail later. injeca writes that failure with `logger.warn`, and a late `stop` decision gets a `decision` record with `ignored: true`. A rejection with the abort reason of the callback signal has no warning, because the callback only followed its abort.
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
+- At a `start` timeout, the `signal` of the hook aborts with the `HookTimeoutError`. A `stop` handler sees the `stop` timeout on its `signal` in the same way.
+
+## Cancellation
+
+Each call that can wait takes `{ signal }`, a standard `AbortSignal`. injeca has no built-in timeout for these calls. Use `timeout(container, ms)` to make a signal on the container clock:
+
+```ts
+import { resolve, start, stop, timeout, withTimeout } from 'injeca'
+
+await start(container, { signal: timeout(container, 10_000) })
+const { llm } = await resolve(container, { llm: llmKey }, { signal: withTimeout(request.signal, 5_000, container) })
+await stop(container, { signal: timeout(container, 5_000) })
+```
+
+- `timeout(container, ms)` aborts after `ms` on the clock of the container, with a `DOMException` named `TimeoutError`. Tests with a manual clock control it. `AbortSignal.timeout()` does not use the container clock.
+- `withTimeout(signal, ms, container)` aborts when `signal` aborts, or after `ms`. `signal` can be `undefined`.
+- An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
+- A timeout reason is a reason with `name === 'TimeoutError'`, from `timeout()` or from `AbortSignal.timeout()`.
+
+| Call | When the signal aborts |
+| --- | --- |
+| `resolve(container, deps, { signal })` | Rejects. A timeout reason gives `WaitTimeoutError` (`wait-timeout`) with the reason as `cause`. Another reason rejects as it is. The hidden resolver goes. |
+| `waitFor(container, key, { status, signal })` | The same as `resolve`. |
+| `start(container, { signal })` | Stops the wait only. The services keep converging. A timeout reason gives `StartTimeoutError` (`start-timeout`) with the explanations. Another reason rejects as it is. |
+| `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The services that did not stop stay in `stopping` until their cleanups settle. |
+| `dispose(container, { signal })` | Rejects with the reason. The disposal continues in the background, and the container stays in `disposing`. A later `dispose(container)` waits for the same disposal and gets its result. |
+| `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The service gets a `wait-aborted` record when it did not finish. `invoke()` handles take the same option. |
+| `registration.replace(option, { signal })` | Cancels a pending replacement, as a newer `replace()` does. The old instance stays, and `replace()` resolves `false`. After the swap, the abort has no effect. |
+| `tx.commit({ signal })` | Before the publish, the transaction aborts and rolls back, and `commit()` rejects at once with the reason. After the publish, the abort has no effect. |
+
+- For `stop`, `dispose`, and `withdraw`, each service that did not stop gets a `wait-aborted` record in `observe`, with the phase at the abort and the reason.
+- For `start`, `stop`, `dispose`, and `withdraw`, an aborted signal still starts the action. Only the wait ends.
+
+### Calling dispose from a cleanup
+
+A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose service it holds. Pass the `signal` of the cleanup, so that injeca knows the caller:
+
+```ts
+provide(plugin, 'plugin:window', ({ on }) => {
+  on('stop', async ({ signal }) => {
+    await window.close()
+    await dispose(plugin, { signal }) // resolves at once, and the disposal continues
+  })
+  return createWindow()
+})
+```
+
+- injeca knows the instance of each signal that it gives to a build, a hook, and an invocation. A signal from `withTimeout(signal, ms, container)` keeps that origin. A signal from `AbortSignal.any()` does not.
+- A call with such a signal while the teardown of its instance runs does not wait. The check uses the instance, so it also works during a rebuild or a replacement, when the old and the new instance live together. A signal of the new running instance still waits.
+- The cleanup can also be outside the container. A service of the parent that holds an export of a plugin container, directly or through other services, stops before that export. So its `stop` hook can call `dispose(plugin, { signal })` or `stop(plugin, { signal })`, and the call does not wait. A plugin host that stops a plugin from its own cleanup needs this.
+- A call from the synchronous part of a cleanup does not wait either.
+- Such a call writes a warning with `logger.warn`, sends a `reentrant-call` record to `observe`, and resolves at once. A re-entrant `withdraw()` resolves `true`. The stop, the disposal, or the withdrawal continues. Other callers get a promise that settles when it ends.
+- A call without a signal after an `await` is not found. It waits for itself until a configured `stop` timeout ends the cleanup. The warning of that timeout tells about this cause.
+
+```ts
+provide(plugin, 'plugin:host', ({ on }) => {
+  on('stop', async ({ signal }) => {
+    await exportedTool.withdraw({ signal }) // waits for the export, or resolves at once when it is re-entrant
+    await dispose(plugin, { signal })
+  })
+  return createHost()
+})
+```
+
+### Testing with a manual clock
+
+`injeca/testing` has a manual clock, so that a test controls `timeout()`, `withTimeout()`, requeue delays, and policy timeouts without real time:
+
+```ts
+import { createContainer, provide, start, stop } from 'injeca'
+import { drained, manualClock } from 'injeca/testing'
+
+const { clock, advance } = manualClock()
+const container = createContainer({ clock, timeouts: { stop: 1_000 } })
+provide(container, 'modules:tray', ({ on }) => {
+  on('stop', () => new Promise(() => {})) // never settles
+  return createTray()
+})
+
+await start(container)
+const stopped = stop(container)
+await drained(container) // the work queue stays drained
+advance(1_000) // runs the stop timeout, synchronously
+await stopped // resolves, with a warning
+```
+
+- `advance(ms)` moves the time and runs each due timer in time order. `pending()` counts the timers that wait.
+- `drained(container)` waits one real macrotask after each drain of the work queue. Do not use it while the fake timers of the test runner hold `setTimeout`.
+- `createHookContext` and `checkDecision` test a hook handler alone.
 
 ## Changes at run time
 
@@ -226,6 +320,7 @@ await tts.replace(() => createTtsV2())
 - The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the services above it.
 - `graph(container).explain(key)` shows the new instance as `replacement` while the swap waits, with its phase and blockers.
 - A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A service in `stopping` rejects with `ReplaceWhileStoppingError`.
+- `replace(option, { signal })` cancels the pending replacement when the signal aborts, and resolves `false`. See [Cancellation](#cancellation).
 
 ### Transactions
 
@@ -249,6 +344,7 @@ await tx.commit()
 - `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
 - `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateServiceError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
 - `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
+- `tx.commit({ signal })` aborts the transaction when the signal aborts before the publish. See [Cancellation](#cancellation).
 
 ## Keys without a provider
 
@@ -377,18 +473,36 @@ const plugin = createContainer({
 provide(plugin, 'agent-activity:reaction', { dependsOn: { llm: llmKey }, build: () => createReaction() })
 effect(plugin, () => () => console.info('plugin cleaned up'))
 
-await start(plugin, { timeoutMs: 10_000 })
+await start(plugin, { signal: timeout(plugin, 10_000) })
 await dispose(plugin)
 ```
 
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects. A disposed container cannot be used again.
 - `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the services of the parent stop, and then its effects run.
 - `effect(container, setup)` after the disposal started runs the disposer at once.
-- `start(container, { timeoutMs })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
-- A service with a missing provider, or in a dependency cycle, stays `pending`. Use `timeoutMs` to find it.
+- `start(container, { signal: timeout(container, ms) })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
+- A service with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
-- A dispose call from the synchronous part of a cleanup of the same container, or of a descendant, rejects with `ReentrantDisposeError` (`reentrant-dispose`). injeca behaves the same in every runtime, so it does not detect such a call after an `await`. A configured `stop` timeout ends that cleanup.
+- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a service that holds a service of the container. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+
+### Logging
+
+`logging: true` writes the lifecycle trace: each `provide`, `invoke`, build, `start` and `stop` hook, and `running`. It is off by default.
+
+```ts
+import { createContainer, createLoggLogger, createNoopLogger, injeca } from 'injeca'
+
+const app = createContainer({ logging: true }) // writes PROVIDE, RUN, HOOK OnStart, RUNNING, and the other lines
+const plugin = createContainer({ parent: app, logging: false }) // a child uses the value of its parent, unless it sets its own
+const quiet = createContainer({ logger: createNoopLogger() }) // also no warnings, for tests
+
+injeca.getContainer().logging = true // the global container
+injeca.setLogger(createLoggLogger(logg)) // a logger from @guiiai/logg
+```
+
+- `logger.warn` always writes, whatever `logging` is. injeca warns for a re-entrant call, a `stop` timeout, and a late failure of a callback that it stopped waiting for.
+- The logger is `options.logger`, then the logger of the parent container, then `createDefaultLogger()`. It writes with `console`.
 
 ### Exported registrations
 
@@ -435,24 +549,24 @@ const hostClient = injeca.provide('host:client', {
 ## Reading state
 
 ```ts
-import { observe, waitFor, watch } from 'injeca'
+import { observe, timeout, waitFor, watch } from 'injeca'
 
 const container = injeca.getContainer()
 
 const stopWatching = watch(container, server, ({ phase, status }) => {})
-await waitFor(container, server, { status: 'ready', timeoutMs: 5_000 })
+await waitFor(container, server, { status: 'ready', signal: timeout(container, 5_000) })
 const stopObserving = observe(container, (record) => {})
 ```
 
 - `watch` sends the current state at once, then each change, in order.
 - `waitFor` rejects with a `ServiceFailedError` (`service-failed`) when the service failed, or waits for a required provider that failed. Its `cause` is the failure.
 - For a `perConsumer` key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
-- `observe` sends each phase change, status change, decision, and hook timeout in the container and its children.
+- `observe` sends each phase change, status change, decision, hook timeout, aborted wait, and re-entrant call in the container and its children.
 
-`peek` reads a value now, without a wait, and never builds anything. `resolve` takes `signal` and `timeoutMs` to stop a wait:
+`peek` reads a value now, without a wait, and never builds anything. `resolve` takes `signal` to stop a wait:
 
 ```ts
-import { peek, resolve, where } from 'injeca'
+import { peek, resolve, timeout, where } from 'injeca'
 
 const result = peek(container, where(llmKey, ({ metadata }) => metadata.version === '2'))
 if (result.kind === 'resolved')
@@ -460,7 +574,7 @@ if (result.kind === 'resolved')
 else
   console.info(result.kind) // 'missing', 'rejected', 'conflict', 'not-running', or 'unavailable'
 
-const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 }) // rejects with WaitTimeoutError
+const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(container, 5_000) }) // rejects with WaitTimeoutError
 ```
 
 ### Graph queries
@@ -527,9 +641,47 @@ const server = injeca.provide({
 
 Other differences:
 
-- `start()` waits for a missing provider. 0.2 threw an error. Use `start({ timeoutMs })` to fail after a time.
+- `start()` waits for a missing provider. 0.2 threw an error. Use `start(container, { signal: timeout(container, ms) })` to fail after a time.
 - `resolve()` waits for a missing provider too. Before `start()`, it builds the services that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. Its callback runs again when a required dependency gets a new instance.
+
+## Migration from 0.3 to 0.4
+
+0.4 removes the `timeoutMs` option of `resolve`, `waitFor`, and `start`. Pass a signal from `timeout(container, ms)`:
+
+```ts
+// 0.3
+await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
+await waitFor(container, server, { status: 'ready', timeoutMs: 5_000 })
+await start(container, { timeoutMs: 10_000 })
+
+// 0.4
+await resolve(container, { llm: llmKey }, { signal: timeout(container, 5_000) })
+await waitFor(container, server, { status: 'ready', signal: timeout(container, 5_000) })
+await start(container, { signal: timeout(container, 10_000) })
+```
+
+- The errors do not change. A timeout gives `WaitTimeoutError` or `StartTimeoutError`. The error message no longer has the milliseconds. The `cause` is the `TimeoutError` reason.
+- A call with `timeoutMs` and `signal` becomes one signal: `withTimeout(signal, ms, container)`.
+- A `TimeoutError` reason from your own signal, for example `AbortSignal.timeout()`, now also gives `WaitTimeoutError` or `StartTimeoutError`. Another reason rejects as it is, as before.
+- `stop`, `dispose`, `withdraw`, `replace`, and `tx.commit` take `{ signal }` too. See [Cancellation](#cancellation).
+- `timeouts: { start, stop }` and `onTimeout` keep their shape. A `stop` handler now sees the `stop` timeout on its `signal`.
+- A `stop` timeout no longer fails `stop()`, `dispose()`, or `withdraw()`. Without `onTimeout`, it counts as `handled`, with a warning. In 0.3, the callers rejected with `HookTimeoutError`. To keep a failure, return `context.decide.fail(error)` from `onTimeout` for the `stop` hook.
+- `observe` has two new record types, `wait-aborted` and `reentrant-call`. A `switch` on `record.type` with an exhaustive check needs a case for each. Their `call` can be `'stop'`, `'dispose'`, or `'withdraw'`.
+- `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()`, `dispose()`, or `withdraw()` from a cleanup that its wait includes resolves at once with a warning. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- A custom `Logger` needs `warn(message)`. `createDefaultLogger`, `createLoggLogger`, and `createNoopLogger` have it. injeca also writes stop timeouts and late failures of abandoned callbacks with it.
+- `injeca/testing` exports `manualClock` and `drained`. See [Testing with a manual clock](#testing-with-a-manual-clock).
+- The `enabled` option of `createContainer` is removed. The lifecycle logs are off by default. `logging: true` turns them on. Warnings always go to the logger. See [Logging](#logging).
+
+```ts
+// 0.3
+createContainer({ enabled: false }) // no logs
+createContainer() // lifecycle logs
+
+// 0.4
+createContainer({ logger: createNoopLogger() }) // no logs and no warnings. Or remove the option to keep the warnings.
+createContainer({ logging: true }) // lifecycle logs
+```
 
 ## License
 

@@ -4,6 +4,10 @@ import type { DependencyChange, HookContextFor, HookDependencies } from '../type
 import { InvalidArgumentError } from '../diagnostics/errors'
 import { createDecide, validateDecision } from '../primitives/decision'
 
+export { drained } from './drained'
+export { manualClock } from './manual-clock'
+export type { ManualClock } from './manual-clock'
+
 export interface HookContextOptions<D = undefined> {
   /** The service name that the decisions carry. It defaults to `'test'`. */
   service?: string

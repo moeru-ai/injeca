@@ -3,12 +3,12 @@ import type { Container, KeyReference, ServiceState, ServiceStatus } from '../ty
 
 import { effect } from 'alien-signals'
 
-import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError, WaitTimeoutError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError } from '../diagnostics/errors'
 import { assertActive, demandConsumerService, nodeOf, releaseConsumerDemand } from '../graph/nodes'
 import { reportCallbackError } from '../graph/observers'
 import { blockingFailure, findProvider, selectProvider } from '../graph/resolvers/resolvers'
+import { onAbort, readSignal, waitAbortError } from '../helpers/abort'
 import { batch, untracked, withOwner } from '../helpers/signals'
-import { armWaitBounds, readWaitBounds } from '../helpers/wait-bounds'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { normalizeName } from '../primitives/keys'
 
@@ -137,13 +137,14 @@ function subscribe(node: ContainerNode, name: string, callback: (state: ServiceS
 export interface WaitForOptions {
   /** Waits for this effective status. Without it, `waitFor` waits until the key is available: `ready` or `degraded`. */
   status?: ServiceStatus
-  /** Rejects with `wait-timeout` after this many milliseconds of the container clock. There is no default. */
-  timeoutMs?: number
-  /** Rejects with the abort reason when the signal aborts. */
+  /**
+   * Ends the wait when the signal aborts. A timeout reason (`name === 'TimeoutError'`) rejects with `wait-timeout`, with the reason as `cause`.
+   * Another reason rejects as it is. Use `timeout(container, ms)` for a timeout on the container clock. There is no default.
+   */
   signal?: AbortSignal
 }
 
-function readWaitOptions(options: WaitForOptions | undefined): WaitForOptions {
+function readWaitOptions(options: WaitForOptions | undefined): { readonly status: ServiceStatus | undefined, readonly signal: AbortSignal | undefined } {
   let status: unknown
   try {
     status = options?.status
@@ -154,7 +155,7 @@ function readWaitOptions(options: WaitForOptions | undefined): WaitForOptions {
   if (status !== undefined && (typeof status !== 'string' || !statuses.has(status)))
     throw new InvalidArgumentError(`The status option of waitFor must be 'ready', 'degraded', or 'unavailable'. Got ${String(status)}.`)
 
-  return { status: status as ServiceStatus | undefined, ...readWaitBounds(options, 'waitFor') }
+  return { status: status as ServiceStatus | undefined, signal: readSignal(options, 'waitFor') }
 }
 
 /** The failure that ends a wait for `name`: its service is in `failed`, or it waits for a required provider in `failed`. */
@@ -173,15 +174,16 @@ function failureOf(node: ContainerNode, name: string): { readonly error: unknown
  * Resolves with the state of `key` when it is available, or when it has `options.status`.
  *
  * It rejects with `service-failed` when the service is in `failed`, or when it waits for a required provider in `failed`, as `resolve` does.
- * It rejects on a timeout or an abort, and when the container is disposed. It has no built-in timeout.
+ * It rejects when `options.signal` aborts, at once for an aborted signal, and when the container is disposed. It has no built-in timeout.
  */
 export function waitFor(container: Container, key: WatchKey, options?: WaitForOptions): Promise<ServiceState> {
   const node = nodeOf(container)
   assertActive(node, 'waitFor')
   const name = readKey(key, 'waitFor')
-  const { status, timeoutMs, signal } = readWaitOptions(options)
+  const { status, signal } = readWaitOptions(options)
+  const abortError = (reason: unknown): unknown => waitAbortError(reason, `waitFor('${name}') timed out.`)
   if (signal?.aborted)
-    return Promise.reject(signal.reason)
+    return Promise.reject(abortError(signal.reason))
 
   const matches = (state: ServiceState): boolean => state.phase === 'running'
     && (status === undefined ? state.status !== undefined && state.status !== 'unavailable' : state.status === status)
@@ -207,9 +209,7 @@ export function waitFor(container: Container, key: WatchKey, options?: WaitForOp
     }
 
     node.disposedListeners.add(onDisposed)
-    disarm = armWaitBounds(node.runtime.clock, { timeoutMs, signal }, () => {
-      finish(() => reject(new WaitTimeoutError(`waitFor('${name}') timed out after ${timeoutMs}ms.`)))
-    }, reason => finish(() => reject(reason)))
+    disarm = onAbort(signal, reason => finish(() => reject(abortError(reason))))
 
     const checkFailure = (): void => {
       const failure = failureOf(node, name)

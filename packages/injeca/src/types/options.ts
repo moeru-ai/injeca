@@ -44,8 +44,26 @@ export type InvokeOptionWithKeys<Deps extends DependencyDeclarations> = InvokeOp
  * An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
  */
 export interface ReplaceFunction<T> {
-  <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>): Promise<boolean>
-  (option: ProvideOption<T, undefined>): Promise<boolean>
+  <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>, options?: ReplaceOptions): Promise<boolean>
+  (option: ProvideOption<T, undefined>, options?: ReplaceOptions): Promise<boolean>
+}
+
+/** The options of `replace()`. */
+export interface ReplaceOptions {
+  /**
+   * Cancels the pending replacement when the signal aborts, as a newer `replace` does. The old instance stays, and `replace()` resolves `false`.
+   * An aborted signal resolves `false` at once and changes nothing. After the swap, the signal has no effect.
+   */
+  signal?: AbortSignal
+}
+
+/** The options of `withdraw()` of a registration or an invocation. */
+export interface WithdrawOptions {
+  /**
+   * Ends the wait when the signal aborts, and rejects with the reason. The withdrawal continues. There is no default.
+   * The service gets a `wait-aborted` record in the observe stream when it did not finish its withdrawal. An aborted signal still starts the withdrawal.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -56,13 +74,16 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
    * Withdraws the service. Dependents stop first. Then the service runs its `stop` hooks and effect disposers.
    *
    * Resolves `false` for a stale registration and does not change any service. Rejects with the teardown errors.
+   *
+   * A call from a cleanup that the withdrawal waits for cannot wait: of the service, of a consumer service of it, or of a service that holds it.
+   * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves `true` at once. The withdrawal continues.
    */
-  readonly withdraw: () => Promise<boolean>
+  readonly withdraw: (options?: WithdrawOptions) => Promise<boolean>
   /**
    * Replaces the instance of the service without a gap.
    *
    * The old instance keeps serving with its status while the new instance runs `build` and `start`. The swap is one batch.
-   * Resolves `true` after the swap. Resolves `false` for a stale registration, or when a newer `replace` or a withdrawal supersedes this call.
+   * Resolves `true` after the swap. Resolves `false` for a stale registration, when a newer `replace` or a withdrawal supersedes this call, or when `options.signal` aborts before the swap.
    * Rejects with the build or start error of the new instance, and the old instance does not change.
    * Rejects with `replace-while-stopping` when the service is in `stopping`.
    */
@@ -73,6 +94,6 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
 export interface InvocationHandle {
   /** The name of the invocation. Graph queries, for example `graph(container).dependencies(key)` and `explain(key)`, accept it. */
   readonly key: string
-  /** Withdraws the invocation. Resolves `false` when it is already withdrawn. Rejects with the teardown errors. */
-  readonly withdraw: () => Promise<boolean>
+  /** Withdraws the invocation. Resolves `false` when it is already withdrawn. Rejects with the teardown errors. `options` work as for `withdraw()` of a registration. */
+  readonly withdraw: (options?: WithdrawOptions) => Promise<boolean>
 }

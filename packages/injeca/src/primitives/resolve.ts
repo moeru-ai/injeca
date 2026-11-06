@@ -1,23 +1,24 @@
 import type { BuildFunction, ServiceNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, ResolveDependencyDeclaration } from '../types'
 
-import { BuildAfterDisposeError, WaitTimeoutError } from '../diagnostics/errors'
+import { BuildAfterDisposeError } from '../diagnostics/errors'
 import { assertActive, createService, nodeOf, readEdges, releaseService } from '../graph/nodes'
 import { blockingFailure } from '../graph/resolvers/resolvers'
+import { onAbort, readSignal, waitAbortError } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
-import { armWaitBounds, readWaitBounds } from '../helpers/wait-bounds'
 
 export interface ResolveOptions {
-  /** Rejects with the abort reason when the signal aborts. */
+  /**
+   * Ends the wait when the signal aborts. A timeout reason (`name === 'TimeoutError'`) rejects with `wait-timeout`, with the reason as `cause`.
+   * Another reason rejects as it is. Use `timeout(container, ms)` for a timeout on the container clock. There is no default.
+   */
   signal?: AbortSignal
-  /** Rejects with `wait-timeout` after this many milliseconds of the container clock. There is no default. */
-  timeoutMs?: number
 }
 
 /**
  * Waits until the dependencies are available and returns their values. Before `start()`, it builds and starts them.
  *
- * Rejects when a required dependency fails. With `options.signal` or `options.timeoutMs`, it rejects on an abort or a timeout.
+ * Rejects when a required dependency fails. With `options.signal`, it rejects when the signal aborts. An aborted signal rejects at once.
  * Each rejection removes the hidden resolver of the call. The values can become stale after a run-time change. Use it for one-time code.
  */
 export function resolve<Deps extends DependencyDeclarations>(container: Container, dependsOn: Deps, options?: ResolveOptions): Promise<ResolveDependencyDeclaration<Deps>> {
@@ -25,9 +26,9 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
   assertActive(node, 'resolve')
 
   const edges = readEdges('resolve', dependsOn)
-  const bounds = readWaitBounds(options, 'resolve')
-  if (bounds.signal?.aborted)
-    return Promise.reject(bounds.signal.reason)
+  const signal = readSignal(options, 'resolve')
+  if (signal?.aborted)
+    return Promise.reject(waitAbortError(signal.reason, 'resolve() timed out.'))
 
   const { reconciler } = node.runtime
 
@@ -62,9 +63,7 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
       if (failure)
         finish(() => fail(failure.error))
     })
-    disarm = armWaitBounds(node.runtime.clock, bounds, () => {
-      finish(() => fail(new WaitTimeoutError(`resolve() timed out after ${bounds.timeoutMs}ms.`)))
-    }, reason => finish(() => fail(reason)))
+    disarm = onAbort(signal, reason => finish(() => fail(waitAbortError(reason, 'resolve() timed out.'))))
     void service!.withdrawal.promise.then(() => finish(() => fail(new BuildAfterDisposeError('The container was disposed before resolve() got its dependencies.'))))
   }))
 }

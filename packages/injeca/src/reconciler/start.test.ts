@@ -2,6 +2,7 @@ import type { Container, ContainerOptions, ObserveRecord, PolicyOptions } from '
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, dispose, provide, start, stop } from '../scoped'
 import { collectRecords, deferred, drained, manualClock, stateOf } from '../testing/helpers'
 
@@ -13,7 +14,7 @@ async function tick(manual: { advance: (ms: number) => void }, app: Container, m
 /** Provides `airi.server` with a `start` hook that waits for `gate`, and a second hook that records its call. */
 function setup(options: { container?: Omit<ContainerOptions, 'clock'>, service?: PolicyOptions } = {}) {
   const manual = manualClock()
-  const app = createContainer({ enabled: false, ...options.container, clock: manual.clock })
+  const app = createContainer({ logger: createNoopLogger(), ...options.container, clock: manual.clock })
   const gate = deferred()
   const signals: AbortSignal[] = []
   const later = vi.fn()
@@ -40,6 +41,23 @@ function timeoutRecords(records: readonly ObserveRecord[]) {
 }
 
 describe('start timeouts', () => {
+  it('aborts the run signal with hook-timeout at the timeout, and cancels the timer when the start settles first', async () => {
+    const timedOut = setup({ service: { timeouts: { start: 100 } } })
+    void start(timedOut.app).catch(() => {})
+    await drained(timedOut.app)
+    await tick(timedOut, timedOut.app, 100)
+    expect(timedOut.signals[0]?.reason).toMatchObject({ code: 'hook-timeout', hook: 'start', timeoutMs: 100 })
+
+    const settled = setup({ service: { timeouts: { start: 100 } } })
+    const started = start(settled.app)
+    await drained(settled.app)
+    expect(settled.pending()).toBe(1)
+    settled.gate.resolve()
+    await started
+    expect(settled.pending()).toBe(0)
+    expect(settled.signals[0]?.aborted).toBe(false)
+  })
+
   // Design test 20.
   it('waits until start settles when no timeout is configured', async () => {
     const ctx = setup()
@@ -123,9 +141,9 @@ describe('start timeouts', () => {
   })
 
   it('rejects a timeout that is not a finite number of 0 or more', () => {
-    const app = createContainer({ enabled: false })
+    const app = createContainer({ logger: createNoopLogger() })
     expect(() => provide(app, 'airi.bad', { timeouts: { start: -1 }, build: () => 1 })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
-    expect(() => createContainer({ enabled: false, timeouts: { stop: Number.NaN } })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
+    expect(() => createContainer({ logger: createNoopLogger(), timeouts: { stop: Number.NaN } })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
   })
 })
 
@@ -169,7 +187,7 @@ describe('a start hook that stop() or dispose() aborts (G2)', () => {
 
   it('still applies a configured stop timeout to the stop hooks', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 100 } })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, timeouts: { stop: 100 } })
     provide(app, 'airi.server', ({ on }) => {
       on('start', () => new Promise(() => {}))
       on('stop', () => new Promise(() => {}))
@@ -178,9 +196,11 @@ describe('a start hook that stop() or dispose() aborts (G2)', () => {
     void start(app)
     await drained(app)
 
-    const disposal = dispose(app).catch((error: unknown) => error)
+    const { records } = collectRecords(app)
+    const disposal = dispose(app)
     await drained(app)
     manual.advance(100)
-    expect(await disposal).toMatchObject({ code: 'hook-timeout', hook: 'stop' })
+    await expect(disposal).resolves.toBeUndefined()
+    expect(records).toContainEqual(expect.objectContaining({ type: 'timeout', key: 'airi.server', hook: 'stop', timeoutMs: 100 }))
   })
 })

@@ -2,6 +2,9 @@ import type { Logg as LoggLogger } from '@guiiai/logg'
 
 import { name } from '../../package.json'
 
+/**
+ * The logger of a container. `warn` always writes. The other methods write the lifecycle trace, and injeca calls them only when the `logging` option of the container is `true`.
+ */
 export interface Logger {
   provide: (name: string, dependencies: string[]) => void
   invoke: (dependencies: string[]) => void
@@ -12,10 +15,20 @@ export interface Logger {
   hookOnStop: (name: string) => void
   hookOnStopComplete: (name: string, duration: number) => void
   running: () => void
+  /** A call that injeca handled in another way than the caller asked, for example a re-entrant `dispose()` that resolved at once. */
+  warn: (message: string) => void
 }
 
 export interface LoggerOptions {
-  enabled?: boolean
+  /**
+   * Writes the lifecycle trace: `provide`, `invoke`, builds, `start` and `stop` hooks, and `running`. It defaults to `false`.
+   * A child container uses the value of its parent, unless it sets its own. `warn` does not depend on it.
+   */
+  logging?: boolean
+  /**
+   * The logger. It defaults to the logger of the parent container, then to `createDefaultLogger()`.
+   * To also silence the warnings, for example in tests, pass `createNoopLogger()`.
+   */
   logger?: Logger
 }
 
@@ -77,6 +90,10 @@ export function createDefaultLogger(): Logger {
       // eslint-disable-next-line no-console
       console.log(`[${name}] RUNNING`)
     },
+
+    warn: (message: string) => {
+      console.warn(`[${name}] WARN       ${message}`)
+    },
   }
 }
 
@@ -119,6 +136,10 @@ export function createLoggLogger(logg: LoggLogger): Logger {
     running: () => {
       logg.log(`RUNNING`)
     },
+
+    warn: (message: string) => {
+      logg.warn(message)
+    },
   }
 }
 
@@ -133,5 +154,6 @@ export function createNoopLogger(): Logger {
     hookOnStop: () => {},
     hookOnStopComplete: () => {},
     running: () => {},
+    warn: () => {},
   }
 }

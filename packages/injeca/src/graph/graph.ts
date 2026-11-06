@@ -94,6 +94,8 @@ export interface InstanceNode {
   value: unknown
   /** `true` while `build` runs. `on` is valid only then. */
   building: boolean
+  /** `true` from the start of the teardown. A re-entrant call finds the cleanups of the instance by it. */
+  tearingDown: boolean
   disposed: boolean
 }
 

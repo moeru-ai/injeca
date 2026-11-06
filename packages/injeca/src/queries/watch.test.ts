@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError, WaitTimeoutError } from '../diagnostics/errors'
 import { injeca } from '../index'
-import { dispose, firstAvailable, graph, provide, start } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, manualClock } from '../testing/helpers'
+import { dispose, firstAvailable, graph, provide, start, timeout } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, trackedController } from '../testing/helpers'
 import { observe } from './observe'
 import { waitFor, watch } from './watch'
 
@@ -128,37 +128,55 @@ describe('waitFor', () => {
     await expect(back).resolves.toMatchObject({ status: 'ready' })
   })
 
-  it('rejects after timeoutMs on the container clock, and has no built-in timeout', async () => {
+  it('rejects with wait-timeout when a timeout signal on the container clock aborts, and has no built-in timeout', async () => {
     const { clock, advance, pending } = manualClock()
     const app = createTestContainer({ clock })
 
     const forever = waitFor(app, 'missing')
     expect(pending()).toBe(0)
 
-    const timed = waitFor(app, 'missing', { timeoutMs: 50 }).catch((error: unknown) => error)
+    const timed = waitFor(app, 'missing', { signal: timeout(app, 50) }).catch((error: unknown) => error)
     advance(50)
     expect(await timed).toBeInstanceOf(WaitTimeoutError)
-    expect(await timed).toMatchObject({ code: 'wait-timeout' })
+    expect(await timed).toMatchObject({ code: 'wait-timeout', cause: expect.objectContaining({ name: 'TimeoutError' }) })
+    expect(pending()).toBe(0)
+
+    // `AbortSignal.timeout()` has the same reason name, so it also gives `wait-timeout`.
+    const native = new AbortController()
+    const nativeWait = waitFor(app, 'missing', { signal: native.signal }).catch((error: unknown) => error)
+    native.abort(new DOMException('native', 'TimeoutError'))
+    expect(await nativeWait).toBeInstanceOf(WaitTimeoutError)
 
     await dispose(app)
     await expect(forever).rejects.toBeInstanceOf(BuildAfterDisposeError)
   })
 
-  it('rejects with the abort reason', async () => {
+  it('rejects with the abort reason, at once for an aborted signal', async () => {
     const app = createTestContainer()
-    const controller = new AbortController()
+    const { controller, signal, listeners } = trackedController()
     const reason = new Error('cancelled')
-    const waiting = waitFor(app, 'missing', { signal: controller.signal })
+    const waiting = waitFor(app, 'missing', { signal })
+    expect(listeners()).toBe(1)
 
     controller.abort(reason)
     await expect(waiting).rejects.toBe(reason)
-    await expect(waitFor(app, 'missing', { signal: controller.signal })).rejects.toBe(reason)
+    await expect(waitFor(app, 'missing', { signal })).rejects.toBe(reason)
+  })
+
+  it('removes its abort listener when it matches', async () => {
+    const app = createTestContainer()
+    provide(app, 'airi.llm', () => 'llm')
+    await start(app)
+    const { signal, listeners } = trackedController()
+
+    await expect(waitFor(app, 'airi.llm', { signal })).resolves.toMatchObject({ phase: 'running' })
+    expect(listeners()).toBe(0)
   })
 
   it('rejects invalid options', () => {
     const app = createTestContainer()
     expect(() => waitFor(app, 'airi.llm', { status: 'broken' as 'ready' })).toThrow(InvalidArgumentError)
-    expect(() => waitFor(app, 'airi.llm', { timeoutMs: -1 })).toThrow(InvalidArgumentError)
+    expect(() => waitFor(app, 'airi.llm', { signal: 50 as unknown as AbortSignal })).toThrow(InvalidArgumentError)
   })
 })
 
@@ -180,7 +198,7 @@ describe('watch and waitFor of a perConsumer key (B2)', () => {
 
     const other = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'other' } })
     await start(other)
-    await expect(waitFor(other, 'host.client', { timeoutMs: 1_000 })).resolves.toMatchObject({ phase: 'running', status: 'ready' })
+    await expect(waitFor(other, 'host.client', { signal: timeout(other, 1_000) })).resolves.toMatchObject({ phase: 'running', status: 'ready' })
     expect(builds).toEqual([{ kind: 'extension', id: 'e' }, { kind: 'extension', id: 'other' }])
   })
 

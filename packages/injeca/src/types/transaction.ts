@@ -22,6 +22,12 @@ export interface TransactionReplace {
   <T>(key: ProvidedKey<string, T, DependencyMap | undefined> | string, option: ProvideOption<NoInfer<T>, undefined>): void
 }
 
+/** The options of `tx.commit()`. */
+export interface TransactionCommitOptions {
+  /** Aborts the transaction when the signal aborts before the publish. */
+  signal?: AbortSignal
+}
+
 /**
  * A set of registrations that publish together. `transaction(container)` creates it.
  *
@@ -40,8 +46,11 @@ export interface Transaction {
    * A service whose required dependencies are not available goes to `pending`. That is not a failure.
    * If one build fails, nothing publishes, no `start` hook runs, and the promise rejects with the build error.
    * Resolves after the publish. It does not wait for the `start` hooks.
+   *
+   * When `options.signal` aborts before the publish, the transaction aborts and rolls back, and the commit rejects at once with the reason.
+   * An aborted signal rejects at once and builds nothing. After the publish, the signal has no effect.
    */
-  readonly commit: () => Promise<void>
+  readonly commit: (options?: TransactionCommitOptions) => Promise<void>
   /** Removes all declared and built services of the transaction. A build that settles later cannot publish. */
   readonly abort: () => Promise<void>
 }

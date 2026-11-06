@@ -5,10 +5,13 @@ import type { TimeoutContext } from '../types'
 import { HookTimeoutError } from '../diagnostics/errors'
 import { timeoutHandlerOf } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
+import { forwardAbort } from '../helpers/abort'
+import { messageOf } from '../helpers/error-from'
 import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { createDecide, defaultDecision, validateDecision } from '../primitives/decision'
 import { invokeUser } from './calls'
+import { recordSignalOrigin } from './reentry'
 
 function hookStateOf(instance: InstanceNode, hook: ServiceHook): HookState {
   let state = instance.hookStates.get(hook)
@@ -41,22 +44,40 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
   })
 }
 
-/** Starts a hook run. Its signal aborts when a newer target supersedes it, when it times out, or when the instance is disposed. */
-export function beginHookRun(instance: InstanceNode): { readonly signal: AbortSignal, readonly abort: (reason: unknown) => void, readonly end: () => void } {
+/**
+ * Reports a failure of a callback that injeca stopped waiting for, after a timeout or a newer target. Nothing else gets the error, so injeca writes it with `logger.warn`.
+ *
+ * A failure with the reason of one of `signals` is not reported, because the callback only followed its abort.
+ */
+export function reportLateFailure(service: ServiceNode, source: ServiceHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
+  if (signals.some(signal => signal?.aborted && signal.reason === error))
+    return
+
+  const callback = source === 'effect' ? `An effect disposer of '${service.name}'` : `The '${source}' hook of '${service.name}'`
+  service.container.api.logger.warn(`${callback} failed after injeca stopped waiting for it: ${messageOf(error)}`)
+}
+
+/** Records the late decision of a hook run that injeca stopped waiting for. A late `fail` is reported with `reportLateFailure`. */
+export function recordLateDecision(service: ServiceNode, instance: InstanceNode, decision: Decision, signals: ReadonlyArray<AbortSignal | undefined>): void {
+  recordDecision(service, instance, decision, true)
+  if (decision.kind === 'fail')
+    reportLateFailure(service, decision.hook, decision.error, signals)
+}
+
+/**
+ * Starts a hook run. Its signal aborts when a newer target supersedes it, when the instance is disposed, or when `timeout` aborts.
+ * The signal has the reason of the first one. `end` removes the listeners.
+ */
+export function beginHookRun(instance: InstanceNode, timeout?: AbortSignal): { readonly signal: AbortSignal, readonly end: () => void } {
   const controller = new AbortController()
-  const parent = instance.controller.signal
-  const forward = () => controller.abort(parent.reason)
-  if (parent.aborted)
-    forward()
-  else
-    parent.addEventListener('abort', forward, { once: true })
+  const release = forwardAbort(controller, timeout ? [instance.controller.signal, timeout] : [instance.controller.signal])
+  recordSignalOrigin(controller.signal, instance)
   instance.hookRun = controller
 
   return {
     signal: controller.signal,
-    abort: reason => controller.abort(reason),
     end: () => {
-      parent.removeEventListener('abort', forward)
+      release()
       if (instance.hookRun === controller)
         instance.hookRun = undefined
     },
@@ -125,7 +146,8 @@ export async function runHandlers(service: ServiceNode, instance: InstanceNode, 
 /**
  * Records a timeout of a `start` or `stop` hook in the observe stream, and returns the decision of the `onTimeout` handler.
  *
- * The handler runs synchronously. A value that is not a decision of this hook, a promise, a throw, or no handler gives `fail` with `hook-timeout`.
+ * The handler runs synchronously. For `start`, a value that is not a decision of this hook, a promise, or no handler gives `fail` with `hook-timeout`.
+ * For `stop`, they give `handled` with the timeout as the reason, so that the stop continues and its callers do not fail. A throw gives `fail` for both hooks.
  */
 export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook: 'start' | 'stop', timeoutMs: number): Decision {
   const state = hookStateOf(instance, hook)
@@ -143,13 +165,14 @@ export function decideTimeout(service: ServiceNode, instance: InstanceNode, hook
     reason: error.message,
   })
 
+  const fallback = (): Decision => hook === 'stop' ? decide.handled({ reason: error.message }) : decide.fail(error, { reason: error.message })
   const handler = timeoutHandlerOf(service)
   if (!handler)
-    return decide.fail(error, { reason: error.message })
+    return fallback()
 
   try {
     const value = untracked(() => handler(Object.freeze({ hook, timeoutMs, attempt: state.attempt, previous: state.previous, decide }) as TimeoutContext))
-    return validateDecision(run, value) ?? decide.fail(error, { reason: error.message })
+    return validateDecision(run, value) ?? fallback()
   }
   catch (handlerError) {
     return decide.fail(handlerError, { reason: `The onTimeout handler of '${service.name}' threw.` })

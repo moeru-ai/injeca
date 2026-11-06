@@ -2,13 +2,14 @@ import type { HookHandler, OptionalValue, ServiceStatus } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { createNoopLogger } from '../diagnostics/logger'
 import { createContainer, defineKey, optional, provide, start } from '../scoped'
 import { drained, manualClock, provideWithStatus, stateOf } from '../testing/helpers'
 
 describe('dependency hook requeue', () => {
   function setup(handler: HookHandler<'dependency-status-change', { llm: string, tts: OptionalValue<string> | undefined }>) {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock })
     const llm = provideWithStatus(app, 'airi.llm')
     const tts = provideWithStatus(app, 'airi.tts')
     const stopHook = vi.fn()
@@ -119,7 +120,7 @@ describe('dependency hook requeue', () => {
   it('applies the jitter through the injected random source, so the delays are deterministic', async () => {
     const manual = manualClock()
     const random = vi.fn(() => 0.5)
-    const app = createContainer({ enabled: false, clock: manual.clock, random })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, random })
     const llm = provideWithStatus(app, 'airi.llm')
     const runs: number[] = []
     provide(app, 'voice.speech', {
@@ -151,7 +152,7 @@ describe('dependency hook requeue', () => {
   it('does not read the random source without jitter', async () => {
     const random = vi.fn(() => 0.5)
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock, random })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, random })
     const llm = provideWithStatus(app, 'airi.llm')
     provide(app, 'voice.speech', {
       dependsOn: { llm: llm.registration },
@@ -171,7 +172,7 @@ describe('dependency hook requeue', () => {
 
   it('uses the maxAttempts of the service for a dependency hook requeue', async () => {
     const manual = manualClock()
-    const app = createContainer({ enabled: false, clock: manual.clock, maxAttempts: 10 })
+    const app = createContainer({ logger: createNoopLogger(), clock: manual.clock, maxAttempts: 10 })
     const llm = provideWithStatus(app, 'airi.llm')
     const attempts: number[] = []
     provide(app, 'voice.speech', {

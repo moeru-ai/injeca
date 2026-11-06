@@ -7,11 +7,10 @@ import {
   DuplicateServiceError,
   HookOutsideBuildError,
   InvalidArgumentError,
-  ReentrantDisposeError,
   StartTimeoutError,
 } from '../diagnostics/errors'
-import { defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, phaseOf } from '../testing/helpers'
+import { createContainer, defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop, timeout } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController, warningLogger } from '../testing/helpers'
 
 describe('start and stop', () => {
   it('builds a service only after its required dependencies run', async () => {
@@ -710,7 +709,7 @@ describe('build context and hooks', () => {
       vi.useRealTimers()
     })
 
-    it('rejects start() after timeoutMs and explains a missing provider and a failed dependency', async () => {
+    it('rejects start() with start-timeout when a timeout signal aborts, and explains a missing provider and a failed dependency', async () => {
       vi.useFakeTimers()
       const app = createTestContainer()
       const error = new Error('broken')
@@ -727,21 +726,21 @@ describe('build context and hooks', () => {
         return 'hanging'
       })
 
-      const result = start(app, { timeoutMs: 1_000 }).catch((reason: unknown) => reason)
+      const result = start(app, { signal: timeout(app, 1_000) }).catch((reason: unknown) => reason)
       await vi.advanceTimersByTimeAsync(999)
       await vi.advanceTimersByTimeAsync(1)
 
-      const timeout = await result
-      expect(timeout).toBeInstanceOf(StartTimeoutError)
-      expect(timeout).toMatchObject({ code: 'start-timeout' })
-      const explanations = (timeout as StartTimeoutError).explanations
+      const failure = await result
+      expect(failure).toBeInstanceOf(StartTimeoutError)
+      expect(failure).toMatchObject({ code: 'start-timeout' })
+      const explanations = (failure as StartTimeoutError).explanations
       expect(explanations).toEqual([
         expect.objectContaining({ name: 'voice.speech', phase: 'pending', blockers: [{ kind: 'missing-provider', dependency: 'tts', key: 'airi.tts' }] }),
         expect.objectContaining({ name: 'broken', phase: 'failed', blockers: [{ kind: 'failed', error }] }),
         expect.objectContaining({ name: 'needs-broken', phase: 'pending', blockers: [{ kind: 'failed-dependency', dependency: 'broken', key: 'broken', error }] }),
         expect.objectContaining({ name: 'hanging', phase: 'starting', blockers: [] }),
       ])
-      expect((timeout as Error).message).toContain('no provider for \'airi.tts\'')
+      expect((failure as Error).message).toContain('no provider for \'airi.tts\'')
     })
 
     it('explains a pending dependency', async () => {
@@ -750,14 +749,14 @@ describe('build context and hooks', () => {
       const slow = provide(app, 'slow', { dependsOn: { missing: 'missing' }, build: () => 'slow' })
       invoke(app, { dependsOn: { slow }, callback: () => {} })
 
-      const result = start(app, { timeoutMs: 10 }).catch((reason: unknown) => reason)
+      const result = start(app, { signal: timeout(app, 10) }).catch((reason: unknown) => reason)
       await vi.advanceTimersByTimeAsync(10)
 
       const explanations = ((await result) as StartTimeoutError).explanations
       expect(explanations[1]).toMatchObject({ kind: 'invocation', blockers: [{ kind: 'pending-dependency', dependency: 'slow', key: 'slow', phase: 'pending' }] })
     })
 
-    it('keeps waiting without timeoutMs when a provider is missing', async () => {
+    it('keeps waiting without a signal when a provider is missing', async () => {
       vi.useFakeTimers()
       const app = createTestContainer()
       provide(app, 'voice.speech', { dependsOn: { tts: 'airi.tts' }, build: () => 'speech' })
@@ -776,8 +775,9 @@ describe('build context and hooks', () => {
       expect(outcome).toBe('resolved')
     })
 
-    it('rejects an invalid timeoutMs', () => {
-      expect(() => start(createTestContainer(), { timeoutMs: -1 })).toThrow(InvalidArgumentError)
+    it('rejects an invalid signal and an invalid timeout', () => {
+      expect(() => start(createTestContainer(), { signal: 'soon' as unknown as AbortSignal })).toThrow(InvalidArgumentError)
+      expect(() => timeout(createTestContainer(), -1)).toThrow(InvalidArgumentError)
     })
 
     // Design test 20.
@@ -1016,9 +1016,11 @@ describe('dispose', () => {
   })
 
   // Design test 12.
-  // The check sees only the synchronous part of a cleanup, in every runtime. A call after an `await` is not detected.
-  it('rejects a re-entrant dispose from the synchronous part of an async cleanup, and gives an outside caller the same promise', async () => {
-    const app = createTestContainer()
+  // The synchronous part of a cleanup is found in every runtime. After an `await`, only the signal of the cleanup tells injeca who calls.
+  it('resolves a re-entrant dispose from the synchronous part of an async cleanup at once, warns, and gives an outside caller the same promise', async () => {
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ logger })
+    const { records } = collectRecords(app)
     const remaining = vi.fn()
     let inner: Promise<void> | undefined
 
@@ -1032,31 +1034,35 @@ describe('dispose', () => {
     const second = dispose(app)
     expect(second).toBe(first)
 
-    await expect(first).rejects.toBeInstanceOf(ReentrantDisposeError)
-    await expect(inner).rejects.toMatchObject({ code: 'reentrant-dispose' })
+    await expect(first).resolves.toBeUndefined()
+    await expect(inner).resolves.toBeUndefined()
     expect(remaining).toHaveBeenCalledTimes(1)
+    expect(warnings).toEqual([expect.stringContaining('called dispose()')])
+    expect(records).toContainEqual(expect.objectContaining({ type: 'reentrant-call', call: 'dispose', key: '' }))
   })
 
-  it('rejects a synchronous re-entrant dispose from a stop hook and from a child container effect', async () => {
-    const parent = createTestContainer()
+  it('resolves a synchronous re-entrant dispose from a stop hook and from a child container effect at once', async () => {
+    const { logger, warnings } = warningLogger()
+    const parent = createTestContainer({ logger })
     const child = createTestContainer({ parent })
-    const reentrant: unknown[] = []
+    const calls: Promise<void>[] = []
 
     provide(parent, 'airi.llm', ({ on }) => {
       on('stop', () => {
-        dispose(parent).catch((error: unknown) => reentrant.push(error))
+        calls.push(dispose(parent))
       })
       return 'llm'
     })
     effect(child, () => () => {
       // The child cleanup belongs to the cleanup chain of the parent.
-      dispose(parent).catch((error: unknown) => reentrant.push(error))
+      calls.push(dispose(parent))
     })
     await start(parent)
 
     await dispose(parent)
-    expect(reentrant).toHaveLength(2)
-    expect(reentrant.every(error => error instanceof ReentrantDisposeError)).toBe(true)
+    expect(calls).toHaveLength(2)
+    await expect(Promise.all(calls)).resolves.toEqual([undefined, undefined])
+    expect(warnings).toHaveLength(2)
   })
 
   it('aborts a running build when its container is disposed, and the late result does not publish', async () => {
@@ -1081,5 +1087,146 @@ describe('dispose', () => {
     await disposal
     expect(startHook).not.toHaveBeenCalled()
     await expect(registration.withdraw()).resolves.toBe(false)
+  })
+})
+
+describe('dispose with a signal', () => {
+  it('stops waiting for a cleanup that does not settle, records it, and a later dispose() gets the result', async () => {
+    const { clock, advance } = manualClock()
+    const app = createTestContainer({ clock })
+    const gate = deferred()
+    provide(app, 'airi.window', ({ effect }) => {
+      effect(() => () => gate.promise)
+      return 'window'
+    })
+    await start(app)
+    const { records } = collectRecords(app)
+
+    const aborted = dispose(app, { signal: timeout(app, 50) }).catch((error: unknown) => error)
+    await drained(app)
+    advance(50)
+    expect(await aborted).toMatchObject({ name: 'TimeoutError' })
+    await drained(app)
+    expect(records).toContainEqual(expect.objectContaining({ type: 'wait-aborted', call: 'dispose', key: 'airi.window', phase: 'stopping' }))
+
+    // The container stays in `disposing`. New work fails, and a later dispose() waits for the same disposal.
+    expect(() => provide(app, 'airi.other', () => 'other')).toThrow(BuildAfterDisposeError)
+    const later = dispose(app)
+    gate.resolve()
+    await expect(later).resolves.toBeUndefined()
+  })
+
+  it('starts the disposal and rejects at once for an aborted signal', async () => {
+    const app = createTestContainer()
+    const stopHook = vi.fn()
+    provide(app, 'airi.llm', ({ on }) => {
+      on('stop', stopHook)
+      return 'llm'
+    })
+    await start(app)
+
+    await expect(dispose(app, { signal: AbortSignal.abort('closed') })).rejects.toBe('closed')
+    await dispose(app)
+    expect(stopHook).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes its listener when the disposal ends', async () => {
+    const app = createTestContainer()
+    provide(app, 'airi.llm', () => 'llm')
+    await start(app)
+    const { signal, listeners } = trackedController()
+
+    await dispose(app, { signal })
+    expect(listeners()).toBe(0)
+  })
+})
+
+describe('logging', () => {
+  function spyLogger() {
+    return {
+      provide: vi.fn(),
+      invoke: vi.fn(),
+      beforeRun: vi.fn(),
+      run: vi.fn(),
+      hookOnStart: vi.fn(),
+      hookOnStartComplete: vi.fn(),
+      hookOnStop: vi.fn(),
+      hookOnStopComplete: vi.fn(),
+      running: vi.fn(),
+      warn: vi.fn(),
+    }
+  }
+
+  async function runLifecycle(app: ReturnType<typeof createContainer>) {
+    provide(app, 'airi.window', ({ on }) => {
+      on('start', () => {})
+      on('stop', () => {})
+      return 'window'
+    })
+    invoke(app, () => {})
+    await start(app)
+    await stop(app)
+  }
+
+  it('writes no lifecycle trace by default', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger })
+    expect(app.logging).toBe(false)
+    await runLifecycle(app)
+
+    for (const [method, spy] of Object.entries(logger))
+      expect(spy, method).not.toHaveBeenCalled()
+  })
+
+  it('writes the lifecycle trace with logging: true', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger, logging: true })
+    await runLifecycle(app)
+
+    expect(logger.provide).toHaveBeenCalledWith('airi.window', [])
+    expect(logger.invoke).toHaveBeenCalledWith([])
+    expect(logger.beforeRun).toHaveBeenCalledWith('airi.window')
+    expect(logger.run).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.hookOnStart).toHaveBeenCalledWith('airi.window')
+    expect(logger.hookOnStartComplete).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.hookOnStop).toHaveBeenCalledWith('airi.window')
+    expect(logger.hookOnStopComplete).toHaveBeenCalledWith('airi.window', expect.any(Number))
+    expect(logger.running).toHaveBeenCalledOnce()
+    expect(logger.warn).not.toHaveBeenCalled()
+  })
+
+  it('writes warnings whatever logging is', async () => {
+    const logger = spyLogger()
+    const app = createContainer({ logger })
+    provide(app, 'airi.window', ({ on }) => {
+      on('stop', ({ signal }) => {
+        void dispose(app, { signal })
+      })
+      return 'window'
+    })
+    await start(app)
+    await dispose(app)
+
+    expect(logger.warn).toHaveBeenCalledOnce()
+    expect(logger.hookOnStop).not.toHaveBeenCalled()
+  })
+
+  it('lets a child container inherit logging from its parent, unless it sets its own', async () => {
+    const logger = spyLogger()
+    const parent = createContainer({ logger, logging: true })
+    const child = createContainer({ parent })
+    const quiet = createContainer({ parent, logging: false })
+    expect(child.logging).toBe(true)
+    expect(quiet.logging).toBe(false)
+    expect(createContainer({ parent: quiet, logging: true }).logging).toBe(true)
+
+    provide(quiet, 'plugin.quiet', () => 'quiet')
+    expect(logger.provide).not.toHaveBeenCalled()
+    provide(child, 'plugin.loud', () => 'loud')
+    expect(logger.provide).toHaveBeenCalledWith('plugin.loud', [])
+  })
+
+  it('rejects a logging option that is not a boolean', () => {
+    expect(() => createContainer({ logging: 'yes' as unknown as boolean })).toThrow(expect.objectContaining({ code: 'invalid-argument' }))
   })
 })

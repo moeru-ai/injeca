@@ -4,9 +4,9 @@ import type { Decision } from '../primitives/decision'
 import { HookTimeoutError } from '../diagnostics/errors'
 import { setPhase, timeoutOf } from '../graph/nodes'
 import { epochOf } from '../graph/resolvers/resolvers'
-import { raceTimeout } from '../helpers/timeout'
+import { raceAbort, timeoutSignal } from '../helpers/abort'
 import { loggerOf } from './calls'
-import { beginHookRun, decideTimeout, finishRun, recordDecision, runHandlers } from './hook-run'
+import { beginHookRun, decideTimeout, finishRun, recordDecision, recordLateDecision, runHandlers } from './hook-run'
 import { exhaustedIntent, scheduleRequeue } from './requeue'
 import { enterStopping } from './stop'
 import { completeSwap } from './swap'
@@ -17,69 +17,41 @@ interface AttemptResult {
   readonly superseded: boolean
 }
 
-/** Resolves when `signal` aborts. Returns a function that removes the listener. */
-function onAbort(signal: AbortSignal): { readonly aborted: Promise<void>, readonly remove: () => void } {
-  let remove = () => {}
-  const aborted = new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve()
-      return
-    }
-    const listener = () => resolve()
-    signal.addEventListener('abort', listener, { once: true })
-    remove = () => signal.removeEventListener('abort', listener)
-  })
-
-  return { aborted, remove }
-}
-
 /**
  * Runs the `start` handlers of one attempt, from `instance.startFrom`, within the configured `start` timeout.
  *
- * At the timeout, the run aborts, later handlers do not run, and the `onTimeout` decision replaces the result.
+ * The run signal includes a timeout signal on the container clock. At the timeout, the run signal aborts with `hook-timeout`, later handlers do not run, and the `onTimeout` decision replaces the result.
  * When a newer target aborts the run, for example `stop()` or `dispose()`, injeca does not wait for the handler in progress. The service stops at once.
  * Late decisions are recorded as ignored.
  */
 async function runAttempt(service: ServiceNode, instance: InstanceNode): Promise<AttemptResult> {
-  const run = beginHookRun(instance)
+  const timeoutMs = timeoutOf(service, 'start')
+  const timer = timeoutMs === undefined
+    ? undefined
+    : timeoutSignal(service.container.runtime.clock, timeoutMs, () => new HookTimeoutError(`The 'start' hook of '${service.name}' timed out.`, 'start', timeoutMs))
+  const run = beginHookRun(instance, timer?.signal)
   const progress = { index: instance.startFrom }
   let abandoned = false
   const running = runHandlers(service, instance, 'start', run.signal, {}, { from: instance.startFrom, progress, stopped: () => abandoned })
-  const abort = onAbort(run.signal)
-  const raced = Promise.race([
-    running.then(value => ({ kind: 'settled' as const, value })),
-    abort.aborted.then(() => ({ kind: 'superseded' as const })),
-  ])
-  const timeoutMs = timeoutOf(service, 'start')
   // Without a timeout, `start` waits until it settles or a newer target aborts it.
-  const timed = timeoutMs === undefined
-    ? { kind: 'settled' as const, value: await raced }
-    : await raceTimeout(service.container.runtime.clock, raced, timeoutMs)
-  abort.remove()
+  const result = await raceAbort(running, run.signal)
+  timer?.cancel()
+  const timedOut = timer !== undefined && timer.signal.aborted && run.signal.reason === timer.signal.reason
+  run.end()
   instance.startFrom = progress.index
 
-  if (timed.kind === 'settled' && timed.value.kind === 'settled') {
-    run.end()
-    return { decisions: timed.value.value, superseded: false }
-  }
+  if (result.kind === 'settled')
+    return { decisions: result.value, superseded: false }
 
   abandoned = true
-  const recordLate = (): void => {
-    void running.then((late) => {
-      for (const decision of late)
-        recordDecision(service, instance, decision, true)
-    })
-  }
-  if (timed.kind === 'settled') {
-    // A newer target aborted the run. The handler in progress can still return. Its decision is ignored.
-    run.end()
-    recordLate()
+  // The handler in progress can still return. Its decision is ignored. A late failure is reported, unless it is the abort of the run.
+  void running.then((late) => {
+    for (const decision of late)
+      recordLateDecision(service, instance, decision, [run.signal])
+  })
+  if (!timedOut)
     return { decisions: [], superseded: true }
-  }
 
-  run.abort(new HookTimeoutError(`The 'start' hook of '${service.name}' timed out.`, 'start', timeoutMs!))
-  run.end()
-  recordLate()
   return { decisions: [decideTimeout(service, instance, 'start', timeoutMs!)], superseded: false }
 }
 

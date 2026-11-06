@@ -146,7 +146,7 @@ describe('getContainer', () => {
     provide('config', () => 'config')
     await expect(resolveIn(before, { config: 'config' })).resolves.toEqual({ config: 'config' })
 
-    const child = createContainer({ parent: before, enabled: false })
+    const child = createContainer({ parent: before })
     expect(child.parent).toBe(before)
 
     resetContainer()

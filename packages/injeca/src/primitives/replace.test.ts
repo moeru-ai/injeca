@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
 import { describeExplanations } from '../diagnostics/explain'
-import { graph, provide, start, stop } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, stateOf } from '../testing/helpers'
+import { graph, provide, resolve, start, stop, timeout } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, trackedController } from '../testing/helpers'
 
 describe('replace', () => {
   it('does not let a stale registration replace a newer service (design test 1)', async () => {
@@ -271,5 +271,75 @@ describe('replace', () => {
     provide(app, 'missing', () => 'here')
     await drained(app)
     expect(graph(app).explain('module')).not.toHaveProperty('replacement')
+  })
+})
+
+describe('replace with a signal', () => {
+  it('cancels a pending replacement when the signal aborts. The old instance stays, and replace resolves false', async () => {
+    const { clock, advance } = manualClock()
+    const app = createTestContainer({ clock })
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const oldId = stateOf(app, llm).instanceId
+    const newStop = vi.fn()
+
+    const replaced = llm.replace(({ on }) => {
+      on('start', () => new Promise<void>(() => {}))
+      on('stop', newStop)
+      return 'new'
+    }, { signal: timeout(app, 50) })
+    await drained(app)
+    expect(graph(app).explain('airi.llm').replacement).toMatchObject({ phase: 'starting' })
+    advance(50)
+    await expect(replaced).resolves.toBe(false)
+    await drained(app)
+
+    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
+    expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
+  })
+
+  it('cancels a pending perConsumer replacement, and keeps the old consumer services', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const client = provide(root, 'host.client', { perConsumer: true, build: () => 'v1' })
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    await start(root)
+    await start(extension)
+    await resolve(extension, { client })
+
+    const controller = new AbortController()
+    const replaced = client.replace(({ on }) => {
+      on('start', () => new Promise<void>(() => {}))
+      return 'v2'
+    }, { signal: controller.signal })
+    await drained(root)
+    controller.abort('cancelled')
+    await expect(replaced).resolves.toBe(false)
+    await drained(root)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+  })
+
+  it('resolves false at once for an aborted signal and changes nothing', async () => {
+    const app = createTestContainer()
+    const build = vi.fn(() => 'new')
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+
+    await expect(llm.replace(build, { signal: AbortSignal.abort('closed') })).resolves.toBe(false)
+    await drained(app)
+    expect(build).not.toHaveBeenCalled()
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
+  })
+
+  it('removes its listener after the swap, and an abort then has no effect', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await start(app)
+    const { controller, signal, listeners } = trackedController()
+
+    await expect(llm.replace(() => 'new', { signal })).resolves.toBe(true)
+    expect(listeners()).toBe(0)
+    controller.abort('late')
+    await drained(app)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'new' })
   })
 })

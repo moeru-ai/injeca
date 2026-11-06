@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BuildAfterDisposeError, DuplicateServiceError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
 import { defineKey, dispose, graph, provide, start, transaction } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, phaseOf, stateOf } from '../testing/helpers'
+import { collectRecords, createTestContainer, deferred, drained, phaseOf, stateOf, trackedController } from '../testing/helpers'
 
 const characterKey = defineKey<string>('airi.character')
 const statusKitKey = defineKey<string>('kit.status')
@@ -307,5 +307,64 @@ describe('declare reserves the key (G5)', () => {
     await drained(root)
     expect(phaseOf(root, kitKey)).toBe('conflict')
     expect(phaseOf(child, kitKey)).toBe('conflict')
+  })
+})
+
+describe('commit with a signal', () => {
+  it('aborts the transaction when the signal aborts during a build, rejects at once, and publishes nothing', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const gate = deferred()
+    const signals: AbortSignal[] = []
+    const tx = transaction(app)
+    tx.provide('airi.llm', async ({ signal }) => {
+      signals.push(signal)
+      await gate.promise
+      return 'llm'
+    })
+    const controller = new AbortController()
+    const reason = new Error('the user cancelled')
+
+    const committed = tx.commit({ signal: controller.signal })
+    await drained(app)
+    controller.abort(reason)
+    await expect(committed).rejects.toBe(reason)
+    expect(signals[0]?.reason).toBe(reason)
+
+    // The rollback ends when the build settles. Then the key is free.
+    gate.resolve()
+    await drained(app)
+    expect(graph(app).services()).toEqual([])
+    provide(app, 'airi.llm', () => 'other')
+    await drained(app)
+    expect(phaseOf(app, 'airi.llm')).toBe('running')
+  })
+
+  it('rejects at once for an aborted signal and builds nothing', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const build = vi.fn(() => 'llm')
+    const tx = transaction(app)
+    tx.provide('airi.llm', build)
+
+    await expect(tx.commit({ signal: AbortSignal.abort('closed') })).rejects.toBe('closed')
+    await drained(app)
+    expect(build).not.toHaveBeenCalled()
+    expect(graph(app).services()).toEqual([])
+    await expect(tx.commit()).rejects.toThrow('aborted')
+  })
+
+  it('has no effect after the publish, and removes its listener', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const tx = transaction(app)
+    tx.provide('airi.llm', () => 'llm')
+    const { controller, signal, listeners } = trackedController()
+
+    await tx.commit({ signal })
+    expect(listeners()).toBe(0)
+    controller.abort('late')
+    await drained(app)
+    expect(phaseOf(app, 'airi.llm')).toBe('running')
   })
 })

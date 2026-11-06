@@ -62,6 +62,29 @@ export interface ErrorObserveRecord extends ObserveRecordBase {
   readonly error: unknown
 }
 
+/**
+ * The `signal` of `stop()`, `dispose()`, or `withdraw()` aborted before this service stopped. The call stopped waiting. The cleanups of the service keep running.
+ * `phase` is the phase at the abort. `abortReason` is the reason of the signal.
+ */
+export interface WaitAbortedObserveRecord extends ObserveRecordBase {
+  readonly type: 'wait-aborted'
+  readonly call: 'stop' | 'dispose' | 'withdraw'
+  readonly phase: ServicePhase
+  readonly reason: string
+  readonly abortReason: unknown
+}
+
+/**
+ * A cleanup called `stop()` or `dispose()` of its own container, or of an ancestor, or `withdraw()` of a registration that waits for that cleanup.
+ * The wait includes that cleanup, so injeca resolved the call at once. The action continues.
+ * `key` is the service of the cleanup, or `''` for a container effect.
+ */
+export interface ReentrantCallObserveRecord extends ObserveRecordBase {
+  readonly type: 'reentrant-call'
+  readonly call: 'stop' | 'dispose' | 'withdraw'
+  readonly reason: string
+}
+
 /** One record of the observe stream. */
 export type ObserveRecord
   = | PhaseObserveRecord
@@ -71,3 +94,5 @@ export type ObserveRecord
     | TimeoutObserveRecord
     | RegistrationReplacedObserveRecord
     | ErrorObserveRecord
+    | WaitAbortedObserveRecord
+    | ReentrantCallObserveRecord
