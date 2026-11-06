@@ -1,5 +1,5 @@
 import type { ProviderInfo, ResolutionCondition } from '../../types'
-import type { ResolutionConsumer, ServiceNode } from '../graph'
+import type { DependencyEdge, ResolutionConsumer, ServiceNode } from '../graph'
 
 import { untracked } from '../../helpers/signals'
 import { reportCallbackError } from '../observers'
@@ -43,4 +43,21 @@ export function acceptsProvider(consumer: ResolutionConsumer, keyName: string, c
   byProvider.set(registration, verdict)
 
   return verdict
+}
+
+/** The resolution conditions that a candidate of `edge` must pass: the condition of the edge, then the condition of the candidate. */
+export function conditionsOf(edge: DependencyEdge | undefined, keyName: string): readonly ResolutionCondition[] {
+  const conditions: ResolutionCondition[] = []
+  if (edge?.condition)
+    conditions.push(edge.condition)
+  const own = edge?.candidateConditions?.[keyName]
+  if (own)
+    conditions.push(own)
+
+  return conditions
+}
+
+/** Tells whether the provider registration passes each condition of the candidate `keyName` of `edge`. */
+export function acceptsCandidate(consumer: ResolutionConsumer, edge: DependencyEdge | undefined, keyName: string, registration: ServiceNode): boolean {
+  return conditionsOf(edge, keyName).every(condition => acceptsProvider(consumer, keyName, condition, registration))
 }

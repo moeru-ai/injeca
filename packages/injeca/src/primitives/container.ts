@@ -149,6 +149,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     signals: {
       started: signal(false),
       slots: new Map(),
+      exports: new Map(),
     },
     isolated,
     policy,

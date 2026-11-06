@@ -18,8 +18,10 @@ export interface DependencyEdge {
   readonly candidates: readonly string[]
   readonly optional: boolean
   readonly fallback: boolean
-  /** The resolution condition from `where`. */
+  /** The resolution condition from `where`. It filters each candidate. */
   readonly condition?: ResolutionCondition
+  /** The resolution conditions of single candidates, from `firstAvailable(where(key, condition), ...)`, by key name. */
+  readonly candidateConditions?: Readonly<Record<string, ResolutionCondition>>
 }
 
 /** The retry and timeout options of one registration or one container, read once from the caller. */
@@ -95,8 +97,11 @@ export interface InstanceNode {
   disposed: boolean
 }
 
-/** The consumer side of a resolution: a service, or a read such as `peek` that has no service. */
-export type ResolutionConsumer = Pick<ServiceNode, 'container' | 'name'>
+/**
+ * The consumer side of a resolution: a service, or a read such as `peek` that has no service.
+ * `scope` is the container that the edges resolve from. `container` gets the observe records.
+ */
+export type ResolutionConsumer = Pick<ServiceNode, 'container' | 'scope' | 'name' | 'template'>
 
 /** The context that the reconciler creates for each build. The build function of a service adapts it. */
 export interface RawBuildContext {
@@ -120,6 +125,8 @@ export interface ServiceDefinition {
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata
   readonly perConsumer: boolean
+  /** `true` when the registration is a candidate for consumers in the resolution area of the parent container. */
+  readonly exported: boolean
   readonly policy: Policy
 }
 
@@ -160,6 +167,8 @@ export interface SwapState {
   readonly ready?: (service: ServiceNode) => void
   /** `true` after the service completed `start` and waits for the batch swap of its replacement. */
   held: boolean
+  /** `true` for the successor of a make-before-break rebuild. It has the options of `target`. */
+  readonly rebuild?: boolean
 }
 
 /**
@@ -209,12 +218,22 @@ export interface ServiceNode {
   readonly kind: ServiceKind
   readonly name: string
   readonly container: ContainerNode
+  /**
+   * The container that the edges of the service resolve from. It is the container of the registration.
+   * A consumer service of a `perConsumer` registration lives in the consumer container, but its edges resolve from the container of its registration, as for a plain registration.
+   */
+  readonly scope: ContainerNode
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata
   readonly policy: Policy
   /** `true` when the key of the service is exclusive. */
   readonly exclusive: boolean
+  /**
+   * `true` for an exported registration. It lives in its container, and it is also a candidate for consumers in the resolution area of the parent container.
+   * A consumer service of a `perConsumer` registration is never exported. It lives in the consumer container.
+   */
+  readonly exported: boolean
   /** `true` for the registration of a `perConsumer` service. It never builds. Each consumer container gets its own service. */
   readonly perConsumer: boolean
   /** The `perConsumer` registration that this consumer service belongs to. A replacement of the registration moves it. */
@@ -227,6 +246,11 @@ export interface ServiceNode {
   swap: SwapState | undefined
   /** The service that replaced this one. */
   replacedBy: ServiceNode | undefined
+  /**
+   * The new service that waits to replace this one, until the swap or the end of the replacement.
+   * It comes from `replace()`, from a transaction, or from a make-before-break rebuild. For a `perConsumer` registration, it is the new registration.
+   */
+  successor: ServiceNode | undefined
   /** The transaction that builds this service. The reconciler does not touch the service until the transaction ends. */
   transaction: TransactionNode | undefined
   /** Increments when the service gets new options. Part of the epoch. */
@@ -275,6 +299,8 @@ export interface TransactionEntry {
   /** The registration that `tx.provide` returned. */
   registration: RegistrationNode | undefined
   exclusive: boolean
+  /** `true` when `tx.provide` exports the key. The reservation of an exclusive key then counts in the resolution area of the parent container. */
+  exported: boolean
   /** The declaration that reserves an exclusive key until the commit or the abort. See `nodes/reservation.ts`. */
   reservation: ServiceNode | undefined
 }
@@ -297,6 +323,8 @@ export interface ContainerSignals {
   readonly started: WritableSignal<boolean>
   /** The current service for each key name. */
   readonly slots: Map<string, WritableSignal<ServiceNode | undefined>>
+  /** The current exported services of the child containers for each key name, in container creation order. */
+  readonly exports: Map<string, WritableSignal<readonly ServiceNode[]>>
 }
 
 export interface ContainerNode {

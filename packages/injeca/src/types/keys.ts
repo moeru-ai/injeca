@@ -52,8 +52,10 @@ export interface OptionalDependency<T> {
   readonly [optionalBrand]: true
   /** The names of the keys, in order. More than one name comes from `optional(firstAvailable(...))`. */
   readonly dependencies: readonly string[]
-  /** The resolution condition from `where`, when the marker has one. */
+  /** The resolution condition from `where`, when the marker has one. It filters each candidate. */
   readonly condition?: ResolutionCondition
+  /** The resolution conditions of single candidates, from `firstAvailable(where(key, condition), ...)`, by key name. */
+  readonly candidateConditions?: Readonly<Record<string, ResolutionCondition>>
   /** Carries the value type. It has no value at run time. */
   readonly [optionalType]?: T
 }
@@ -68,11 +70,18 @@ export interface ConditionalDependency<T> {
   readonly [conditionalType]?: T
 }
 
-/** A fallback dependency marker from `firstAvailable(...keys)`. It resolves to the first available provider in the list. */
+/**
+ * A fallback dependency marker from `firstAvailable(...keys)`. It resolves to the first available provider in the list.
+ * A resolution condition filters the candidates. The selection is the first available candidate that passes.
+ */
 export interface FallbackDependency<T> {
   readonly [fallbackBrand]: true
   /** The names of the keys, in order of preference. */
   readonly dependencies: readonly string[]
+  /** The resolution condition from `where(firstAvailable(...), condition)`. It filters each candidate. */
+  readonly condition?: ResolutionCondition
+  /** The resolution conditions of single candidates, from `firstAvailable(where(key, condition), ...)`, by key name. */
+  readonly candidateConditions?: Readonly<Record<string, ResolutionCondition>>
   /** Carries the value type. It has no value at run time. */
   readonly [fallbackType]?: T
 }
@@ -93,7 +102,9 @@ export type InferProvided<T>
     ? P
     : T extends ProvidedBy<infer P>
       ? P
-      : never
+      : T extends ConditionalDependency<infer P>
+        ? P
+        : never
 
 /** A required dependency is its value. An optional dependency is `{ value, status }` or `undefined`. */
 export type ResolveDependencyDeclaration<Deps extends DependencyDeclarations> = {

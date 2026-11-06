@@ -49,7 +49,7 @@ export function peek<D extends PeekDependency>(container: Container, dependency:
     throw new InvalidArgumentError('peek() needs a dependency.')
 
   return untracked(() => {
-    const consumer = { container: node, name: 'peek' }
+    const consumer = { container: node, scope: node, name: 'peek', template: undefined }
     const resolution = edge.fallback ? resolveFallback(consumer, edge) : resolvePlain(consumer, edge)
     return resultOf(resolution, edge.candidates[0] ?? edge.keyName) as PeekResult<PeekValue<D>>
   })

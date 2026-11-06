@@ -3,6 +3,8 @@ import type { ContainerNode, Runtime, ServiceNode } from '../graph'
 
 import { computed, signal } from 'alien-signals'
 
+import { areaOf } from './exports'
+
 /** Tells whether `ancestor` is `container` or an ancestor of it, with no container in between that isolates `keyName`. */
 function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: string): boolean {
   for (let current: ContainerNode | undefined = container; current; current = current.parent) {
@@ -18,6 +20,7 @@ function reaches(container: ContainerNode, ancestor: ContainerNode, keyName: str
 /**
  * Tells whether two containers share a resolution area of `keyName`.
  * A resolution area is the container that has the key, with its descendants that do not isolate the key.
+ * For an exported registration, the caller passes the parent container. See `areaOf`.
  */
 export function sameArea(a: ContainerNode, b: ContainerNode, keyName: string): boolean {
   return reaches(a, b, keyName) || reaches(b, a, keyName)
@@ -57,6 +60,7 @@ const none: readonly ServiceNode[] = Object.freeze([])
  *
  * The result depends only on the set of declarations. The order of the registrations has no effect.
  * Only one registration of a key exists in one container, so a rival is always in another container.
+ * An exported registration counts in the resolution area of its parent container. So two sibling exports of one exclusive key conflict, and an export conflicts with a registration of the parent.
  * A service of a `perConsumer` registration has no conflict of its own. It follows the conflict of its registration.
  */
 export function createRivals(service: ServiceNode): () => readonly ServiceNode[] {
@@ -70,7 +74,7 @@ export function createRivals(service: ServiceNode): () => readonly ServiceNode[]
       .filter(other => other.container !== service.container
         && other.signals.present()
         && (service.exclusive || other.exclusive)
-        && sameArea(service.container, other.container, service.name))
+        && sameArea(areaOf(service), areaOf(other), service.name))
       .sort((a, b) => a.seq - b.seq)
 
     return previous && sameList(previous, rivals) ? previous : rivals

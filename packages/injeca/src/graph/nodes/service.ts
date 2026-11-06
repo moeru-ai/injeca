@@ -77,6 +77,8 @@ export interface CreateServiceInput {
   /** The retry and timeout options of the registration. An invocation has none. */
   readonly policy?: Policy
   readonly exclusive?: boolean
+  /** `true` for an exported registration. A consumer service of a `perConsumer` registration is never exported. */
+  readonly exported?: boolean
   readonly perConsumer?: boolean
   readonly template?: ServiceNode
   readonly consumer?: OwnerRecord
@@ -86,6 +88,8 @@ export interface CreateServiceInput {
   readonly swap?: SwapState
   /** The first phase. It defaults to `pending`. A transaction starts its services in `declared`. */
   readonly phase?: ServicePhase
+  /** The place in registration order. A rebuild successor keeps the place of the service that it replaces. */
+  readonly seq?: number
 }
 
 const emptyMetadata = Object.freeze({})
@@ -113,21 +117,24 @@ export function createService(input: CreateServiceInput): ServiceNode {
   let rivals: () => readonly ServiceNode[] = () => []
 
   const service: ServiceNode = {
-    seq: runtime.nextSeq(),
+    seq: input.seq ?? runtime.nextSeq(),
     kind: input.kind,
     name: input.name,
     container,
+    scope: input.template?.container ?? container,
     edges: input.edges,
     build: input.build,
     metadata: input.metadata ?? emptyMetadata,
     policy: input.policy ?? emptyPolicy,
     exclusive: input.exclusive ?? false,
+    exported: input.template === undefined && (input.exported ?? false),
     perConsumer: input.perConsumer ?? false,
     template: input.template,
     consumer: input.consumer,
     registration: input.registration,
     swap: input.swap,
     replacedBy: undefined,
+    successor: undefined,
     transaction: input.transaction,
     revision: 0,
     signals: {

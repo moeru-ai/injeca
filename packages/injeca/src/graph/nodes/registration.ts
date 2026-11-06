@@ -27,6 +27,17 @@ export function cancelPending(registration: RegistrationNode): void {
   releaseService(pending)
 }
 
+/** Cancels the successor that waits to replace `service`, for example a make-before-break rebuild. `service` does not change. */
+export function cancelSuccessor(service: ServiceNode): void {
+  const successor = service.successor
+  if (!successor)
+    return
+
+  service.successor = undefined
+  successor.swap?.settle({ kind: 'cancelled' })
+  releaseService(successor)
+}
+
 /** The `withdraw()` of a registration. Resolves `false` for a stale registration. Rejects with the teardown errors. */
 export async function withdrawRegistration(registration: RegistrationNode): Promise<boolean> {
   const service = untracked(() => {

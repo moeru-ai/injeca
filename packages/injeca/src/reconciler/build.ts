@@ -4,34 +4,19 @@ import type { Snapshot } from './snapshot'
 
 import { signal } from 'alien-signals'
 
-import { ensureConsumerService, setPhase } from '../graph/nodes'
+import { setPhase } from '../graph/nodes'
 import { inConflict } from '../graph/resolvers/exclusive'
-import { buildLost, candidatesOf, epochOf, requiredAvailable, resolutionOf, resolvedInstance } from '../graph/resolvers/resolvers'
+import { buildLost, epochOf, requiredAvailable, resolutionOf, resolvedInstance } from '../graph/resolvers/resolvers'
 import { batch } from '../helpers/signals'
 import { createBuildContext } from './build-context'
 import { invokeUser, loggerOf } from './calls'
+import { demandProviders } from './demand'
 import { syncHolds } from './holds'
 import { currentSnapshot } from './snapshot'
 import { runStart } from './start'
 import { finalize, mergeIntent, teardown } from './stop'
 
 export type BuildResult = { readonly ok: true, readonly value: unknown } | { readonly ok: false, readonly error: unknown }
-
-/**
- * An active service makes the providers of its edges converge too, before `start()`. A fallback edge demands each candidate.
- * A `perConsumer` registration gets a service for the container of `service`. The nearest registration of each key is demanded.
- */
-function demandProviders(service: ServiceNode): void {
-  for (const edge of service.edges) {
-    for (const keyName of edge.candidates) {
-      const candidates = candidatesOf(service.container, keyName, service)
-      const providers = candidates.map(registration => registration.perConsumer ? ensureConsumerService(registration, service.container, service) : registration)
-      const [nearest] = providers
-      if (nearest && !nearest.signals.serving() && !nearest.signals.demanded())
-        nearest.signals.demanded(true)
-    }
-  }
-}
 
 /**
  * Tells whether each optional edge has a final answer for a `resolve` call: no provider, a running provider, or a failed one.

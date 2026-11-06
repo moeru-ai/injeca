@@ -65,8 +65,8 @@ export function computeImpact(scope: ContainerNode, change: ProposedChange): Imp
 
   /** Tells whether another candidate of the edge serves after the change. */
   const alternative = (consumer: ServiceNode, keyNames: readonly string[]): boolean => keyNames.some(keyName =>
-    candidatesOf(consumer.container, keyName, consumer).some((registration) => {
-      const provider = serviceFor(registration, consumer.container)
+    candidatesOf(consumer.scope, keyName, consumer).some((registration) => {
+      const provider = serviceFor(registration, consumer.scope)
       return provider !== undefined && !gone(provider) && !gone(registration) && provider.signals.serving()
     }))
 

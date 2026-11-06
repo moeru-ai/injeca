@@ -8,11 +8,16 @@ import { createService } from './service'
  * Reserves the exclusive key of a transaction entry until the commit or the abort.
  *
  * The reservation is a declaration without a slot. Consumers cannot resolve it. An exclusive conflict counts it, so a provider of the key in another container of the resolution area goes to `conflict`.
+ * The reservation of an exported key counts in the resolution area of the parent container, as the published service does.
  * A plain key needs no reservation. In the same container, `provide` checks the open transactions and fails with `duplicate-service`.
  */
 export function reserveKey(transaction: TransactionNode, entry: TransactionEntry): void {
-  if (!entry.exclusive || entry.replace || entry.reservation)
+  if (!entry.exclusive || entry.replace)
     return
+  // A `tx.provide` with `export` after a `tx.declare` moves the reservation to the resolution area of the parent container.
+  if (entry.reservation?.exported === entry.exported)
+    return
+  releaseReservation(entry)
 
   batch(() => {
     const reservation = createService({
@@ -22,6 +27,7 @@ export function reserveKey(transaction: TransactionNode, entry: TransactionEntry
       edges: [],
       build: () => undefined,
       exclusive: true,
+      exported: entry.exported,
       phase: 'declared',
       transaction,
     })

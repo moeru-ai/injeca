@@ -105,6 +105,7 @@ export function serviceOf(container: ContainerNode, name: string, definition: Se
     metadata: definition.metadata,
     policy: definition.policy,
     exclusive,
+    exported: definition.exported,
     perConsumer: definition.perConsumer,
     ...extra,
   })

@@ -5,6 +5,7 @@ import { BuildAfterDisposeError, InvalidArgumentError } from '../../diagnostics/
 import { errorFrom } from '../../helpers/error-from'
 import { batch, untracked } from '../../helpers/signals'
 import { addDeclaration } from '../resolvers/exclusive'
+import { exportsOf } from '../resolvers/exports'
 import { slotOf } from '../resolvers/resolvers'
 
 const nodes = new WeakMap<Container, ContainerNode>()
@@ -45,7 +46,35 @@ export function subtreeOf(container: ContainerNode): ContainerNode[] {
 }
 
 /**
+ * Adds an exported service to the exports of its parent container, in container creation order.
+ * It takes the place of an earlier service of the same container, for example at the swap of a replacement.
+ */
+function addExport(service: ServiceNode): void {
+  const parent = service.container.parent
+  if (!service.exported || !parent)
+    return
+
+  const exports = exportsOf(parent, service.name)
+  const current = exports()
+  if (current.includes(service))
+    return
+
+  exports(Object.freeze([...current.filter(other => other.container !== service.container), service].sort((a, b) => a.container.seq - b.container.seq)))
+}
+
+function removeExport(service: ServiceNode): void {
+  const parent = service.container.parent
+  if (!service.exported || !parent)
+    return
+
+  const exports = exportsOf(parent, service.name)
+  if (exports().includes(service))
+    exports(Object.freeze(exports().filter(other => other !== service)))
+}
+
+/**
  * Makes `service` visible to consumers: the slot of its key, or the consumer map of its `perConsumer` registration.
+ * An exported service is also visible in the resolution area of the parent container.
  * An exclusive conflict counts each published service with a key.
  */
 export function publishService(service: ServiceNode): void {
@@ -58,6 +87,7 @@ export function publishService(service: ServiceNode): void {
   }
 
   slotOf(service.container, service.name)(service)
+  addExport(service)
   addDeclaration(service)
 }
 
@@ -76,6 +106,7 @@ export function releaseService(service: ServiceNode): void {
   const slot = slotOf(service.container, service.name)
   if (slot() === service)
     slot(undefined)
+  removeExport(service)
 }
 
 /** Waits until `service` is `withdrawn`. Rejects with its teardown errors. */

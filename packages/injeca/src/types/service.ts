@@ -115,4 +115,9 @@ export interface ServiceExplanation {
   /** The cause chain of the effective status. */
   readonly cause?: StatusCause
   readonly blockers: readonly ServiceBlocker[]
+  /**
+   * The new instance of a replacement in progress, from `replace()`, a transaction, or a make-before-break rebuild.
+   * The old instance serves until the new one completes `start`. Its phase and blockers tell why the swap did not happen yet.
+   */
+  readonly replacement?: ServiceExplanation
 }

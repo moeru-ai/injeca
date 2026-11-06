@@ -4,7 +4,7 @@ import type { OwnerRecord } from '../../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { waitFor } from '../../queries/watch'
-import { dispose, graph, provide, resolve, start, stop, transaction } from '../../scoped'
+import { dispose, firstAvailable, graph, invoke, optional, provide, resolve, start, stop, transaction } from '../../scoped'
 import { createTestContainer, deferred, drained, phaseOf } from '../../testing/helpers'
 
 function hostClient() {
@@ -103,6 +103,63 @@ describe('perConsumer', () => {
     expect(build).toHaveBeenCalledTimes(1)
     expect(values).toEqual([{ owner: { kind: 'extension', id: 'a' } }, { owner: { kind: 'extension', id: 'a' }, version: 2 }])
     expect(phaseOf(a, 'a.one')).toBe('running')
+  })
+})
+
+describe('perConsumer dependencies', () => {
+  it('resolves the dependencies of a perConsumer registration from its own container, not from the consumer container', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    provide(root, 'runtime', () => 'runtime of host')
+    // The consumer container has a key of the same name. The registration does not see it.
+    provide(a, 'runtime', () => 'runtime of a')
+    provide(root, 'host.client', {
+      perConsumer: true,
+      dependsOn: { runtime: 'runtime' },
+      build: ({ dependsOn, consumer }) => ({ runtime: dependsOn.runtime, consumer }),
+    })
+    await start(root)
+    await start(a)
+
+    await expect(resolve(a, { client: 'host.client' })).resolves.toEqual({ client: { runtime: 'runtime of host', consumer: { kind: 'extension', id: 'a' } } })
+  })
+
+  it('keeps a consumer service pending when only the consumer container has its dependency', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    provide(a, 'runtime', () => 'runtime of a')
+    provide(root, 'host.client', { perConsumer: true, dependsOn: { runtime: 'runtime' }, build: ({ dependsOn }) => dependsOn.runtime })
+    provide(a, 'a.user', { dependsOn: { client: 'host.client' }, build: ({ dependsOn }) => dependsOn.client })
+    await start(root)
+    void start(a)
+    await drained(root)
+
+    expect(phaseOf(a, 'host.client')).toBe('pending')
+    expect(graph(a).explain('host.client').blockers).toEqual([{ kind: 'missing-provider', dependency: 'runtime', key: 'runtime' }])
+    expect(phaseOf(a, 'a.user')).toBe('pending')
+  })
+})
+
+describe('an optional dependency on a perConsumer key', () => {
+  it('demands the consumer service when the key registers after the dependent', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    const b = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'b' } })
+    await start(root)
+    await start(a)
+    await start(b)
+    const inA: unknown[] = []
+    const inB: unknown[] = []
+    invoke(a, { dependsOn: { kit: optional('kit:x') }, callback: ({ kit }) => void inA.push(kit?.value) })
+    invoke(b, { dependsOn: { kit: optional(firstAvailable('kit:y', 'kit:x')) }, callback: ({ kit }) => void inB.push(kit?.value) })
+    await drained(root)
+    expect(inA).toEqual([undefined])
+    expect(inB).toEqual([undefined])
+
+    provide(root, 'kit:x', { perConsumer: true, build: ({ consumer }) => ({ consumer }) })
+    await drained(root)
+    expect(inA).toEqual([undefined, { consumer: { kind: 'extension', id: 'a' } }])
+    expect(inB).toEqual([undefined, { consumer: { kind: 'extension', id: 'b' } }])
   })
 })
 

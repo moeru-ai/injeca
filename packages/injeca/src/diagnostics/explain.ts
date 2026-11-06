@@ -1,6 +1,7 @@
 import type { ServiceNode } from '../graph/graph'
 import type { OwnerRecord, ServiceBlocker, ServiceExplanation, StatusCause } from '../types'
 
+import { resolveKey } from '../graph/resolvers/plain'
 import { resolutionOf } from '../graph/resolvers/resolvers'
 import { causeOf } from '../graph/status'
 import { withoutUndefined } from '../helpers/without-undefined'
@@ -34,6 +35,16 @@ export function explainService(service: ServiceNode): ServiceExplanation {
       continue
 
     const resolution = resolutionOf(service, edge)
+    // A fallback edge that does not resolve names each candidate that a condition rejected.
+    if (edge.fallback && resolution.kind !== 'resolved') {
+      for (const keyName of edge.candidates) {
+        const candidate = resolveKey(service, keyName, edge)
+        if (candidate.kind === 'rejected')
+          blockers.push({ kind: 'rejected-provider', dependency: edge.name, key: candidate.provider.name, owner: candidate.provider.container.owner, metadata: candidate.provider.metadata })
+      }
+      if (resolution.kind === 'rejected')
+        continue
+    }
     switch (resolution.kind) {
       case 'missing':
         blockers.push({ kind: 'missing-provider', dependency: edge.name, key: edge.keyName })
@@ -61,6 +72,7 @@ export function explainService(service: ServiceNode): ServiceExplanation {
   }
 
   const status = service.signals.effective()
+  const successor = service.successor
   return Object.freeze({
     name: service.name,
     kind: service.kind === 'invocation' ? 'invocation' : 'service',
@@ -68,6 +80,7 @@ export function explainService(service: ServiceNode): ServiceExplanation {
     phase,
     ...withoutUndefined({ status: status?.status, reason: status?.reason, cause: status?.cause }),
     blockers: Object.freeze(blockers),
+    ...withoutUndefined({ replacement: successor?.signals.present() ? explainService(successor) : undefined }),
   })
 }
 
@@ -116,6 +129,11 @@ export function describeExplanations(explanations: readonly ServiceExplanation[]
       const reasons = explanation.blockers.map(describeBlocker)
       if (explanation.cause)
         reasons.push(`it is ${explanation.status ?? 'unavailable'}, because ${describeCause(explanation.cause)}`)
+      const { replacement } = explanation
+      if (replacement) {
+        const blockers = replacement.blockers.map(describeBlocker)
+        reasons.push(`its replacement is ${replacement.phase ?? 'missing'}${blockers.length > 0 ? ` (${blockers.join(', ')})` : ''}`)
+      }
       return `- ${explanation.name} is ${explanation.phase}${reasons.length > 0 ? `: ${reasons.join(', ')}` : ''}`
     })
     .join('\n')

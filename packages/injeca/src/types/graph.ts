@@ -16,6 +16,8 @@ export interface GraphService {
   readonly metadata: ServiceMetadata
   readonly exclusive: boolean
   readonly perConsumer: boolean
+  /** `true` for a registration that `provide(..., { export: true })` exports to the resolution area of the parent container. */
+  readonly exported: boolean
   /** The owner record of the consumer container of a `perConsumer` instance. */
   readonly consumer?: OwnerRecord
 }

@@ -1,61 +1,12 @@
 import type { RegistrationNode, ServiceDefinition, ServiceNode, SwapOutcome } from '../graph/graph'
+import type { PendingSwap } from '../reconciler/swap'
 import type { Registration } from '../types'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
-import { cancelPending, createService, currentService, publishService, readDefinition, releaseService, withdrawRegistration } from '../graph/nodes'
+import { cancelPending, cancelSuccessor, createService, currentService, publishService, readDefinition, releaseService, withdrawRegistration } from '../graph/nodes'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
-import { completeSwap } from '../reconciler/swap'
-
-/** A new service that waits for its swap, with the outcome of the swap. */
-interface PendingSwap {
-  readonly service: ServiceNode
-  readonly outcome: Promise<SwapOutcome>
-}
-
-/**
- * Creates a new service that replaces `target` after it completes `start`. It is not published before the swap.
- * `onSwap` runs at the swap, before the outcome settles.
- */
-export function createSuccessor(target: ServiceNode, definition: ServiceDefinition, template: ServiceNode | undefined, onSettle: (service: ServiceNode, outcome: SwapOutcome) => void, extra: Pick<Parameters<typeof createService>[0], 'phase' | 'transaction'> = {}, ready?: (service: ServiceNode) => void): PendingSwap {
-  const outcome = createDeferred<SwapOutcome>()
-  let settled = false
-  let service: ServiceNode | undefined
-
-  batch(() => {
-    service = createService({
-      container: target.container,
-      kind: 'service',
-      name: target.name,
-      edges: definition.edges,
-      build: definition.build,
-      metadata: definition.metadata,
-      policy: definition.policy,
-      exclusive: target.exclusive,
-      template,
-      consumer: target.consumer,
-      registration: target.registration,
-      ...extra,
-      swap: {
-        target,
-        ready,
-        held: false,
-        settle: (result) => {
-          if (settled)
-            return
-
-          settled = true
-          onSettle(service!, result)
-          outcome.resolve(result)
-        },
-      },
-    })
-    service.signals.demanded(target.signals.demanded())
-    target.container.services.add(service)
-  })
-
-  return { service: service!, outcome: outcome.promise }
-}
+import { completeSwap, createSuccessor } from '../reconciler/swap'
 
 function outcomeResult(outcome: SwapOutcome, name: string): boolean {
   switch (outcome.kind) {
@@ -92,6 +43,7 @@ export function replaceAtOnce(registration: RegistrationNode, target: ServiceNod
       metadata: definition.metadata,
       policy: definition.policy,
       exclusive: target.exclusive,
+      exported: target.exported,
       perConsumer: target.perConsumer,
       registration,
     })
@@ -113,7 +65,7 @@ export function replaceAtOnce(registration: RegistrationNode, target: ServiceNod
  * A newer `replace` or a withdrawal cancels the replacement.
  */
 export function replaceTemplate(registration: RegistrationNode, target: ServiceNode, template: ServiceNode): Promise<SwapOutcome> {
-  const definition: ServiceDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, perConsumer: true, policy: template.policy }
+  const definition: ServiceDefinition = { edges: template.edges, build: template.build, metadata: template.metadata, perConsumer: true, exported: false, policy: template.policy }
   const outcome = createDeferred<SwapOutcome>()
   const waiting = new Set<ServiceNode>()
   const held = new Set<ServiceNode>()
@@ -122,6 +74,8 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
   const finish = (result: SwapOutcome): void => {
     settled = true
     template.swap = undefined
+    if (target.successor === template)
+      target.successor = undefined
     if (registration.pending === template)
       registration.pending = undefined
     outcome.resolve(result)
@@ -157,22 +111,29 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
     // `cancelPending` of a newer replacement, or a withdrawal, cancels this replacement.
     template.swap = { target, held: false, settle: abandon }
     registration.pending = template
+    target.successor = template
 
     for (const consumer of target.signals.consumers().values()) {
       if (!consumer.signals.serving())
         continue
 
-      const { service } = createSuccessor(consumer, definition, template, (successor, result) => {
-        waiting.delete(successor)
-        held.delete(successor)
-        if (result.kind === 'failed')
-          abandon(result)
-        else if (result.kind !== 'swapped')
+      // A make-before-break rebuild of the consumer service gives way to the replacement.
+      cancelSuccessor(consumer)
+      const { service } = createSuccessor(consumer, definition, {
+        template,
+        onSettle: (successor, result) => {
+          waiting.delete(successor)
+          held.delete(successor)
+          if (result.kind === 'failed')
+            abandon(result)
+          else if (result.kind !== 'swapped')
+            commitIfReady()
+        },
+        ready: (successor) => {
+          waiting.delete(successor)
+          held.add(successor)
           commitIfReady()
-      }, {}, (successor) => {
-        waiting.delete(successor)
-        held.add(successor)
-        commitIfReady()
+        },
       })
       waiting.add(service)
     }
@@ -197,7 +158,7 @@ function settleRegistration(registration: RegistrationNode): (service: ServiceNo
  * A transaction passes `extra`, and it sets `registration.pending` at its publish.
  */
 export function replaceRunning(registration: RegistrationNode, target: ServiceNode, definition: ServiceDefinition, extra?: Pick<Parameters<typeof createService>[0], 'phase' | 'transaction'>): PendingSwap {
-  const pending = createSuccessor(target, definition, undefined, settleRegistration(registration), extra)
+  const pending = createSuccessor(target, definition, { onSettle: settleRegistration(registration), extra })
   if (!extra?.transaction) {
     cancelPending(registration)
     registration.pending = pending.service
@@ -230,6 +191,7 @@ async function replace(registration: RegistrationNode, option: unknown): Promise
           metadata: definition.metadata,
           policy: definition.policy,
           exclusive: target.exclusive,
+          exported: target.exported,
           perConsumer: true,
           registration,
         })
