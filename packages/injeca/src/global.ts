@@ -1,5 +1,5 @@
 import type { Logger } from './diagnostics/logger'
-import type { InvokeAnyOption, ProvideNameOrOption, ProvideSecondOption, ResolveOptions, StartOptions } from './scoped'
+import type { InvokeAnyOption, ProvideNameOrOption, ProvideSecondOption, ResolveOptions, StartOptions, StopOptions } from './scoped'
 import type {
   Container,
   DependencyDeclarations,
@@ -57,6 +57,6 @@ export function start(options?: StartOptions): Promise<void> {
   return scopedStart(globalContainer, options)
 }
 
-export function stop(): Promise<void> {
-  return scopedStop(globalContainer)
+export function stop(options?: StopOptions): Promise<void> {
+  return scopedStop(globalContainer, options)
 }

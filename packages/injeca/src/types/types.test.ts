@@ -4,7 +4,7 @@ import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, 
 import { describe, expectTypeOf, it } from 'vitest'
 
 import { waitFor, watch } from '../queries/watch'
-import { createContainer, defineKey, firstAvailable, graph, invoke, listeners, optional, provide, resolve, transaction, where } from '../scoped'
+import { createContainer, defineKey, firstAvailable, graph, invoke, listeners, optional, provide, resolve, timeout, transaction, where, withTimeout } from '../scoped'
 import { createHookContext } from '../testing/testing'
 
 // Design test 35. The checks run in `pnpm typecheck`. The cases do not start the container.
@@ -228,6 +228,10 @@ describe('call-site types', () => {
     transaction(app).provide(defineKey<Tts>('airi.tts.other'), () => 1)
     tx.replace(llm, () => ({ chat: () => 'v3' }))
     expectTypeOf(tx.commit()).resolves.toEqualTypeOf<void>()
+    expectTypeOf(tx.commit({ signal: timeout(app, 1_000) })).resolves.toEqualTypeOf<void>()
+    expectTypeOf(llm.replace(() => ({ chat: () => 'v4' }), { signal: withTimeout(undefined, 1_000, app) })).resolves.toEqualTypeOf<boolean>()
+    // @ts-expect-error `timeoutMs` was removed. Pass a signal from `timeout(container, ms)`.
+    void resolve(app, { llm }, { timeoutMs: 1_000 })
 
     expectTypeOf(graph(app).services()).toEqualTypeOf<readonly GraphService[]>()
     expectTypeOf(listeners<(event: string) => void>(app, { id: 'airi.event' })).toEqualTypeOf<readonly ListenerEntry<(event: string) => void>[]>()

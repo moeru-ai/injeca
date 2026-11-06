@@ -62,6 +62,18 @@ export interface ErrorObserveRecord extends ObserveRecordBase {
   readonly error: unknown
 }
 
+/**
+ * The `signal` of `stop()` or `dispose()` aborted before this service stopped. The call stopped waiting. The cleanups of the service keep running.
+ * `phase` is the phase at the abort. `abortReason` is the reason of the signal.
+ */
+export interface WaitAbortedObserveRecord extends ObserveRecordBase {
+  readonly type: 'wait-aborted'
+  readonly call: 'stop' | 'dispose'
+  readonly phase: ServicePhase
+  readonly reason: string
+  readonly abortReason: unknown
+}
+
 /** One record of the observe stream. */
 export type ObserveRecord
   = | PhaseObserveRecord
@@ -71,3 +83,4 @@ export type ObserveRecord
     | TimeoutObserveRecord
     | RegistrationReplacedObserveRecord
     | ErrorObserveRecord
+    | WaitAbortedObserveRecord

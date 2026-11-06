@@ -1,9 +1,11 @@
 import type { ContainerNode, ServiceNode } from '../graph/graph'
 import type { Container } from '../types'
 
-import { InvalidArgumentError, StartTimeoutError } from '../diagnostics/errors'
+import { StartTimeoutError } from '../diagnostics/errors'
 import { describeExplanations, explainService } from '../diagnostics/explain'
 import { affectedContainers, assertActive, nodeOf, setPhase } from '../graph/nodes'
+import { recordAbortedWait } from '../graph/observers'
+import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
 import { errorFrom } from '../helpers/error-from'
 import { batch, untracked } from '../helpers/signals'
 
@@ -21,68 +23,65 @@ function presentServices(containers: readonly ContainerNode[]): ServiceNode[] {
 
 /**
  * Runs `check` each time the work queue drains, until the result is not `'waiting'`.
- * With `timeoutMs`, it rejects with `start-timeout` and the explanation of each service that is not `running`.
+ * When `signal` aborts first, it stops checking and rejects with the result of `onAborted`. An aborted signal rejects at once.
  */
-function waitUntilSettled(containers: readonly ContainerNode[], check: (services: readonly ServiceNode[]) => SettleCheck, timeoutMs?: number): Promise<void> {
-  const { clock, reconciler } = containers[0]!.runtime
+function waitUntilSettled(containers: readonly ContainerNode[], check: (services: readonly ServiceNode[]) => SettleCheck, signal: AbortSignal | undefined, onAborted: (reason: unknown) => unknown): Promise<void> {
+  const { reconciler } = containers[0]!.runtime
 
   return new Promise((done, fail) => {
-    let cancelTimeout = () => {}
+    if (signal?.aborted) {
+      fail(onAborted(signal.reason))
+      return
+    }
+
+    let removeAbort = () => {}
     const stopListening = reconciler.onDrained(() => {
       const result = check(presentServices(containers))
       if (result === 'waiting')
         return
 
       stopListening()
-      cancelTimeout()
+      removeAbort()
       if (result.kind === 'done')
         done()
       else
         fail(errorFrom(result.errors, 'Start failed.'))
     })
-
-    if (timeoutMs !== undefined) {
-      // The timer callback is an entry point.
-      cancelTimeout = clock.setTimeout(() => untracked(() => {
-        stopListening()
-        const explanations = presentServices(containers).filter(service => service.signals.phase() !== 'running').map(explainService)
-        fail(new StartTimeoutError(`start() timed out after ${timeoutMs}ms. These services are not running:\n${describeExplanations(explanations)}`, explanations))
-      }), timeoutMs)
-    }
+    removeAbort = onAbort(signal, (reason) => {
+      stopListening()
+      fail(onAborted(reason))
+    })
     reconciler.requestDrain()
   })
 }
 
 export interface StartOptions {
-  /** Rejects with `start-timeout` when not every service runs after this many milliseconds. There is no default. */
-  timeoutMs?: number
+  /**
+   * Ends the wait when the signal aborts. The services keep converging.
+   * A timeout reason (`name === 'TimeoutError'`) rejects with `start-timeout` and the explanations. Another reason rejects as it is. There is no default.
+   */
+  signal?: AbortSignal
 }
 
-function readTimeout(options: StartOptions | undefined): number | undefined {
-  let timeoutMs: unknown
-  try {
-    timeoutMs = options?.timeoutMs
-  }
-  catch (error) {
-    throw new InvalidArgumentError('Cannot read the start options.', { cause: error })
-  }
-  if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0))
-    throw new InvalidArgumentError(`The timeoutMs option of start must be a finite number of 0 or more. Got ${String(timeoutMs)}.`)
-
-  return timeoutMs
+export interface StopOptions {
+  /**
+   * Ends the wait when the signal aborts, and rejects with the reason. The cleanups that did not settle keep running.
+   * Each service that did not stop yet gets a `wait-aborted` record in the observe stream. There is no default.
+   */
+  signal?: AbortSignal
 }
 
 /**
  * Begins convergence of the container and of each child container that was started.
  *
  * Resolves when all their services and invocations are `running`. Rejects with the build and start errors.
- * A service in `failed` tries again. A required key without a provider keeps the promise pending, unless `timeoutMs` is set.
+ * A service in `failed` tries again. A required key without a provider keeps the promise pending, unless `options.signal` aborts.
  * A child container that was never started does not start. Call `start(child)` for it.
  */
 export function start(container: Container, options?: StartOptions): Promise<void> {
   const node = nodeOf(container)
   assertActive(node, 'start')
-  const timeoutMs = readTimeout(options)
+  const signal = readSignal(options, 'start')
 
   node.enrolled = true
   const containers = affectedContainers(node)
@@ -106,7 +105,13 @@ export function start(container: Container, options?: StartOptions): Promise<voi
 
       const errors = services.flatMap(service => service.signals.phase() === 'failed' && service.failure ? [service.failure.error] : [])
       return errors.length > 0 ? { kind: 'failed', errors } : 'waiting'
-    }, timeoutMs)
+    }, signal, (reason) => {
+      if (!isTimeoutReason(reason))
+        return reason
+
+      const explanations = presentServices(containers).filter(service => service.signals.phase() !== 'running').map(explainService)
+      return new StartTimeoutError(`start() timed out. These services are not running:\n${describeExplanations(explanations)}`, explanations, { cause: reason })
+    })
   })
 
   return settled.then(() => container.logger.running())
@@ -117,9 +122,13 @@ export function start(container: Container, options?: StartOptions): Promise<voi
  *
  * The registrations stay. The container stays usable, and a later `start()` builds them again. `dispose()` clears the container.
  * Rejects with the teardown errors.
+ *
+ * When `options.signal` aborts, it rejects with the reason and stops waiting. The container stays stopped: a later `start()` builds again.
+ * The services that did not stop yet stay in `stopping` until their cleanups settle.
  */
-export async function stop(container: Container): Promise<void> {
+export async function stop(container: Container, options?: StopOptions): Promise<void> {
   const node = nodeOf(container)
+  const signal = readSignal(options, 'stop')
   const containers = affectedContainers(node)
   const affected = new Set(containers)
   // The container that the caller stops leaves the start set of its parent. Its started children stay in its own start set.
@@ -141,9 +150,11 @@ export async function stop(container: Container): Promise<void> {
       }
     })
 
-    return waitUntilSettled(containers, services => services.every(service => service.signals.instance() === undefined && !transitionalPhases.has(service.signals.phase()))
-      ? { kind: 'done' }
-      : 'waiting')
+    const stopped = (service: ServiceNode): boolean => service.signals.instance() === undefined && !transitionalPhases.has(service.signals.phase())
+    return waitUntilSettled(containers, services => services.every(stopped) ? { kind: 'done' } : 'waiting', signal, (reason) => {
+      recordAbortedWait(presentServices(containers).filter(service => !stopped(service)), 'stop', reason)
+      return reason
+    })
   })
 
   try {

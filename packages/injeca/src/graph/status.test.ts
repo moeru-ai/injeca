@@ -3,7 +3,7 @@ import type { BuildContext, StatusCause } from '../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { InvalidArgumentError, StartTimeoutError } from '../diagnostics/errors'
-import { defineKey, graph, optional, provide, start } from '../scoped'
+import { defineKey, graph, optional, provide, start, timeout } from '../scoped'
 import { collectRecords, createTestContainer, drained, manualClock, stateOf } from '../testing/helpers'
 
 type SetStatus = BuildContext['setStatus']
@@ -241,15 +241,15 @@ describe('effective status', () => {
 
     // A dependent that waits lists the unavailable dependency as a blocker, with the same chain.
     provide(app, 'voice.summary', { dependsOn: { logs: proxy.registration }, build: () => 'summary' })
-    const result = start(app, { timeoutMs: 100 }).catch((error: unknown) => error)
+    const result = start(app, { signal: timeout(app, 100) }).catch((error: unknown) => error)
     await drained(app)
     advance(100)
 
-    const timeout = await result as StartTimeoutError
-    expect(timeout).toBeInstanceOf(StartTimeoutError)
-    expect(timeout.explanations).toEqual([
+    const failure = await result as StartTimeoutError
+    expect(failure).toBeInstanceOf(StartTimeoutError)
+    expect(failure.explanations).toEqual([
       expect.objectContaining({ name: 'voice.summary', phase: 'pending', blockers: [{ kind: 'unavailable-dependency', dependency: 'logs', key: 'gateway.logs', cause: chain }] }),
     ])
-    expect(timeout.message).toContain('\'go-ai-gateway/fs-log-store\' is unavailable (disk full)')
+    expect(failure.message).toContain('\'go-ai-gateway/fs-log-store\' is unavailable (disk full)')
   })
 })

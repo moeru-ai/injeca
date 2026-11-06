@@ -4,6 +4,7 @@ import type { Registration } from '../types'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
 import { cancelPending, cancelSuccessor, createService, currentService, publishService, readDefinition, releaseService, withdrawRegistration } from '../graph/nodes'
+import { onAbort, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
 import { completeSwap, createSuccessor } from '../reconciler/swap'
@@ -167,20 +168,40 @@ export function replaceRunning(registration: RegistrationNode, target: ServiceNo
   return pending
 }
 
+/**
+ * Waits for the outcome of the pending replacement `pending`. When `signal` aborts first, it cancels the replacement, as a newer `replace` does.
+ * The cancel settles the outcome as `cancelled`. The listener goes when the outcome settles.
+ */
+async function awaitOutcome(registration: RegistrationNode, pending: ServiceNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
+  const removeAbort = onAbort(signal, () => {
+    if (registration.pending === pending)
+      batch(() => cancelPending(registration))
+  })
+  try {
+    return outcomeResult(await outcome, registration.name)
+  }
+  finally {
+    removeAbort()
+  }
+}
+
 /** The `replace()` of a registration. */
-async function replace(registration: RegistrationNode, option: unknown): Promise<boolean> {
+async function replace(registration: RegistrationNode, option: unknown, options: unknown): Promise<boolean> {
+  const signal = readSignal(options as { readonly signal?: unknown } | undefined, 'replace')
   const target = untracked(() => currentService(registration))
   if (!target)
     return false
 
   const definition = readDefinition(registration.name, option, target)
+  if (signal?.aborted)
+    return false
   const phase = untracked(() => target.signals.phase())
   if (phase === 'stopping')
     throw new ReplaceWhileStoppingError(`'${registration.name}' is stopping. Wait until it stops, then call provide.`)
 
   if (target.perConsumer) {
+    let template: ServiceNode | undefined
     const outcome = untracked(() => {
-      let template: ServiceNode | undefined
       batch(() => {
         template = createService({
           container: target.container,
@@ -199,7 +220,7 @@ async function replace(registration: RegistrationNode, option: unknown): Promise
       })
       return replaceTemplate(registration, target, template!)
     })
-    return outcomeResult(await outcome, registration.name)
+    return awaitOutcome(registration, template!, outcome, signal)
   }
   if (phase !== 'running') {
     untracked(() => replaceAtOnce(registration, target, definition))
@@ -207,7 +228,7 @@ async function replace(registration: RegistrationNode, option: unknown): Promise
   }
 
   const pending = untracked(() => replaceRunning(registration, target, definition))
-  return outcomeResult(await pending.outcome, registration.name)
+  return awaitOutcome(registration, pending.service, pending.outcome, signal)
 }
 
 const registrations = new WeakMap<object, RegistrationNode>()
@@ -223,7 +244,7 @@ export function registrationApi(registration: RegistrationNode, overrides: { rea
     key: registration.name,
     ...(registration.exclusive ? { exclusive: true } : {}),
     withdraw: overrides.withdraw ?? (() => withdrawRegistration(registration)),
-    replace: ((option: unknown) => replace(registration, option)) as Registration<string, unknown, undefined>['replace'],
+    replace: ((option: unknown, options?: unknown) => replace(registration, option, options)) as Registration<string, unknown, undefined>['replace'],
   })
   registrations.set(api, registration)
 

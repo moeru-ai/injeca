@@ -44,8 +44,17 @@ export type InvokeOptionWithKeys<Deps extends DependencyDeclarations> = InvokeOp
  * An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
  */
 export interface ReplaceFunction<T> {
-  <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>): Promise<boolean>
-  (option: ProvideOption<T, undefined>): Promise<boolean>
+  <Deps extends DependencyDeclarations>(option: ProvideOptionWithKeys<T, Deps>, options?: ReplaceOptions): Promise<boolean>
+  (option: ProvideOption<T, undefined>, options?: ReplaceOptions): Promise<boolean>
+}
+
+/** The options of `replace()`. */
+export interface ReplaceOptions {
+  /**
+   * Cancels the pending replacement when the signal aborts, as a newer `replace` does. The old instance stays, and `replace()` resolves `false`.
+   * An aborted signal resolves `false` at once and changes nothing. After the swap, the signal has no effect.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -62,7 +71,7 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
    * Replaces the instance of the service without a gap.
    *
    * The old instance keeps serving with its status while the new instance runs `build` and `start`. The swap is one batch.
-   * Resolves `true` after the swap. Resolves `false` for a stale registration, or when a newer `replace` or a withdrawal supersedes this call.
+   * Resolves `true` after the swap. Resolves `false` for a stale registration, when a newer `replace` or a withdrawal supersedes this call, or when `options.signal` aborts before the swap.
    * Rejects with the build or start error of the new instance, and the old instance does not change.
    * Rejects with `replace-while-stopping` when the service is in `stopping`.
    */

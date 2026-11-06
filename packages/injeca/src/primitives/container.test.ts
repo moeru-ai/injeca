@@ -10,8 +10,8 @@ import {
   ReentrantDisposeError,
   StartTimeoutError,
 } from '../diagnostics/errors'
-import { defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop } from '../scoped'
-import { collectRecords, createTestContainer, deferred, drained, phaseOf } from '../testing/helpers'
+import { defineKey, dispose, effect, invoke, optional, provide, resolve, start, stop, timeout } from '../scoped'
+import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController } from '../testing/helpers'
 
 describe('start and stop', () => {
   it('builds a service only after its required dependencies run', async () => {
@@ -710,7 +710,7 @@ describe('build context and hooks', () => {
       vi.useRealTimers()
     })
 
-    it('rejects start() after timeoutMs and explains a missing provider and a failed dependency', async () => {
+    it('rejects start() with start-timeout when a timeout signal aborts, and explains a missing provider and a failed dependency', async () => {
       vi.useFakeTimers()
       const app = createTestContainer()
       const error = new Error('broken')
@@ -727,21 +727,21 @@ describe('build context and hooks', () => {
         return 'hanging'
       })
 
-      const result = start(app, { timeoutMs: 1_000 }).catch((reason: unknown) => reason)
+      const result = start(app, { signal: timeout(app, 1_000) }).catch((reason: unknown) => reason)
       await vi.advanceTimersByTimeAsync(999)
       await vi.advanceTimersByTimeAsync(1)
 
-      const timeout = await result
-      expect(timeout).toBeInstanceOf(StartTimeoutError)
-      expect(timeout).toMatchObject({ code: 'start-timeout' })
-      const explanations = (timeout as StartTimeoutError).explanations
+      const failure = await result
+      expect(failure).toBeInstanceOf(StartTimeoutError)
+      expect(failure).toMatchObject({ code: 'start-timeout' })
+      const explanations = (failure as StartTimeoutError).explanations
       expect(explanations).toEqual([
         expect.objectContaining({ name: 'voice.speech', phase: 'pending', blockers: [{ kind: 'missing-provider', dependency: 'tts', key: 'airi.tts' }] }),
         expect.objectContaining({ name: 'broken', phase: 'failed', blockers: [{ kind: 'failed', error }] }),
         expect.objectContaining({ name: 'needs-broken', phase: 'pending', blockers: [{ kind: 'failed-dependency', dependency: 'broken', key: 'broken', error }] }),
         expect.objectContaining({ name: 'hanging', phase: 'starting', blockers: [] }),
       ])
-      expect((timeout as Error).message).toContain('no provider for \'airi.tts\'')
+      expect((failure as Error).message).toContain('no provider for \'airi.tts\'')
     })
 
     it('explains a pending dependency', async () => {
@@ -750,14 +750,14 @@ describe('build context and hooks', () => {
       const slow = provide(app, 'slow', { dependsOn: { missing: 'missing' }, build: () => 'slow' })
       invoke(app, { dependsOn: { slow }, callback: () => {} })
 
-      const result = start(app, { timeoutMs: 10 }).catch((reason: unknown) => reason)
+      const result = start(app, { signal: timeout(app, 10) }).catch((reason: unknown) => reason)
       await vi.advanceTimersByTimeAsync(10)
 
       const explanations = ((await result) as StartTimeoutError).explanations
       expect(explanations[1]).toMatchObject({ kind: 'invocation', blockers: [{ kind: 'pending-dependency', dependency: 'slow', key: 'slow', phase: 'pending' }] })
     })
 
-    it('keeps waiting without timeoutMs when a provider is missing', async () => {
+    it('keeps waiting without a signal when a provider is missing', async () => {
       vi.useFakeTimers()
       const app = createTestContainer()
       provide(app, 'voice.speech', { dependsOn: { tts: 'airi.tts' }, build: () => 'speech' })
@@ -776,8 +776,9 @@ describe('build context and hooks', () => {
       expect(outcome).toBe('resolved')
     })
 
-    it('rejects an invalid timeoutMs', () => {
-      expect(() => start(createTestContainer(), { timeoutMs: -1 })).toThrow(InvalidArgumentError)
+    it('rejects an invalid signal and an invalid timeout', () => {
+      expect(() => start(createTestContainer(), { signal: 'soon' as unknown as AbortSignal })).toThrow(InvalidArgumentError)
+      expect(() => timeout(createTestContainer(), -1)).toThrow(InvalidArgumentError)
     })
 
     // Design test 20.
@@ -1081,5 +1082,56 @@ describe('dispose', () => {
     await disposal
     expect(startHook).not.toHaveBeenCalled()
     await expect(registration.withdraw()).resolves.toBe(false)
+  })
+})
+
+describe('dispose with a signal', () => {
+  it('stops waiting for a cleanup that does not settle, records it, and a later dispose() gets the result', async () => {
+    const { clock, advance } = manualClock()
+    const app = createTestContainer({ clock })
+    const gate = deferred()
+    provide(app, 'airi.window', ({ effect }) => {
+      effect(() => () => gate.promise)
+      return 'window'
+    })
+    await start(app)
+    const { records } = collectRecords(app)
+
+    const aborted = dispose(app, { signal: timeout(app, 50) }).catch((error: unknown) => error)
+    await drained(app)
+    advance(50)
+    expect(await aborted).toMatchObject({ name: 'TimeoutError' })
+    await drained(app)
+    expect(records).toContainEqual(expect.objectContaining({ type: 'wait-aborted', call: 'dispose', key: 'airi.window', phase: 'stopping' }))
+
+    // The container stays in `disposing`. New work fails, and a later dispose() waits for the same disposal.
+    expect(() => provide(app, 'airi.other', () => 'other')).toThrow(BuildAfterDisposeError)
+    const later = dispose(app)
+    gate.resolve()
+    await expect(later).resolves.toBeUndefined()
+  })
+
+  it('starts the disposal and rejects at once for an aborted signal', async () => {
+    const app = createTestContainer()
+    const stopHook = vi.fn()
+    provide(app, 'airi.llm', ({ on }) => {
+      on('stop', stopHook)
+      return 'llm'
+    })
+    await start(app)
+
+    await expect(dispose(app, { signal: AbortSignal.abort('closed') })).rejects.toBe('closed')
+    await dispose(app)
+    expect(stopHook).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes its listener when the disposal ends', async () => {
+    const app = createTestContainer()
+    provide(app, 'airi.llm', () => 'llm')
+    await start(app)
+    const { signal, listeners } = trackedController()
+
+    await dispose(app, { signal })
+    expect(listeners()).toBe(0)
   })
 })

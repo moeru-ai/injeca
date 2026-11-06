@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../diagnostics/errors'
 import { observe } from '../../queries/observe'
 import { waitFor, watch } from '../../queries/watch'
-import { defineKey, dispose, graph, peek, provide, resolve, start, transaction } from '../../scoped'
+import { defineKey, dispose, graph, peek, provide, resolve, start, timeout, transaction } from '../../scoped'
 import { createTestContainer, deferred, drained, phaseOf, stateOf } from '../../testing/helpers'
 
 const kitKey = defineKey<string>('kit.x', { exclusive: true })
@@ -267,7 +267,7 @@ describe('exported registrations', () => {
     await start(b)
 
     // The instance lives in `a`, but `build` runs for the registration in `b`, so `runtime` is the one of `b`.
-    await expect(resolve(a, { kit: 'kit' }, { timeoutMs: 500 })).resolves.toEqual({ kit: { runtime: 'runtime of b', consumer: { kind: 'extension', id: 'a' } } })
+    await expect(resolve(a, { kit: 'kit' }, { signal: timeout(a, 500) })).resolves.toEqual({ kit: { runtime: 'runtime of b', consumer: { kind: 'extension', id: 'a' } } })
     expect(graph(a).dependencies('kit')[0]).toMatchObject({ resolution: 'resolved', provider: { owner: { kind: 'extension', id: 'b' } } })
   })
 })

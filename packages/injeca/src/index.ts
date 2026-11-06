@@ -84,7 +84,7 @@ export {
   withTimeout,
 } from './scoped'
 
-export type { ResolveOptions, StartOptions } from './scoped'
+export type { DisposeOptions, ResolveOptions, StartOptions, StopOptions } from './scoped'
 export type {
   BuildContext,
   ConditionalDependency,
@@ -152,6 +152,7 @@ export type {
   RegistrationOptions,
   RegistrationReplacedObserveRecord,
   ReplaceFunction,
+  ReplaceOptions,
   ResolutionCondition,
   ResolveDependencyDeclaration,
   ServiceBlocker,
@@ -167,8 +168,10 @@ export type {
   TimeoutHandler,
   TimeoutObserveRecord,
   Transaction,
+  TransactionCommitOptions,
   TransactionProvide,
   TransactionReplace,
+  WaitAbortedObserveRecord,
 } from './types'
 
 export const injeca = {
