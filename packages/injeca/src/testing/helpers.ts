@@ -121,3 +121,28 @@ export function provideWithStatus(app: Container, name: string, stop?: () => voi
 
   return Object.assign(handle, { registration })
 }
+
+/**
+ * Creates an `AbortController` whose signal counts its `abort` listeners. `listeners()` is the number of listeners that were added and not removed.
+ * A `once` listener counts as removed after the abort.
+ */
+export function trackedController(): { readonly controller: AbortController, readonly signal: AbortSignal, readonly listeners: () => number } {
+  const controller = new AbortController()
+  const { signal } = controller
+  const active = new Set<unknown>()
+  const add = signal.addEventListener.bind(signal)
+  const remove = signal.removeEventListener.bind(signal)
+  signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions | boolean) => {
+    if (type === 'abort')
+      active.add(listener)
+    add(type, listener, options)
+  }) as AbortSignal['addEventListener']
+  signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: EventListenerOptions | boolean) => {
+    if (type === 'abort')
+      active.delete(listener)
+    remove(type, listener, options)
+  }) as AbortSignal['removeEventListener']
+  add('abort', () => active.clear(), { once: true })
+
+  return { controller, signal, listeners: () => active.size }
+}

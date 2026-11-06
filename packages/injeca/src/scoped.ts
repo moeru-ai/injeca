@@ -9,6 +9,7 @@ export { normalizeProvideOption, provide, provideIn } from './primitives/provide
 export type { ProvideNameOrOption, ProvideSecondOption } from './primitives/provide'
 export { resolve } from './primitives/resolve'
 export type { ResolveOptions } from './primitives/resolve'
+export { timeout, withTimeout } from './primitives/timeout'
 export { transaction } from './primitives/transaction'
 export { graph } from './queries/graph'
 export { peek } from './queries/peek'

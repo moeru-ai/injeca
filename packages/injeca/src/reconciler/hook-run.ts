@@ -5,6 +5,7 @@ import type { TimeoutContext } from '../types'
 import { HookTimeoutError } from '../diagnostics/errors'
 import { timeoutHandlerOf } from '../graph/nodes'
 import { emitRecord } from '../graph/observers'
+import { forwardAbort } from '../helpers/abort'
 import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { createDecide, defaultDecision, validateDecision } from '../primitives/decision'
@@ -41,22 +42,19 @@ export function recordDecision(service: ServiceNode, instance: InstanceNode, dec
   })
 }
 
-/** Starts a hook run. Its signal aborts when a newer target supersedes it, when it times out, or when the instance is disposed. */
-export function beginHookRun(instance: InstanceNode): { readonly signal: AbortSignal, readonly abort: (reason: unknown) => void, readonly end: () => void } {
+/**
+ * Starts a hook run. Its signal aborts when a newer target supersedes it, when the instance is disposed, or when `timeout` aborts.
+ * The signal has the reason of the first one. `end` removes the listeners.
+ */
+export function beginHookRun(instance: InstanceNode, timeout?: AbortSignal): { readonly signal: AbortSignal, readonly end: () => void } {
   const controller = new AbortController()
-  const parent = instance.controller.signal
-  const forward = () => controller.abort(parent.reason)
-  if (parent.aborted)
-    forward()
-  else
-    parent.addEventListener('abort', forward, { once: true })
+  const release = forwardAbort(controller, timeout ? [instance.controller.signal, timeout] : [instance.controller.signal])
   instance.hookRun = controller
 
   return {
     signal: controller.signal,
-    abort: reason => controller.abort(reason),
     end: () => {
-      parent.removeEventListener('abort', forward)
+      release()
       if (instance.hookRun === controller)
         instance.hookRun = undefined
     },

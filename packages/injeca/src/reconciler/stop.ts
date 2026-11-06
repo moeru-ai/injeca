@@ -1,10 +1,11 @@
 import type { InstanceNode, ServiceNode, StopIntent } from '../graph/graph'
 import type { CleanupFrame } from '../helpers/cleanup-context'
 
+import { HookTimeoutError } from '../diagnostics/errors'
 import { setPhase, timeoutOf } from '../graph/nodes'
 import { removeDeclaration } from '../graph/resolvers/exclusive'
+import { anySignal, raceAbort, timeoutSignal } from '../helpers/abort'
 import { batch } from '../helpers/signals'
-import { raceTimeout } from '../helpers/timeout'
 import { invokeUser, loggerOf } from './calls'
 import { syncHolds } from './holds'
 import { callHandler, decideTimeout, finishRun, recordDecision } from './hook-run'
@@ -46,7 +47,8 @@ export function reconcileStopping(service: ServiceNode): void {
 /**
  * Runs the `stop` hooks in reverse order, then the effect disposers in reverse order.
  *
- * A configured `stop` timeout covers all of them. When it passes, injeca records it, applies the `onTimeout` decision, and stops waiting.
+ * A configured `stop` timeout covers all of them. It is a timeout signal on the container clock. The `stop` handlers get it in their `signal`.
+ * When it aborts, injeca records it, applies the `onTimeout` decision, and stops waiting.
  * The callback in progress is abandoned. The remaining callbacks still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
  */
 async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
@@ -56,18 +58,22 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
   const call = <T>(fn: () => T | Promise<T>): Promise<T> => context.run(frame, () => invokeUser(fn))
 
   const timeoutMs = timeoutOf(service, 'stop')
-  const deadline = timeoutMs === undefined ? undefined : clock.now() + timeoutMs
+  const deadline = timeoutMs === undefined
+    ? undefined
+    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The 'stop' hook of '${service.name}' timed out.`, 'stop', timeoutMs))
+  // A `stop` handler sees the timeout on its signal, and the disposal of the instance.
+  const hookSignal = anySignal(instance.controller.signal, deadline?.signal)
   let timedOut = false
   /** Waits for one callback until the deadline. `undefined` means that the deadline passed. */
   const settle = async <T>(promise: Promise<T>): Promise<{ readonly value: T } | undefined> => {
-    if (deadline === undefined)
+    if (!deadline)
       return { value: await promise }
     if (timedOut) {
       promise.catch(() => {})
       return undefined
     }
 
-    const result = await raceTimeout(clock, promise, Math.max(0, deadline - clock.now()))
+    const result = await raceAbort(promise, deadline.signal)
     if (result.kind === 'settled')
       return { value: result.value }
 
@@ -85,7 +91,7 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
     logger?.hookOnStop(service.name)
     const startTime = performance.now()
     for (const handler of [...instance.hooks.stop].reverse()) {
-      const settled = await settle(callHandler(service, instance, 'stop', handler, instance.controller.signal, {}, call))
+      const settled = await settle(callHandler(service, instance, 'stop', handler, hookSignal, {}, call))
       if (!settled)
         continue
 
@@ -108,6 +114,7 @@ async function runTeardownCallbacks(service: ServiceNode, instance: InstanceNode
     }
   }
 
+  deadline?.cancel()
   return errors
 }
 

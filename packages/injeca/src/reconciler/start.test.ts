@@ -40,6 +40,23 @@ function timeoutRecords(records: readonly ObserveRecord[]) {
 }
 
 describe('start timeouts', () => {
+  it('aborts the run signal with hook-timeout at the timeout, and cancels the timer when the start settles first', async () => {
+    const timedOut = setup({ service: { timeouts: { start: 100 } } })
+    void start(timedOut.app).catch(() => {})
+    await drained(timedOut.app)
+    await tick(timedOut, timedOut.app, 100)
+    expect(timedOut.signals[0]?.reason).toMatchObject({ code: 'hook-timeout', hook: 'start', timeoutMs: 100 })
+
+    const settled = setup({ service: { timeouts: { start: 100 } } })
+    const started = start(settled.app)
+    await drained(settled.app)
+    expect(settled.pending()).toBe(1)
+    settled.gate.resolve()
+    await started
+    expect(settled.pending()).toBe(0)
+    expect(settled.signals[0]?.aborted).toBe(false)
+  })
+
   // Design test 20.
   it('waits until start settles when no timeout is configured', async () => {
     const ctx = setup()

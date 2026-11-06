@@ -110,6 +110,28 @@ describe('stop timeouts', () => {
     expect(cleanupDone).toBe(true)
   })
 
+  it('aborts the signal of a stop handler at the stop timeout', async () => {
+    const manual = manualClock()
+    const app = createContainer({ enabled: false, clock: manual.clock, timeouts: { stop: 30 } })
+    const signals: AbortSignal[] = []
+    provide(app, 'airi.tray', ({ on }) => {
+      on('stop', ({ signal }) => {
+        signals.push(signal)
+        return new Promise<void>(() => {})
+      })
+      return 'tray'
+    })
+    await start(app)
+
+    const stopped = stop(app).catch((error: unknown) => error)
+    await drained(app)
+    expect(signals[0]?.aborted).toBe(false)
+    manual.advance(30)
+    expect(await stopped).toMatchObject({ code: 'hook-timeout', hook: 'stop' })
+    expect(signals[0]?.reason).toMatchObject({ code: 'hook-timeout', hook: 'stop', timeoutMs: 30 })
+    expect(manual.pending()).toBe(0)
+  })
+
   it('applies a handled onTimeout decision, so the stop has no error', async () => {
     const manual = manualClock()
     const app = createContainer({ enabled: false, clock: manual.clock })

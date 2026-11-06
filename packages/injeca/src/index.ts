@@ -78,8 +78,10 @@ export {
   resolve,
   start,
   stop,
+  timeout,
   transaction,
   where,
+  withTimeout,
 } from './scoped'
 
 export type { ResolveOptions, StartOptions } from './scoped'
