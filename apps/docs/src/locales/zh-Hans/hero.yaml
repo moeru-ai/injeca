@@ -1,0 +1,11 @@
+needs: 依赖
+used-by: 被依赖
+returned: resolve() 已返回
+batch: 第 {n} 批
+map: 从入口出发的依赖图
+state:
+  pending: 'pending：app 不需要这个单元。'
+  registry: 已在容器中注册。
+  built: 已在第 {n} 批完成构建。
+  building: 正在第 {n} 批中构建。
+  needed: 必需依赖，将在第 {n} 批构建。

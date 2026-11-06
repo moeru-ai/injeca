@@ -1,0 +1,366 @@
+chapters:
+  unit:
+    nav: '单元'
+    title: '单元就是一个具名的值'
+    intro:
+      - '`provide()` 用一个键来注册单元，这里的键是 `config`。此时还什么都没运行。'
+      - '`start()` 会构建它：injeca 调用一次 `build`，并缓存它的返回值。这个返回值就是实例。其他代码通过键来获取它。'
+    variants:
+      main:
+        outcome: '单个实例'
+        summary: 'config 只构建一次，它的返回值就是实例 v1。'
+        steps:
+          - caption: 'provide()：config 已注册，等待调用 start()。'
+            note: '已注册'
+          - caption: 'start()：injeca 调用 config 的构建函数。'
+            note: '构建中'
+          - caption: 'config 开始运行。resolve() 返回它的实例 v1。'
+            note: 'v1 已就绪'
+  dependency:
+    nav: '依赖'
+    title: '单元可以依赖其他单元'
+    intro:
+      - '`dependsOn` 声明一个单元需要什么。图中的箭头从提供方指向依赖它的单元。'
+      - 'injeca 会先构建提供方，再把它的值传给依赖方的 `build`。在此之前，依赖方只是等待，不运行任何代码。先调用哪个 `provide()` 都没关系。'
+    variants:
+      main:
+        outcome: '先构建提供方'
+        summary: 'server 先等待 config 运行，再用 config 的值来构建自己。'
+        steps:
+          - caption: 'server 依赖 config。因为 config 还没注册，所以 server 等待。'
+            note: '等待 config'
+          - caption: "provide('config')：先构建 config。"
+            note: '先构建'
+          - caption: 'config 开始运行。现在 server 拿到 config 的值并构建自己。'
+            note: '拿到 config'
+          - caption: 'server 开始运行。'
+  lifecycle:
+    nav: '启动与停止'
+    title: '单元在它依赖的单元之后启动，在它们之前停止'
+    intro:
+      - "构建函数可以注册钩子：`on('start')` 在实例启动时运行，`on('stop')` 在实例停止时运行。"
+      - '启动钩子会从提供方到依赖方依次运行。调用 `stop()` 时，所有单元都会进入 stopping 阶段，但每个提供方都会等依赖它的单元先停完。因此，正在运行的单元绝不会中途失去它所依赖的单元。'
+    variants:
+      main:
+        outcome: '依赖方先停止'
+        summary: 'routes 先运行停止钩子，然后是 server，最后才是 config。'
+        steps:
+          - caption: 'start()：先启动 config，再启动 server，最后启动 routes。'
+          - caption: 'stop()：三者都进入 stopping。因为没有其他单元依赖 routes，它的停止钩子最先运行，server 和 config 继续等待。'
+            note: '执行停止钩子'
+          - caption: 'routes 已停止。现在轮到 server 关闭，config 仍在等它。'
+            note: '执行停止钩子'
+          - caption: 'server 已停止。config 最后停止。'
+            note: '执行停止钩子'
+          - caption: '全部停止完毕。由于注册项还保留着，再次调用 start() 可以重新构建它们。'
+  swap:
+    nav: '运行时替换'
+    title: '可以在应用运行期间替换单元'
+    intro:
+      - '应用正在运行时，新版本的 tts 准备好了。每次重新构建都会产生一个新实例：v2 取代 v1。'
+      - '留意每个单元下方的状态条：它显示该单元在每一步是否可用。'
+    question: 'app 要怎么切换到 tts v2？'
+    variants:
+      withdraw:
+        outcome: 'app 会中断一会儿'
+        summary: '注销 tts 会让所有依赖它的单元都停下来。在新的 tts 启动完成之前，app 无法工作。'
+        steps:
+          - caption: 'start()：tts、speech 和 app 都在运行。'
+          - caption: 'withdraw()：依赖它的 app 和 speech 先停下，随后 tts 被注销。此时 app 无法工作。'
+            note: '已停止'
+          - caption: 'provide()：新的 tts 开始构建，speech 和 app 仍在等待。'
+            note: '构建 v2'
+          - caption: 'tts v2 开始运行。speech 和 app 重新构建并恢复运行。'
+            note: '已重建'
+      replace:
+        outcome: 'app 全程不中断'
+        summary: 'tts v1 会一直工作到 tts v2 准备就绪，随后一步完成切换。speech 和 app 也按同样的方式换上新实例，因此 app 全程不会中断。'
+        steps:
+          - caption: 'start()：tts、speech 和 app 都在运行。'
+          - caption: 'replace()：tts v2 在 v1 旁边并行构建，期间 v1 继续供 speech 使用。'
+            note: 'v1 仍在用'
+          - caption: 'tts 切换到 v2。接着 speech v2 开始构建，期间 speech v1 继续供 app 使用。'
+            note: 'v1 仍在用'
+          - caption: 'speech 完成切换，随后 app 也完成切换。旧实例在没有单元继续使用后自动停止。'
+            note: '已切换'
+      handler:
+        outcome: 'speech 保留原实例'
+        summary: 'speech 注册了 dependency-change 处理函数，可以在原实例里直接接管 tts v2，不需要重建自己，因此 app 完全不受影响。'
+        steps:
+          - caption: 'start()：tts、speech 和 app 都在运行。'
+          - caption: 'replace()：tts v2 在 v1 旁边并行构建。'
+            note: '构建 v2'
+          - caption: 'tts 切换到 v2。speech 的处理函数直接接管了 v2：speech 依然是原来的 v1 实例，app 完全不受影响。'
+            note: '保持 v1'
+  status:
+    nav: '状态'
+    title: '运行中的单元可以汇报自己的健康状态'
+    intro:
+      - '运行中的实例有三种状态：`ready`（正常）、`degraded`（降级：还能用，但质量下降）或 `unavailable`（不可用：实例还在，但当前调用会失败）。'
+      - '单元的状态会自动传递给所有依赖它的单元。由于 `notes` 把 `llm` 声明为可选依赖，它的状态不会受影响。'
+    question: 'llm 的连接断开了，依赖它的单元会发生什么？'
+    variants:
+      unavailable:
+        outcome: '保留实例，标记为不可用'
+        summary: 'chat 和 app 会跟着 llm 一起变为 unavailable，但保留各自的实例。当 llm 恢复 ready 时，它们也立即恢复，不需要重新构建。'
+        steps:
+          - caption: 'start()：所有单元都在运行，状态均为 ready。'
+          - caption: 'llm 变为 unavailable。chat 和 app 也跟着变为 unavailable（实例保留不变），而 notes 保持 ready。'
+            note: 'unavailable'
+          - caption: 'llm 重新连接成功。ready 状态向下游恢复，全程没有重新构建任何实例。'
+            note: '恢复 ready'
+      degraded:
+        outcome: '继续工作，标记为降级'
+        summary: 'degraded 表示调用还能成功，只是质量有所下降。chat 和 app 也会跟着变为 degraded，并继续工作。'
+        steps:
+          - caption: 'start()：所有单元都在运行，状态均为 ready。'
+          - caption: 'llm 变为 degraded。chat 和 app 也跟着变为 degraded，而 notes 保持 ready。'
+            note: 'degraded'
+          - caption: 'llm 恢复为 ready，依赖它的单元也随之恢复。'
+            note: '恢复 ready'
+      withdraw:
+        outcome: 'chat 和 app 停止运行'
+        summary: '调用 withdraw() 会把 llm 彻底移除。chat 和 app 会停止运行并等待新的提供方，而 notes 会在没有 llm 的情况下重新构建。'
+        steps:
+          - caption: 'start()：所有单元都在运行，状态均为 ready。'
+          - caption: 'withdraw()：chat 和 app 停止运行并等待；notes 则在没有 llm 的情况下重新构建。'
+            note: '停止并等待'
+  late:
+    nav: '缺失的提供方'
+    title: '单元可以依赖稍后才加载的提供方'
+    intro:
+      - '`defineKey()` 可以在提供方还不存在时先定义好一个键。这样单元现在就能声明对它的依赖，等稍后加载插件时再把提供方注册进来。'
+      - '在提供方到来之前，单元可以自己决定怎么做：一直等待它、不等它直接运行，或者先用另一个备选提供方。'
+    question: 'speech 需要用 remote-tts，但提供它的插件稍后才会加载。speech 现在该怎么办？'
+    variants:
+      required:
+        outcome: '等待提供方'
+        summary: 'speech 和 app 保持等待，不运行任何代码。等插件把 remote-tts 注册进来后，它们再构建并启动。'
+        steps:
+          - caption: 'start()：remote-tts 还没有提供方。speech 和 app 保持等待，不运行任何代码。'
+            note: '等待中'
+          - caption: '插件注册了 remote-tts。speech 和 app 随即开始构建并启动。'
+            note: '已提供'
+      optional:
+        outcome: '不等它，先运行'
+        summary: 'speech 先在没有 TTS 的情况下立即构建。等 remote-tts 注册进来后，speech 会换上使用它的新实例，期间 app 一直可用。'
+        steps:
+          - caption: 'start()：speech 先在没有 TTS 的情况下立即完成构建，app 紧接着启动。'
+            note: '无 tts 运行'
+          - caption: '插件注册了 remote-tts。speech 和 app 平滑切换到新实例，全程不中断。'
+            note: 'v2 用上了'
+      first:
+        outcome: '先用备选提供方'
+        summary: 'speech 先用备选的 local-tts 运行；等 remote-tts 启动后再切换过去。如果 remote-tts 被注销，speech 会再切回 local-tts。'
+        steps:
+          - caption: 'start()：remote-tts 还没有提供方，因此 speech 先使用 local-tts。'
+            note: '使用 local-tts'
+          - caption: 'remote-tts 开始运行。因为它在候选列表里排在前面，speech 自动切换到它。'
+            note: '切到 remote'
+          - caption: 'remote-tts 被注销。speech 重新切回 local-tts。'
+            note: '切回 local'
+  retry:
+    nav: '重试'
+    title: '启动失败时，可以放弃也可以稍后重试'
+    intro:
+      - '启动钩子可以通过 `decide` 返回处理决定：`fail()` 表示放弃启动，`requeue()` 表示等一会儿再重新执行这个钩子。'
+      - '在等待重试的间隙，单元会保留已经构建好的实例，而依赖它的单元则继续等待。'
+    question: 'device 第一次连接失败了，接下来会发生什么？'
+    variants:
+      fail:
+        outcome: '停在 failed'
+        summary: 'device 进入 failed，不再重试，monitor 和 app 继续等待。之后用修复好的构建函数调用 replace() 就能让它恢复。'
+        steps:
+          - caption: 'start()：device 的启动钩子报错失败，monitor 和 app 继续等待。'
+            note: 'failed'
+          - caption: '2 秒后：不会进行任何重试。'
+            note: '仍为 failed'
+          - caption: '传入修复后的构建函数并调用 replace()。device 启动成功，monitor 和 app 紧接着启动。'
+            note: '已修复'
+      requeue:
+        outcome: '自动重试'
+        summary: 'device 保留原有实例，在 retrying 阶段等待，构建函数不需要重新运行。第 3 次尝试连接成功，monitor 和 app 随之启动。'
+        steps:
+          - caption: 'start()：第 1 次尝试失败。device 保留实例，在 retrying 阶段等待。'
+            note: 'retrying'
+          - caption: '1 秒后：第 2 次尝试还是失败了。'
+            note: '第 2 次'
+          - caption: '2 秒后：第 3 次尝试成功。device 开始运行，monitor 和 app 紧接着启动。'
+            note: '第 3 次成功'
+      max-attempts:
+        outcome: '试满 2 次后放弃'
+        summary: '设置 maxAttempts: 2 后，第 2 次失败就会停止重试，device 会带着最后一次失败的原因进入 failed。'
+        steps:
+          - caption: 'start()：第 1 次尝试失败，device 在 retrying 阶段等待。'
+            note: 'retrying'
+          - caption: '1 秒后：第 2 次尝试失败。已经达到最大次数，device 进入 failed。'
+            note: '已放弃'
+  plugin:
+    nav: '事务'
+    title: '有些单元必须成套发布'
+    intro:
+      - '平时用 `provide()` 注册一个单元，它会立刻对外生效。但插件往往包含好几个相互配合的单元，只有整套一起正常工作才有意义。'
+      - '事务会先把里面的单元都构建好，但暂不对外公开；只有当所有单元都构建成功时，才一次性把它们全部发布出去。'
+    question: '插件注册了 memory 和 agent，但 agent 构建失败了。其他单元会看到什么？'
+    variants:
+      provide:
+        outcome: '插件只成功了一半'
+        summary: '不用事务时，每个单元一注册就立刻对外可见。结果 memory 在运行，agent 却失败了，插件只有一半在运行。'
+        steps:
+          - caption: 'start()：llm 正在运行，app 在等待 agent。'
+          - caption: 'provide()：memory 开始构建。此时 agent 也已经对外可见，并在等待 memory。'
+            note: '立即可见'
+          - caption: 'memory 开始运行，但 agent 构建失败了。插件只有一半在运行。'
+            note: '单独上线'
+      commit:
+        outcome: '要么全成，要么全无'
+        summary: 'commit() 会先在内部把 memory 和 agent 都构建好，然后一次性把两者同时发布出去，随后 app 启动。'
+        steps:
+          - caption: 'start()：llm 正在运行，app 在等待 agent。'
+          - caption: 'commit()：memory 先在事务内部构建，此时外面的 app 还看不到它。'
+            note: '尚未发布'
+          - caption: 'agent 也构建完成了。两者一次性同时对外发布，随后 app 启动。'
+            note: '同时发布'
+      rollback:
+        outcome: '什么都不会发布'
+        summary: 'agent 构建失败后，commit() 抛出错误，并清理掉已经构建好的 memory。外面的单元从头到尾都没见过这两个单元。'
+        steps:
+          - caption: 'start()：llm 正在运行，app 在等待 agent。'
+          - caption: 'commit()：memory 先在事务内部构建，此时外面的 app 还看不到它。'
+            note: '尚未发布'
+          - caption: 'agent 构建失败。commit() 抛出错误，并清理掉 memory。没有任何单元被发布出去。'
+            note: '已回滚'
+  containers:
+    nav: '容器'
+    title: '每个插件都可以有自己的容器'
+    intro:
+      - '容器用来存放注册的单元。子容器（比如给每个插件单独建一个）在查找单元时，会先找自己里面的，找不到再去父容器里找。'
+      - '父容器看不到子容器里的单元，除非该单元设置了 `visibility: ''parent''`；销毁子容器时，里面注册的所有单元都会被一并清理。'
+    question: '宿主容器里有一个 theme，插件自己也注册了一个 theme。各个单元最终拿到的是哪一个？'
+    boxes:
+      - 'host'
+      - 'plugin'
+    variants:
+      shadow:
+        outcome: 'view 切换，app 不变'
+        summary: '插件的 theme 在构建期间，view 会继续用宿主的 theme，等构建好后再切换过去。如果插件注销了自己的 theme，view 不中断地能切回宿主的 theme。宿主里的 app 则始终看不到插件的 theme。'
+        steps:
+          - caption: 'start()：插件里的 view 先使用宿主容器提供的 theme。'
+            note: '用宿主 theme'
+          - caption: '插件注册了自己的 theme。在它构建完成之前，view 继续使用宿主的 theme。'
+            note: '构建中'
+          - caption: '插件的 theme 开始运行，view 自动切换过去；宿主里的 app 依然使用宿主的 theme。'
+            note: '已切换'
+          - caption: '插件注销了自己的 theme。view 不中断地直接切回了宿主的 theme。'
+            note: '切回宿主'
+      isolate:
+        outcome: '只用插件自己的 theme'
+        summary: '配置 isolate 之后，view 不会再去借用宿主容器的 theme，而是等待插件自己的 theme 启动。'
+        steps:
+          - caption: 'start()：插件把 theme 设为隔离（isolate）。view 不会使用宿主的 theme，因此保持等待。'
+            note: '等待中'
+          - caption: '插件注册了自己的 theme，view 用它完成构建。'
+            note: '自己的 theme'
+      exclusive:
+        outcome: '两边都停下：发生冲突'
+        summary: 'theme 被设为独占键（exclusive）。一旦出现第二个提供方，两个提供方都会进入 conflict，谁都不运行；app 和 view 会一直等待，直到其中一个被注销。'
+        steps:
+          - caption: 'start()：独占键 theme 只有一个提供方，所有单元正常运行。'
+          - caption: '插件也注册了一个 theme。两个提供方同时进入 conflict，app 和 view 停下等待。'
+            note: 'conflict'
+          - caption: '插件注销了自己的提供方。宿主的 theme 恢复运行，app 和 view 也随之恢复。'
+            note: '恢复运行'
+  cancel:
+    nav: '限时等待'
+    title: '可以为等待设置超时时间'
+    intro:
+      - '当缺少必需的提供方时，`start()` 和 `resolve()` 默认会一直等下去。如果不想无限等待，可以传入 `signal` 来设置超时。'
+      - '`timeout(container, ms)` 会基于容器的时钟创建一个超时信号。超时只会结束这次调用的等待，容器里的单元本身还会继续运行。'
+    variants:
+      main:
+        outcome: '只结束调用方的等待'
+        summary: 'start() 在 5 秒后抛出超时错误，但 app 依然留在容器里继续等待；一旦稍后注册了 llm，app 还是会照常完成构建。'
+        steps:
+          - caption: 'start()：app 需要 llm，但此时还没有人提供 llm，所以 app 等待。'
+            note: '等待中'
+          - caption: '5 秒后：start() 抛出 StartTimeoutError 并结束等待，但容器里的 app 仍在等待 llm。'
+            note: '仍在等待'
+          - caption: '稍后注册了 llm，app 照常完成构建并运行。'
+            note: '开始构建'
+features:
+  - title: '依赖注入'
+    text: '声明每个单元需要什么。injeca 会按依赖顺序构建、启动和停止它们，并把带类型的值传给每个构建函数。不需要写类，也不需要装饰器。'
+  - title: '运行时切换'
+    text: '可以在应用运行期间随时替换、新增或注销单元。旧实例会一直工作到新实例准备就绪为止，所有依赖它的单元都不会中断。'
+  - title: '状态感知'
+    text: '运行中的实例可以处于 ready、degraded 或 unavailable 状态。状态变化会自动传递给所有依赖它的单元，不需要重新构建实例。'
+  - title: '分组隔离'
+    text: '给每个插件分配一个独立的子容器。它可以使用父容器里的单元，同时只把设为对父容器可见的单元暴露出去；销毁子容器时会自动清理它内部的一切。'
+  - title: '事务回滚'
+    text: '一次性成套发布多个单元。只要其中有一个单元构建失败，整批单元都不会对外发布，已经构建好的实例也会被自动清理。'
+  - title: '因果查询'
+    text: '每一次状态变化都会记录原因。你可以随时查询某个单元为什么还在等待，在执行操作前预览它会让哪些单元停止或重建，并实时监听每一次状态变化。'
+  - title: '测试套件'
+    text: '在测试里可以手动推进时钟来验证超时和重试，等待队列里的任务全部跑完，或者把某个生命周期钩子拿出来单独测试。'
+cheat:
+  groups:
+    - '注册与获取'
+    - '生命周期'
+    - '运行时变更'
+    - '缺失的提供方'
+    - '插件与容器'
+    - '等待与观察'
+  cards:
+    provide: '用一个键注册单元，并返回这个带类型的键。'
+    depends-on: '声明单元需要哪些依赖，并把它们的值传给构建函数。'
+    resolve: '在普通代码里按键获取单元的值；如果还没就绪会自动等待。'
+    invoke: '等所需的依赖都运行后执行一次回调；如果某个依赖换了新实例，就再执行一次。'
+    hooks: '跟随实例一起，按依赖顺序启动和关闭资源。'
+    requeue: '让失败的启动钩子等一会儿再重试，可以设置最大重试次数。'
+    timeouts: '限制钩子最多能跑多久，并决定超时之后怎么处理。'
+    replace: '换入新实例。在它准备就绪之前，旧实例会继续工作。'
+    withdraw: '注销已注册的单元。依赖它的单元会停下来并等待新的提供方。'
+    dependency-change: '在原实例里直接接管更新后的依赖，不需要重新构建自己。'
+    set-status: '把实例标记为 ready、degraded 或 unavailable，并把状态传递给依赖它的单元。'
+    define-key: '在还没有任何提供方的时候，预先定义好一个带类型的键。'
+    optional: '让单元在缺少某项依赖时也能正常构建和运行。'
+    first-available: '从候选列表里挑出第一个正在运行的提供方来使用。'
+    where: '只选用通过条件检查的提供方，比如检查版本号或所属容器。'
+    transaction: '把多个单元放在一起构建；全部成功才一次性发布，只要有一个失败就全部放弃。'
+    container: '给插件一个独立的作用域；调用 dispose() 会清理它里面的所有内容。'
+    isolate: '阻止子容器里的指定键去借用父容器的提供方。'
+    exclusive: '限制同一个键只能有一个提供方；如果出现第二个，两边都会进入 conflict。'
+    visibility: '让插件容器里的单元对父容器和其他兄弟插件可见。'
+    instances: '为每个使用该单元的容器各自构建一个独立的实例。'
+    timeout: '超过设定时间后停止调用方的等待，但容器里的单元本身继续运行。'
+    watch: '监听或等待某个单元的阶段（phase）和健康状态（status）变化。'
+    observe: '监听容器里的每一次状态变化，并拿到变化的原因。'
+    graph: '查询某个单元为什么还没运行，或者提前预览某次修改会影响哪些单元。'
+    manual-clock: '在测试中手动推进时钟，方便地测试超时和重试逻辑。'
+hero:
+  steps:
+    - title: '已注册'
+      text: '各个模块一共注册了 12 个单元，此时还没有构建任何实例。'
+    - title: '发起请求'
+      text: '这次 resolve() 调用就是整张依赖图的入口。'
+    - title: '遍历依赖'
+      text: '从入口往回找：它一共需要 12 个单元里的 8 个，分成 2 批。剩下的 4 个单元用不上，保持 pending。'
+    - title: '分批构建'
+      text: '只要所依赖的单元已经运行，同一批的单元就会并行完成构建。'
+    - title: 'app'
+      text: '各个单元拼合成完整的 app，resolve() 返回结果。'
+    - title: '停止'
+      text: '停止时顺序相反：依赖方先停，提供方后停。'
+  roles:
+    config: '从磁盘读取配置。'
+    tts: '把文字转成语音。'
+    llm: '大语言模型客户端。'
+    memory: '保存对话历史。'
+    window: '应用主窗口。'
+    tray: '系统托盘图标和菜单。'
+    speech: '把助手的回复念出来。'
+    chat: '负责与模型对话，并维护对话上下文。'
+    telemetry: '上报使用统计。app 用不到它。'
+    devtools: '调试面板。app 用不到它。'
+    vision: '读取屏幕画面。app 用不到它。'
+    updater: '检查版本更新。app 用不到它。'

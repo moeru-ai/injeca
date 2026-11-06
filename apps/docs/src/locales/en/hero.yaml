@@ -1,0 +1,12 @@
+# The scene of the hero: the card of a piece, and the labels of the map.
+needs: depends on
+used-by: used by
+returned: resolve() returned
+batch: batch {n}
+map: Dependency graph from the entry point
+state:
+  pending: 'Pending: not needed by app.'
+  registry: Registered in the container.
+  built: Built in batch {n}.
+  building: Building in batch {n}.
+  needed: Required. Builds in batch {n}.

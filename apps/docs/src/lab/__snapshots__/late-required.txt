@@ -1,0 +1,23 @@
+#0 t=0 start(): remote-tts has no provider yet. speech and app wait and run no code.
+  local-tts: v1 running ready
+  speech: - pending
+  app: - pending
+  speech->remote-tts: waiting
+  app->speech: waiting
+
+#1 t=0 The plugin provides remote-tts. speech and app build and start.
+  local-tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  remote-tts: v1 running ready
+  speech->remote-tts: serving
+  app->speech: serving
+  > remote-tts v1: pending → building
+  > remote-tts v1: building → starting
+  > remote-tts v1: starting → running
+  > speech v1: pending → building
+  > speech v1: building → starting
+  > speech v1: starting → running
+  > app v1: pending → building
+  > app v1: building → starting
+  > app v1: starting → running

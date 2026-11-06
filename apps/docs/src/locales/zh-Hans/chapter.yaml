@@ -1,0 +1,13 @@
+play: 播放
+pause: 暂停
+replay: 重播
+step: '第 {n} 步：{caption}'
+calls:
+  waiting: 等待中
+  resolved: 已完成
+  rejected: 已失败
+coverage: 每一步中各单元是否可用
+observe: 这一步中 {observe} 记录的事件
+first-step: 第一步展示 {start} 完成后的初始状态。
+no-records: 本步无事件记录。
+no-provider: 尚无提供方

@@ -1,0 +1,11 @@
+#0 t=0 provide(): config is registered and waits for start().
+  config: - pending
+
+#1 t=0 start(): injeca calls the build function of config.
+  config: v1 building
+  > config v1: pending → building
+
+#2 t=0 config is running. resolve() returns its instance, v1.
+  config: v1 running ready
+  > config v1: building → starting
+  > config v1: starting → running

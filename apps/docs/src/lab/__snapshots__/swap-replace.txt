@@ -1,0 +1,45 @@
+#0 t=0 start(): tts, speech, and app are running.
+  tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+
+#1 t=0 replace(): tts v2 builds alongside v1 while v1 keeps serving speech.
+  tts: v1 running ready | v2 building
+  speech: v1 running ready
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+  call replace(): waiting
+  > tts v2: pending → building
+
+#2 t=0 tts swaps to v2. speech v2 builds while speech v1 keeps serving app.
+  tts: v1 stopping | v2 running ready
+  speech: v1 running ready | v2 building
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+  call replace(): resolved true
+  > tts v2: building → starting
+  > tts v2: starting → running
+  > tts v1: running → stopping
+  > speech v2: pending → building
+
+#3 t=0 speech swaps, then app. Each old instance stops once nothing uses it.
+  speech: v2 running ready
+  app: v2 running ready
+  tts: v2 running ready
+  speech->tts: serving
+  app->speech: serving
+  call replace(): resolved true
+  > speech v2: building → starting
+  > speech v2: starting → running
+  > speech v1: running → stopping (rebuild)
+  > app v2: pending → building
+  > app v2: building → starting
+  > app v2: starting → running
+  > app v1: running → stopping (rebuild)
+  > app v1: stopping → withdrawn
+  > speech v1: stopping → withdrawn
+  > tts v1: stopping → withdrawn

@@ -1,0 +1,27 @@
+#0 t=0 start(): llm is running. app waits for agent.
+  llm: v1 running ready
+  app: - pending
+  app->agent: waiting
+
+#1 t=0 provide(): memory builds. agent is visible too, and waits for memory.
+  llm: v1 running ready
+  app: - pending
+  memory: v1 building
+  agent: - pending
+  agent->memory: waiting
+  agent->llm: serving
+  app->agent: waiting
+  > memory v1: pending → building
+
+#2 t=0 memory is running, while agent fails to build. Half of the plugin stays live.
+  llm: v1 running ready
+  app: - pending
+  memory: v1 running ready
+  agent: - failed
+  agent->memory: serving
+  agent->llm: serving
+  app->agent: waiting
+  > memory v1: building → starting
+  > memory v1: starting → running
+  > agent v1: pending → building
+  > agent v1: building → failed

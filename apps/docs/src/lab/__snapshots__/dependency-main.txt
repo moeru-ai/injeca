@@ -1,0 +1,24 @@
+#0 t=0 server depends on config. config is not registered yet, so server waits.
+  server: - pending
+  server->config: waiting
+
+#1 t=0 provide('config'): config builds first.
+  server: - pending
+  config: v1 building
+  server->config: waiting
+  > config v1: pending → building
+
+#2 t=0 config is running. Now server builds with the value of config.
+  server: v1 building
+  config: v1 running ready
+  server->config: serving
+  > config v1: building → starting
+  > config v1: starting → running
+  > server v1: pending → building
+
+#3 t=0 server is running.
+  server: v1 running ready
+  config: v1 running ready
+  server->config: serving
+  > server v1: building → starting
+  > server v1: starting → running

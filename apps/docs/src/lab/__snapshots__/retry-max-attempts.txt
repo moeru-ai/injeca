@@ -1,0 +1,17 @@
+#0 t=0 start(): try 1 fails. device waits in retrying.
+  device: v1 retrying
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+
+#1 t=1000 1 s later: try 2 fails. That was the last attempt, so device enters failed.
+  device: - failed
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+  > device v1: retrying → starting
+  > device v1: start returned requeue, attempt 2
+  > device v1: starting → stopping (requeue)
+  > device v1: stopping → failed (requeue)

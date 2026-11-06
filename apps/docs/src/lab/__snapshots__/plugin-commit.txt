@@ -1,0 +1,33 @@
+#0 t=0 start(): llm is running. app waits for agent.
+  llm: v1 running ready
+  app: - pending
+  app->agent: waiting
+
+#1 t=0 commit(): memory builds before publishing. app cannot see it yet.
+  llm: v1 running ready
+  app: - pending
+  memory: v1 building
+  agent: - declared
+  agent->memory: waiting
+  agent->llm: serving
+  app->agent: waiting
+  call commit(): waiting
+  > memory v1: declared → building
+
+#2 t=0 agent builds too. Both are published in one step, and app starts.
+  llm: v1 running ready
+  app: v1 running ready
+  memory: v1 running ready
+  agent: v1 running ready
+  agent->memory: serving
+  agent->llm: serving
+  app->agent: serving
+  call commit(): resolved
+  > agent v1: declared → building
+  > memory v1: building → starting
+  > agent v1: building → starting
+  > memory v1: starting → running
+  > agent v1: starting → running
+  > app v1: pending → building
+  > app v1: building → starting
+  > app v1: starting → running

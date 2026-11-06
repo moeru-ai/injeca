@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="See what each injeca primitive does to a dependency graph, with the real container running step by step." />
+    <meta name="color-scheme" content="dark light" />
+    <title>injeca scenario lab</title>
+    <script>
+      // Set the theme before the first paint, as src/theme.ts decides it, so the page does not flash.
+      (function () {
+        var forced = new URLSearchParams(location.search).get('theme')
+        var saved
+        try { saved = localStorage.getItem('injeca:theme') } catch (e) {}
+        var theme = forced === 'light' || forced === 'dark' ? forced : saved === 'light' || saved === 'dark' ? saved : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

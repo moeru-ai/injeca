@@ -9,7 +9,7 @@
     "test:run": "vitest run",
     "lint": "eslint --cache .",
     "lint:fix": "eslint --cache --fix .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && pnpm -F @injeca/docs typecheck",
     "up": "taze -w -r -I -f && pnpm prune && pnpm dedupe"
   },
   "devDependencies": {
@@ -28,6 +28,7 @@
     "tsdown": "^0.23.1",
     "typescript": "^6.0.2",
     "unplugin-unused": "^0.6.0",
+    "unplugin-yaml": "^4.3.1",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   }

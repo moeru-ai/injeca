@@ -1,0 +1,43 @@
+{
+  "name": "@injeca/docs",
+  "type": "module",
+  "version": "0.4.0",
+  "private": true,
+  "description": "The injeca scenario lab: the real container, driven step by step, to show what each primitive does",
+  "scripts": {
+    "build": "vite build",
+    "banners": "node scripts/banners.ts",
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource/maple-mono": "^5.3.0",
+    "@fontsource/varela-round": "^5.3.0",
+    "@proj-airi/font-lxgw-975yuan": "^0.17.0",
+    "animejs": "^4.5.0",
+    "error-stack-parser": "^2.1.4",
+    "injeca": "workspace:^",
+    "nanoid": "^6.0.2",
+    "reka-ui": "^2.11.0",
+    "three": "^0.187.0",
+    "vue": "^3.5.45",
+    "vue-i18n": "^11.4.18"
+  },
+  "devDependencies": {
+    "@iconify-json/devicon": "^1.2.77",
+    "@iconify-json/mingcute": "^1.2.9",
+    "@intlify/unplugin-vue-i18n": "^11.2.8",
+    "@pierre/highlights": "^0.2.0",
+    "@proj-airi/chromatic": "^1.1.5",
+    "@types/node": "^25.6.0",
+    "@types/three": "^0.187.0",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "subset-font": "^2.9.0",
+    "typescript": "^6.0.3",
+    "unplugin-yaml": "^4.3.1",
+    "vite": "^8.3.6",
+    "vue-tsc": "^3.3.14"
+  }
+}

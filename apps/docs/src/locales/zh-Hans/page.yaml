@@ -1,0 +1,43 @@
+hero:
+  what: 面向 TypeScript 的函数式依赖注入
+  tagline: 声明你需要什么，injeca 会理清依赖并按序完成构建。
+  sub: 面向 TypeScript 的函数式依赖注入。每个单元管理自己的生命周期；即使在应用运行期间新增、替换或注销单元，整张依赖图也能继续平稳运行。
+  get-started: 快速上手
+  play: 动手试试
+  github: GitHub 上的 injeca
+  to-light: 切换到浅色主题
+  to-dark: 切换到深色主题
+  language: EN
+  to-language: Switch to English
+nav:
+  sections: 章节
+  getting-started: 快速上手
+  features: 能做什么
+  sandbox: 动手试试
+  cheat-sheet: 速查表
+  open: 打开菜单
+  close: 关闭菜单
+  light: 浅色
+  dark: 深色
+start:
+  title: 快速上手
+  managers: 包管理器
+  copy-command: 复制命令
+  copy-code: 复制代码
+  copied: 已复制
+  where: injeca 可在 Node.js、Electron、浏览器与 Worker 中运行，不依赖任何 Node 专有代码。
+  lead: 注册两个单元，启动容器，然后解析出其中一个。
+  keys: '{provide} 返回带类型的键，{dependsOn} 接收这些键。{greeter} 不用直接导入 {config} 就能拿到它的值。'
+  order: '{start} 先构建 {config}，再构建 {greeter}。{stop} 按相反顺序停止它们。'
+  read: 阅读第 1 章
+features:
+  title: injeca 能处理什么
+  chapter: 第 {n} 章 · {name}
+  cheat-sheet: 见速查表
+cheat:
+  title: 全部原语，一句话说清
+  chapter: 第 {n} 章
+footer:
+  made: 由 {who} 用 {heart} 制作
+  license: 以 {license} 发布
+  mit: MIT 许可证
