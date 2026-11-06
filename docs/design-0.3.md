@@ -561,13 +561,18 @@ decide.fail(error, { reason? })
 - `start` and `stop` wait until they settle, unless the service or the container sets a timeout.
 - A service sets `timeouts: { start, stop }` in its `provide` options. Container options can set values for all services. A service value overrides a container value, field by field. A container without a value uses the value of its nearest ancestor that has one.
 - The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
-- When a timeout passes, injeca records a `timeout` record in the observe stream. Then it applies the `onTimeout` decision of the service or the container. Without one, the result is `fail` with a `hook-timeout` error.
-- `onTimeout(context)` is a synchronous function. `context.hook` is `'start'` or `'stop'`, and `context.decide` has the methods of that hook. A value that is not a decision gives `fail`.
+- When a timeout passes, injeca records a `timeout` record in the observe stream. Then it applies the `onTimeout` decision of the service or the container.
+- Without `onTimeout`, a `start` timeout gives `fail` with a `hook-timeout` error.
+- Without `onTimeout`, a `stop` timeout counts as `handled`, with the timeout as the reason. injeca writes a warning with `logger.warn`. The stop continues, and `stop()`, `dispose()`, and `withdraw()` resolve for all callers. In 0.3, one stuck callback failed the stop for every caller, also for a caller outside. Only an explicit `decide.fail()` from `onTimeout` fails the stop.
+- When the container is stopping or disposing at a `stop` timeout, the warning adds a hint: a cleanup can be waiting for its own container, and it must pass its signal to `stop()` or `dispose()`.
+- `onTimeout(context)` is a synchronous function. `context.hook` is `'start'` or `'stop'`, and `context.decide` has the methods of that hook. A value that is not a decision gives the default of the hook. A throw gives `fail`.
 - At a `start` timeout, the hook run signal aborts. The handlers after the stuck handler do not run. A decision that the stuck handler returns later is ignored and recorded.
 - The run signal of a `start` hook includes a timeout signal on the container clock. At the timeout, it aborts with the `hook-timeout` error. A `stop` handler gets the disposal signal of the instance combined with the `stop` timeout signal. The timer stops when the run settles first.
 - When `stop()`, `dispose()`, a withdrawal, or a lost dependency aborts a `start` hook run, injeca does not wait for the handler in progress. The `stop` hooks and effects run at once, and the handlers after it do not run. A decision that the handler returns later is ignored and recorded. A configured `stop` timeout still applies to the `stop` hooks.
 - At a `stop` timeout, injeca stops waiting for the stuck callback. It still calls the remaining `stop` handlers and effect disposers, but it does not wait for them.
-- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container. Then the disposal continues and rejects with the `hook-timeout` error.
+- A `stop` without a timeout can block a container disposal. The caller that creates the service is responsible for this. A timeout also ends a cleanup that awaits the disposal of its own container. Then the disposal continues and resolves.
+- injeca attaches a handler to each callback that it stops waiting for: a `start` hook after a timeout or a newer target, and a `stop` handler or an effect disposer after a `stop` timeout. A late failure goes to `logger.warn`, because no caller gets it. The `Logger` has no debug level, and a late failure is a lost error, so `warn` fits. A late `stop` decision gets a `decision` record with `ignored: true`.
+- A late failure with the abort reason of the callback signal has no warning. The callback only followed its abort, and the timeout warning or the newer target already tells it.
 
 ### Cancellation
 
@@ -587,6 +592,7 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 | `start(container, { signal })` | Ends the wait only. The services keep converging. A timeout reason gives `start-timeout` with the explanations and the reason as `cause`. Another reason rejects as it is. An aborted signal still starts the container. |
 | `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The services that did not stop stay in `stopping` until their cleanups settle. Each one gets a `wait-aborted` record. An aborted signal still starts the stop. |
 | `dispose(container, { signal })` | Rejects with the reason. The disposal continues, and the container stays in `disposing`. Calls on it fail with `build-after-dispose`. A later `dispose()` waits for the same disposal and gets its result. Each service that did not stop gets a `wait-aborted` record. An aborted signal still starts the disposal. |
+| `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The service gets a `wait-aborted` record when it did not finish. An aborted signal still starts the withdrawal. The `withdraw()` of an invocation takes the same option. |
 | `registration.replace(option, { signal })` | Cancels the pending replacement, as a newer `replace()` does. The old instance stays, and the call resolves `false`. An aborted signal resolves `false` and changes nothing. After the swap, the abort has no effect. |
 | `tx.commit({ signal })` | Before the publish, the transaction aborts with the reason, and the commit rejects at once. The rollback continues: the build in progress gets the abort on its `signal`, and the key reservations end when the rollback settles. After the publish, the abort has no effect. |
 
@@ -598,12 +604,14 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 
 A cleanup that waits for `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. injeca finds such a call and does not let it wait.
 
-- injeca records the service of each signal that it gives to a run: the build signal, which the effects and the invocation callback also use, and the signal of each hook run. A signal from `withTimeout` or `anySignal` on top of it keeps that origin.
-- A call with such a signal is a re-entrant call when the service is in the subtree of the target container and is `stopping`.
+- injeca records the instance of each signal that it gives to a run: the build signal, which the effects and the invocation callback also use, and the signal of each hook run. A signal from `withTimeout` or `anySignal` on top of it keeps that origin.
+- A call with such a signal is a re-entrant call when the instance is in the subtree of the target container and its teardown runs.
+- The check reads the instance, not the phase of the service. During a make-before-break rebuild or a replacement, the old and the new instance live together. A teardown can also run in `building`, for example for a successor whose build failed. A signal of the new running instance still waits.
+- A cleanup that waits for `withdraw()` waits for itself when the withdrawal waits for that cleanup. That is a cleanup of the withdrawn service, of a consumer service of a `perConsumer` registration, or of a service that holds the withdrawn service, directly or through other instances. The same rules apply, and a re-entrant `withdraw()` resolves `true`.
 - A call from the synchronous part of a teardown or of a container effect in the subtree is a re-entrant call too. A frame of the cleanup context tells this, in every runtime.
 - injeca does not reject a re-entrant call and does not wait. It writes a warning with `logger.warn`, sends a `reentrant-call` record, and resolves at once. The `stop` or the disposal continues as usual. A call from outside still gets a promise that settles when the work ends.
 - A call without a signal after an `await` is not found, because the web has no async context. A configured `stop` timeout ends that cleanup. So a cleanup passes its `signal` to `stop()` and `dispose()`.
-- A signal of a service that is not `stopping` is not a re-entrant signal. The call waits as usual, and the signal can end the wait.
+- A signal of an instance whose teardown does not run is not a re-entrant signal. The call waits as usual, and the signal can end the wait.
 - `reentrant-dispose` and `ReentrantDisposeError` are removed in 0.4, because no call rejects with them.
 
 ## Reading state
@@ -624,8 +632,8 @@ A cleanup that waits for `stop()` or `dispose()` of its own container, or of an 
 - Each record has the key, the owner, the `instanceId`, the from and to phase or status, the decision kind, and the reason.
 - A `registration-replaced` record tells that a second `provide` before `start()` replaced a registration. Its reason names the replacement.
 - A `timeout` record tells that a `start` or `stop` hook did not settle before its timeout. It has the hook, the timeout, and the attempt. A `decision` record with the `onTimeout` decision follows it.
-- A `reentrant-call` record tells that a cleanup called `stop()` or `dispose()` of its own container or of an ancestor, and that the call resolved at once. It has the call and the reason. `key` is the service of the cleanup, or `''` for a container effect.
-- A `wait-aborted` record tells that the signal of `stop()` or `dispose()` aborted before a service stopped. It has the call, the phase at the abort, the reason text, and `abortReason`. There is one record for each service that did not stop. A container effect that does not settle has no record.
+- A `reentrant-call` record tells that a cleanup called `stop()` or `dispose()` of its own container or of an ancestor, or `withdraw()` of a registration that waits for it, and that the call resolved at once. It has the call and the reason. `key` is the service of the cleanup, or `''` for a container effect. `instanceId` is the instance of the cleanup.
+- A `wait-aborted` record tells that the signal of `stop()`, `dispose()`, or `withdraw()` aborted before a service stopped. It has the call, the phase at the abort, the reason text, and `abortReason`. There is one record for each service that did not stop. A container effect that does not settle has no record.
 - An inspector or a trace exporter uses this stream. A consumer can send it to another process with eventa.
 
 ### Graph queries
@@ -757,6 +765,13 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
   - `observe` has the `wait-aborted` record.
   - A `stop` or `dispose` from a cleanup of its own container resolves at once with a warning and a `reentrant-call` record. injeca finds it by the signal of the cleanup. `reentrant-dispose` is removed. The `Logger` has `warn`.
   - The tests that used `timeoutMs` pass `timeout(container, ms)` now. The tests of an invalid `timeoutMs` check an invalid signal now. The other assertions did not change.
+  - Fixes from the plugin-sdk migration onto 0.4:
+    - A `stop` timeout counts as `handled` without `onTimeout`. It warns and does not fail `stop()`, `dispose()`, or `withdraw()`. During a stop or a disposal of the container, the warning tells that a cleanup can be waiting for its own container. This is a breaking change.
+    - A late failure of a callback that injeca stopped waiting for goes to `logger.warn`. A late `stop` decision is recorded as ignored.
+    - The re-entry check reads the teardown of the instance of a signal, not the phase of its service.
+    - `registration.withdraw({ signal })` and the `withdraw()` of an invocation take a signal. A re-entrant `withdraw()` resolves at once. `WithdrawOptions` is exported.
+    - `injeca/testing` exports `manualClock` and `drained`.
+    - Changed assertions: the `stop` timeout tests expect `stop()` and `dispose()` to resolve, not to reject with `hook-timeout`. The type test checks the `tx.commit` signal without a second commit, because the second commit rejected unhandled.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
@@ -831,6 +846,11 @@ Each rule in this document needs a test. These cases are required:
 64. `replace` with an aborted signal cancels the pending replacement and resolves `false`. The old instance stays. After the swap, the abort has no effect.
 65. `tx.commit` with an aborted signal before the publish rejects, publishes nothing, and frees the keys after the rollback. After the publish, the abort has no effect.
 66. Each call removes its listener from the signal when it settles. A policy timeout aborts the hook signal with `hook-timeout`, and its timer stops when the hook settles first.
+67. A `stop` timeout without `onTimeout` resolves `stop()`, `dispose()`, and `withdraw()` for every caller, sends the `timeout` record and a `handled` decision, and warns. The warning has the hint only while the container stops or disposes. `decide.fail()` from `onTimeout` still fails the stop.
+68. A `stop` handler, an effect disposer, or a superseded `start` hook that fails after injeca stopped waiting warns, and a late `stop` decision is recorded as ignored. A failure with the abort reason of its signal does not warn. No case gives an unhandled rejection.
+69. A cleanup of a successor whose build failed during a make-before-break rebuild calls `dispose()` with its signal, and the call resolves at once. A signal of the new running instance still waits.
+70. `withdraw({ signal })` stops waiting at the abort, sends `wait-aborted`, and the withdrawal continues. An aborted signal starts the withdrawal. A cleanup of the service, or of a dependent that holds it, that calls `withdraw()` with its signal or from its synchronous part resolves at once with a warning. A stop hook that withdraws its export, then disposes its container, completes.
+71. `manualClock` and `drained` from `injeca/testing` drive `timeout()` and a policy timeout without real time.
 
 ## Appendix: plugin-sdk
 
