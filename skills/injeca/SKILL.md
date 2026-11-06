@@ -157,7 +157,7 @@ await dispose(container, { signal: timeout(container, 5_000) })
 - `start`, `stop`, `dispose`, and `withdraw` stop only the wait. The services keep converging, and the cleanups keep running. `stop`, `dispose`, and `withdraw` send a `wait-aborted` record for each service that did not stop.
 - After an aborted `dispose`, the container stays in `disposing`. Call `dispose(container)` again to wait for the result.
 - An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
-- Calling dispose from a cleanup: pass the cleanup `signal`, for example `on('stop', async ({ signal }) => { await dispose(container, { signal }) })`. injeca knows the instance of each signal of builds, hooks, and invocations, also through `withTimeout`. While the teardown of that instance runs, the call warns, sends a `reentrant-call` record, and resolves at once. There is no `reentrant-dispose` error.
+- Calling dispose from a cleanup: pass the cleanup `signal`, for example `on('stop', async ({ signal }) => { await dispose(container, { signal }) })`. injeca knows the instance of each signal of builds, hooks, and invocations, also through `withTimeout`. While the teardown of that instance runs, the call warns, sends a `reentrant-call` record, and resolves at once. There is no `reentrant-dispose` error. This also applies to a cleanup of a parent service that holds an export of the disposed or stopped container, directly or through other services, for example a plugin host that disposes a plugin from its own `stop` hook.
 - The same applies to `withdraw({ signal })` from a cleanup of the withdrawn service, or of a dependent that holds it. A re-entrant `withdraw()` resolves `true`.
 - Tests: `manualClock()` and `drained(container)` from `injeca/testing` drive `timeout()` and policy timeouts without real time. Call `advance(ms)`, then await `drained(container)`.
 
@@ -266,7 +266,7 @@ const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(cont
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
 2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
 3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start(container, { signal: timeout(container, ms) })` to fail with an explanation.
-4. A cleanup that calls `stop()` or `dispose()` of its own container, or of an ancestor, or `withdraw()` of a registration that waits for it, passes its `signal`. Then the call warns and resolves at once. Without the signal, after an `await`, only a configured `stop` timeout ends the cleanup.
+4. A cleanup that calls `stop()` or `dispose()` of its own container, of an ancestor, or of a container whose service it holds, or `withdraw()` of a registration that waits for it, passes its `signal`. Then the call warns and resolves at once. Without the signal, after an `await`, only a configured `stop` timeout ends the cleanup.
 5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
 6. Use `replace()`, not `withdraw()` and `provide()`, to change a service without a gap.
 7. Do not use `Math.random` or real timers in retry and timeout tests. Pass `random` and the `clock` of `manualClock()` from `injeca/testing` to `createContainer`. `timeout(container, ms)` uses that clock.

@@ -32,7 +32,7 @@ function within(container: ContainerNode, ancestor: ContainerNode): boolean {
   return false
 }
 
-/** A `stop()` or `dispose()` call from the cleanup chain of its own container. `service` is the service of the cleanup, or `undefined` for a container effect. */
+/** A `stop()`, `dispose()`, or `withdraw()` call from a cleanup that the call waits for. `service` is the service of the cleanup, or `undefined` for a container effect. */
 export interface Reentry {
   readonly service: ServiceNode | undefined
   /** The instance of the cleanup, when the signal tells it. */
@@ -62,33 +62,16 @@ function findCleanup(context: CleanupContext, signal: AbortSignal | undefined, c
 }
 
 /**
- * Finds out whether a `stop()` or `dispose()` of `target` comes from the cleanup chain of `target` or of a descendant. Such a call cannot wait, because the wait includes the caller.
- *
- * - With `signal`: the signal, or a signal that it comes from, belongs to an instance of the subtree whose teardown runs.
- *   The check uses the instance, not the phase of its service. So the teardown of a successor whose build failed, or of an old instance during a rebuild, counts too.
- * - Without it: the synchronous part of a teardown of a service of the subtree, or of a container effect of the subtree, makes the call.
- *
- * A call without a signal after an `await` is not found. A configured `stop` timeout ends that cleanup.
+ * Tells whether the teardown of `instance` is part of a stop that waits for each service that `stops` names.
+ * It is when the service of `instance` is such a service, or when `instance` holds an instance of one, directly or through other instances.
+ * The teardown of a held instance waits until its holders release it, so it waits for `instance` too.
  */
-export function findReentry(target: ContainerNode, signal: AbortSignal | undefined): Reentry | undefined {
-  const { context } = target.runtime
-  const found = findCleanup(context, signal, service => within(service.container, target))
-  if (found)
-    return found
-
-  return context.isActive(target) ? { service: undefined } : undefined
-}
-
-/**
- * Tells whether the teardown of `instance` is part of the withdrawal of `target`.
- * It is when `instance` belongs to `target` or to a consumer service of it, or holds such an instance, directly or through other instances. The withdrawal waits for each holder.
- */
-function partOfWithdrawal(instance: InstanceNode, target: ServiceNode): boolean {
+function waitedFor(instance: InstanceNode, stops: (service: ServiceNode) => boolean): boolean {
   const seen = new Set<InstanceNode>([instance])
   const queue = [instance]
   for (let index = 0; index < queue.length; index++) {
     const current = queue[index]!
-    if (current.service === target || current.service.template === target)
+    if (stops(current.service))
       return true
 
     for (const provider of current.held) {
@@ -102,14 +85,43 @@ function partOfWithdrawal(instance: InstanceNode, target: ServiceNode): boolean 
   return false
 }
 
+/** Finds a cleanup whose teardown the wait for the services that `stops` names includes. */
+function findWaitedCleanup(context: CleanupContext, signal: AbortSignal | undefined, stops: (service: ServiceNode) => boolean): Reentry | undefined {
+  return findCleanup(context, signal, (service, instance) => stops(service) || (instance !== undefined && waitedFor(instance, stops)))
+}
+
 /**
- * Finds out whether a `withdraw()` of `target` comes from a cleanup that the withdrawal waits for: of `target`, of a consumer service of it, or of a service that holds it.
+ * Finds out whether a `stop()` or `dispose()` of `target` comes from a cleanup that the call waits for. Such a call cannot wait, because the wait includes the caller.
+ *
+ * - The cleanup is of a service of the subtree, or of a container effect of the subtree.
+ * - Or the cleanup is of a service outside the subtree that holds a service that the call stops, directly or through other instances. That service waits for its holders.
+ *   `dispose()` also withdraws the consumer services of each `perConsumer` registration of the subtree, so they count for it.
+ * - With `signal`: the signal, or a signal that it comes from, belongs to such an instance whose teardown runs.
+ *   The check uses the instance, not the phase of its service. So the teardown of a successor whose build failed, or of an old instance during a rebuild, counts too.
+ * - Without it: the synchronous part of such a teardown makes the call.
+ *
+ * A call without a signal after an `await` is not found. A configured `stop` timeout ends that cleanup.
+ */
+export function findReentry(target: ContainerNode, call: 'stop' | 'dispose', signal: AbortSignal | undefined): Reentry | undefined {
+  const { context } = target.runtime
+  const stops = call === 'dispose'
+    ? (service: ServiceNode) => within(service.container, target) || (service.template !== undefined && within(service.template.container, target))
+    : (service: ServiceNode) => within(service.container, target)
+  const found = findWaitedCleanup(context, signal, stops)
+  if (found)
+    return found
+
+  return context.isActive(target) ? { service: undefined } : undefined
+}
+
+/**
+ * Finds out whether a `withdraw()` of `target` comes from a cleanup that the withdrawal waits for: of `target`, of a consumer service of it, or of a service that holds one of them, directly or through other instances.
  * The rules are the same as for `findReentry`.
  */
 export function findWithdrawReentry(target: ServiceNode, signal: AbortSignal | undefined): Reentry | undefined {
-  return findCleanup(target.container.runtime.context, signal, (service, instance) =>
-    service === target || service.template === target || (instance !== undefined && partOfWithdrawal(instance, target)))
+  return findWaitedCleanup(target.container.runtime.context, signal, service => service === target || service.template === target)
 }
+
 function describeOwner(container: ContainerNode): string {
   return JSON.stringify(container.owner)
 }

@@ -334,6 +334,7 @@ function unfinishedServices(container: ContainerNode): ServiceNode[] {
  * One error keeps its identity. More than one error becomes an `AggregateError`. A second call from outside without a signal gets the same promise.
  *
  * A call from the cleanup chain of the container or of a descendant cannot wait, because the disposal waits for that cleanup.
+ * The same is true for a cleanup of a service that holds a service of the subtree, directly or through other instances, or a consumer service of a `perConsumer` registration of it.
  * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves at once. The disposal continues.
  *
  * When `options.signal` aborts, the call rejects with the reason and stops waiting. The disposal continues: the container stays in `disposing`, and calls on it fail with `build-after-dispose`.
@@ -343,7 +344,7 @@ export function dispose(container: Container, options?: DisposeOptions): Promise
   const node = nodeOf(container)
   const abortSignal = readSignal(options, 'dispose')
   const { context } = node.runtime
-  const reentry = untracked(() => findReentry(node, abortSignal))
+  const reentry = untracked(() => findReentry(node, 'dispose', abortSignal))
 
   const disposal = node.disposal ?? untracked(() => {
     let started: Promise<void> | undefined

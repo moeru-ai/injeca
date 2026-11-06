@@ -210,3 +210,176 @@ describe('a re-entrant call during a rebuild', () => {
     expect(warnings).toEqual([])
   })
 })
+
+describe('a cleanup outside the subtree that holds a service of it', () => {
+  // The parent service holds the export of a plugin container. Its stop hook disposes the plugin, as a plugin host does with `host.stop(id, { signal })`.
+  // The disposal of the plugin withdraws the export, and the export waits for its holders. So the disposal waits for the cleanup that called it.
+  function setup() {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ clock: manual.clock, logger, timeouts: { stop: 1_000 } })
+    const plugin = createTestContainer({ parent: app, owner: { plugin: 'weather' }, logger })
+    const { records } = collectRecords(app)
+    const toolStopGate = deferred()
+    provide(plugin, 'plugin.tool', {
+      export: true,
+      build: ({ on }) => {
+        on('stop', () => toolStopGate.promise)
+        return 'tool'
+      },
+    })
+
+    return { ...manual, app, plugin, records, warnings, toolStopGate }
+  }
+
+  it('resolves at once when the holder disposes the plugin with its signal', async () => {
+    const { app, plugin, records, warnings, toolStopGate, pending } = setup()
+    toolStopGate.resolve()
+    let inner: Promise<void> | undefined
+    provide(app, 'airi.panel', {
+      dependsOn: { tool: 'plugin.tool' },
+      build: ({ on }) => {
+        on('stop', async ({ signal }) => {
+          await Promise.resolve()
+          inner = dispose(plugin, { signal })
+          await inner
+        })
+        return 'panel'
+      },
+    })
+    await start(app)
+    await start(plugin)
+    expect(phaseOf(app, 'airi.panel')).toBe('running')
+
+    let settled = false
+    const stopped = stop(app).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(true)
+    await expect(stopped).resolves.toBeUndefined()
+    await expect(inner).resolves.toBeUndefined()
+    expect(pending()).toBe(0)
+    expect(warnings).toEqual([expect.stringContaining('The cleanup of \'airi.panel\' in {} called dispose() of {"plugin":"weather"}')])
+    expect(records.filter(record => record.type === 'reentrant-call')).toEqual([expect.objectContaining({ call: 'dispose', key: 'airi.panel' })])
+    await expect(dispose(plugin)).resolves.toBeUndefined()
+    expect(phaseOf(app, 'plugin.tool')).toBeUndefined()
+  })
+
+  it('resolves at once when the holder stops the plugin with its signal', async () => {
+    const { app, plugin, records, warnings, toolStopGate } = setup()
+    toolStopGate.resolve()
+    provide(app, 'airi.panel', {
+      dependsOn: { tool: 'plugin.tool' },
+      build: ({ on }) => {
+        on('stop', async ({ signal }) => {
+          await Promise.resolve()
+          await stop(plugin, { signal })
+        })
+        return 'panel'
+      },
+    })
+    await start(app)
+    await start(plugin)
+
+    let settled = false
+    const stopped = stop(app).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(true)
+    await expect(stopped).resolves.toBeUndefined()
+    expect(warnings).toEqual([expect.stringContaining('called stop() of {"plugin":"weather"}')])
+    expect(records.filter(record => record.type === 'reentrant-call')).toEqual([expect.objectContaining({ call: 'stop', key: 'airi.panel' })])
+  })
+
+  it('resolves at once when the holder holds a consumer service of a perConsumer export', async () => {
+    const { clock, pending } = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createTestContainer({ clock, logger, timeouts: { stop: 1_000 } })
+    const plugin = createTestContainer({ parent: app, owner: { plugin: 'weather' }, logger })
+    provide(plugin, 'plugin.client', { export: true, perConsumer: true, build: () => 'client' })
+    // The panel holds a service that holds the consumer service. The consumer service lives in `app`, but the disposal of the plugin withdraws it.
+    provide(app, 'airi.session', { dependsOn: { client: 'plugin.client' }, build: () => 'session' })
+    provide(app, 'airi.panel', {
+      dependsOn: { session: 'airi.session' },
+      build: ({ on }) => {
+        on('stop', async ({ signal }) => {
+          await Promise.resolve()
+          await dispose(plugin, { signal })
+        })
+        return 'panel'
+      },
+    })
+    await start(app)
+    await start(plugin)
+    expect(phaseOf(app, 'airi.panel')).toBe('running')
+
+    let settled = false
+    const stopped = stop(app).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(true)
+    await expect(stopped).resolves.toBeUndefined()
+    expect(pending()).toBe(0)
+    expect(warnings).toEqual([expect.stringContaining('called dispose() of {"plugin":"weather"}')])
+  })
+
+  it('waits for a signal of a holder that is not stopping', async () => {
+    const { app, plugin, warnings, toolStopGate } = setup()
+    const panelStopGate = deferred()
+    let panelSignal: AbortSignal | undefined
+    provide(app, 'airi.panel', {
+      dependsOn: { tool: 'plugin.tool' },
+      build: ({ on, signal }) => {
+        panelSignal = signal
+        on('stop', () => panelStopGate.promise)
+        return 'panel'
+      },
+    })
+    await start(app)
+    await start(plugin)
+
+    let settled = false
+    const disposal = dispose(plugin, { signal: panelSignal }).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(false)
+    expect(phaseOf(app, 'airi.panel')).toBe('stopping')
+
+    panelStopGate.resolve()
+    toolStopGate.resolve()
+    // The signal of the panel aborts when its instance is disposed. That ends this wait, as for any other signal.
+    await expect(disposal).rejects.toThrow('was disposed')
+    expect(warnings).toEqual([])
+  })
+
+  it('waits for a signal of a stopping service that holds nothing of the plugin', async () => {
+    const { app, plugin, records, warnings, toolStopGate } = setup()
+    let traySignal: AbortSignal | undefined
+    const tray = provide(app, 'airi.tray', ({ on, signal }) => {
+      traySignal = signal
+      on('stop', () => new Promise<void>(() => {}))
+      return 'tray'
+    })
+    await start(app)
+    await start(plugin)
+    void tray.withdraw()
+    await drained(app)
+    // The withdrawn tray leaves the slot, so only the observe stream shows its phase.
+    expect(records).toContainEqual(expect.objectContaining({ type: 'phase', key: 'airi.tray', to: 'stopping' }))
+
+    let settled = false
+    const disposal = dispose(plugin, { signal: traySignal }).finally(() => {
+      settled = true
+    })
+    await drained(app)
+    expect(settled).toBe(false)
+
+    toolStopGate.resolve()
+    await expect(disposal).resolves.toBeUndefined()
+    expect(warnings).toEqual([])
+  })
+})

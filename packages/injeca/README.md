@@ -214,7 +214,7 @@ await stop(container, { signal: timeout(container, 5_000) })
 
 ### Calling dispose from a cleanup
 
-A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. Pass the `signal` of the cleanup, so that injeca knows the caller:
+A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose service it holds. Pass the `signal` of the cleanup, so that injeca knows the caller:
 
 ```ts
 provide(plugin, 'plugin:window', ({ on }) => {
@@ -228,6 +228,7 @@ provide(plugin, 'plugin:window', ({ on }) => {
 
 - injeca knows the instance of each signal that it gives to a build, a hook, and an invocation. A signal from `withTimeout(signal, ms, container)` keeps that origin. A signal from `AbortSignal.any()` does not.
 - A call with such a signal while the teardown of its instance runs does not wait. The check uses the instance, so it also works during a rebuild or a replacement, when the old and the new instance live together. A signal of the new running instance still waits.
+- The cleanup can also be outside the container. A service of the parent that holds an export of a plugin container, directly or through other services, stops before that export. So its `stop` hook can call `dispose(plugin, { signal })` or `stop(plugin, { signal })`, and the call does not wait. A plugin host that stops a plugin from its own cleanup needs this.
 - A call from the synchronous part of a cleanup does not wait either.
 - Such a call writes a warning with `logger.warn`, sends a `reentrant-call` record to `observe`, and resolves at once. A re-entrant `withdraw()` resolves `true`. The stop, the disposal, or the withdrawal continues. Other callers get a promise that settles when it ends.
 - A call without a signal after an `await` is not found. It waits for itself until a configured `stop` timeout ends the cleanup. The warning of that timeout tells about this cause.
@@ -483,7 +484,7 @@ await dispose(plugin)
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
-- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a service that holds a service of the container. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 
 ### Logging
 

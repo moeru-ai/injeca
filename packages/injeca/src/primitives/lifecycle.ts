@@ -129,6 +129,7 @@ export function start(container: Container, options?: StartOptions): Promise<voi
  * The services that did not stop yet stay in `stopping` until their cleanups settle.
  *
  * A call from the cleanup chain of the container or of a descendant cannot wait, because the stop waits for that cleanup.
+ * The same is true for a cleanup of a service that holds a service of the subtree, directly or through other instances.
  * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves at once. The stop continues.
  */
 export function stop(container: Container, options?: StopOptions): Promise<void> {
@@ -142,7 +143,7 @@ export function stop(container: Container, options?: StopOptions): Promise<void>
     return Promise.reject(error)
   }
 
-  const reentry = untracked(() => findReentry(node, signal))
+  const reentry = untracked(() => findReentry(node, 'stop', signal))
   if (!reentry)
     return stopAndWait(node, signal)
 

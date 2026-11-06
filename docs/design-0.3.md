@@ -209,7 +209,7 @@ The core needs only `setStatus` after `build`, cause chains, transactions, and c
 - `dispose(container)` disposes the child containers first, one after the other, in reverse creation order. Each child disposal completes, with its own effects, before the next one starts. Then the registrations and invocations of the container withdraw in one batch. Then the effects of the container run in reverse registration order.
 - The whole subtree enters disposal at once. No new registration, child container, or transaction can start in it.
 - `dispose()` collects all errors. One error keeps its identity. More than one error becomes an `AggregateError`.
-- A `stop` or `dispose` call from a cleanup in the same container, or in a descendant, does not wait. It warns, sends a `reentrant-call` record, and resolves at once. injeca finds the call by the signal of the cleanup, or by the synchronous part of the cleanup. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- A `stop` or `dispose` call from a cleanup in the same container, or in a descendant, does not wait. A call from a cleanup of a service outside the subtree that holds a service of the subtree does not wait either. It warns, sends a `reentrant-call` record, and resolves at once. injeca finds the call by the signal of the cleanup, or by the synchronous part of the cleanup. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 - A cleanup that awaits the disposal of its own container or of an ancestor without its signal is not found after an `await`. A configured `stop` timeout ends such a cleanup with a failure, and the disposal continues.
 - An outside caller that calls `dispose()` again during disposal gets the same promise.
 - `stop(container)` stops. `dispose(container)` cleans up. `stop()` stops all instances, dependents first, and keeps the registrations. The container stays usable, and a later `start()` builds the registrations again. `stop()` also ends the demands of `resolve`, `watch`, and `waitFor` on the services of the container. `dispose()` also withdraws the registrations, disposes the child containers, and runs the container effects. A disposed container cannot be used again.
@@ -604,13 +604,14 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 
 #### Calling dispose from a cleanup
 
-A cleanup that waits for `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. injeca finds such a call and does not let it wait.
+A cleanup that waits for `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. So does a cleanup that holds a service of the target container. injeca finds such a call and does not let it wait.
 
 - injeca records the instance of each signal that it gives to a run: the build signal, which the effects and the invocation callback also use, and the signal of each hook run. A signal from `withTimeout` or `anySignal` on top of it keeps that origin.
-- A call with such a signal is a re-entrant call when the instance is in the subtree of the target container and its teardown runs.
+- A call with such a signal is a re-entrant call when the teardown of the instance runs and the call waits for that teardown. That is when the instance is in the subtree of the target container, or when it holds a service that the call stops, directly or through other instances.
+- The holder rule follows from the holder waits: a service of the subtree stops only after its holders release it. A plugin host is an example. A service of the parent container holds a Kit that a plugin container exports, and its `stop` hook disposes that plugin container. For `dispose`, the consumer services of a `perConsumer` registration of the subtree count too, because the disposal withdraws them.
 - The check reads the instance, not the phase of the service. During a make-before-break rebuild or a replacement, the old and the new instance live together. A teardown can also run in `building`, for example for a successor whose build failed. A signal of the new running instance still waits.
-- A cleanup that waits for `withdraw()` waits for itself when the withdrawal waits for that cleanup. That is a cleanup of the withdrawn service, of a consumer service of a `perConsumer` registration, or of a service that holds the withdrawn service, directly or through other instances. The same rules apply, and a re-entrant `withdraw()` resolves `true`.
-- A call from the synchronous part of a teardown or of a container effect in the subtree is a re-entrant call too. A frame of the cleanup context tells this, in every runtime.
+- A cleanup that waits for `withdraw()` waits for itself when the withdrawal waits for that cleanup. That is a cleanup of the withdrawn service, of a consumer service of a `perConsumer` registration, or of a service that holds the withdrawn service, directly or through other instances. The same rules apply, and a re-entrant `withdraw()` resolves `true`. `withdraw()`, `stop()`, and `dispose()` use one holder walk.
+- A call from the synchronous part of such a teardown, or of a container effect in the subtree, is a re-entrant call too. A frame of the cleanup context tells this, in every runtime.
 - injeca does not reject a re-entrant call and does not wait. It writes a warning with `logger.warn`, sends a `reentrant-call` record, and resolves at once. The `stop` or the disposal continues as usual. A call from outside still gets a promise that settles when the work ends.
 - A call without a signal after an `await` is not found, because the web has no async context. A configured `stop` timeout ends that cleanup. So a cleanup passes its `signal` to `stop()` and `dispose()`.
 - A signal of an instance whose teardown does not run is not a re-entrant signal. The call waits as usual, and the signal can end the wait.
@@ -634,7 +635,7 @@ A cleanup that waits for `stop()` or `dispose()` of its own container, or of an 
 - Each record has the key, the owner, the `instanceId`, the from and to phase or status, the decision kind, and the reason.
 - A `registration-replaced` record tells that a second `provide` before `start()` replaced a registration. Its reason names the replacement.
 - A `timeout` record tells that a `start` or `stop` hook did not settle before its timeout. It has the hook, the timeout, and the attempt. A `decision` record with the `onTimeout` decision follows it.
-- A `reentrant-call` record tells that a cleanup called `stop()` or `dispose()` of its own container or of an ancestor, or `withdraw()` of a registration that waits for it, and that the call resolved at once. It has the call and the reason. `key` is the service of the cleanup, or `''` for a container effect. `instanceId` is the instance of the cleanup.
+- A `reentrant-call` record tells that a cleanup called `stop()` or `dispose()` of its own container, of an ancestor, or of a container whose service it holds, or `withdraw()` of a registration that waits for it, and that the call resolved at once. It has the call and the reason. `key` is the service of the cleanup, or `''` for a container effect. `instanceId` is the instance of the cleanup.
 - A `wait-aborted` record tells that the signal of `stop()`, `dispose()`, or `withdraw()` aborted before a service stopped. It has the call, the phase at the abort, the reason text, and `abortReason`. There is one record for each service that did not stop. A container effect that does not settle has no record.
 - An inspector or a trace exporter uses this stream. A consumer can send it to another process with eventa.
 
@@ -773,6 +774,7 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
     - The re-entry check reads the teardown of the instance of a signal, not the phase of its service.
     - `registration.withdraw({ signal })` and the `withdraw()` of an invocation take a signal. A re-entrant `withdraw()` resolves at once. `WithdrawOptions` is exported.
     - `injeca/testing` exports `manualClock` and `drained`.
+    - The re-entry check of `stop()` and `dispose()` also finds a cleanup outside the subtree that holds a service of the subtree, directly or through other instances. It uses the holder walk of `withdraw()`. Before, such a cleanup waited for itself until the `stop` timeout.
     - `logging?: boolean` replaces `enabled`. The lifecycle trace is off by default. `warn` does not depend on it. A child container inherits `logging` from its parent. `createTestContainer` passes a noop logger unless the test gives a `logger`. This is a breaking change.
     - Changed assertions: the tests that passed `enabled: false` pass a noop logger now. The `stop` timeout tests expect `stop()` and `dispose()` to resolve, not to reject with `hook-timeout`. The type test checks the `tx.commit` signal without a second commit, because the second commit rejected unhandled.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
@@ -855,6 +857,7 @@ Each rule in this document needs a test. These cases are required:
 70. `withdraw({ signal })` stops waiting at the abort, sends `wait-aborted`, and the withdrawal continues. An aborted signal starts the withdrawal. A cleanup of the service, or of a dependent that holds it, that calls `withdraw()` with its signal or from its synchronous part resolves at once with a warning. A stop hook that withdraws its export, then disposes its container, completes.
 71. `manualClock` and `drained` from `injeca/testing` drive `timeout()` and a policy timeout without real time.
 72. A container writes no lifecycle trace by default, and writes each lifecycle method with `logging: true`. `warn` writes in both cases. A child inherits `logging` unless it sets its own. Types: `enabled` is not an option.
+73. A cleanup of a parent service that holds an export of a child container, directly or through other instances, and that calls `dispose(child)` or `stop(child)` with its signal, resolves at once with a warning and one `reentrant-call` record. A `perConsumer` export counts for `dispose`. A signal of a holder that is not stopping, or of a stopping service that holds nothing of the child, still waits.
 
 ## Appendix: plugin-sdk
 
