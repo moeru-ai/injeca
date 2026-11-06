@@ -6,6 +6,7 @@ import type { Snapshot } from './snapshot'
 import { inConflict } from '../graph/resolvers/exclusive'
 import { epochOf, requiredWithdrawn } from '../graph/resolvers/resolvers'
 import { batch } from '../helpers/signals'
+import { demandProviders } from './demand'
 import { releaseExtraHolds, syncHolds } from './holds'
 import { beginHookRun, finishRun, recordDecision, runHandlers } from './hook-run'
 import { cancelRequeueWait, exhaustedIntent, scheduleRequeue } from './requeue'
@@ -30,6 +31,8 @@ export function reconcileRunning(service: ServiceNode): void {
     return
   }
 
+  // An optional or a fallback edge to a key that registers after this service demands its provider now.
+  demandProviders(service)
   const snapshot = currentSnapshot(service)
   // A required dependency is withdrawn. The service stops, also during a requeue wait. A handler gets a notice only.
   if (requiredWithdrawn(service)) {

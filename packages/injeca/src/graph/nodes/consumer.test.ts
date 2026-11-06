@@ -4,7 +4,7 @@ import type { OwnerRecord } from '../../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { waitFor } from '../../queries/watch'
-import { dispose, graph, provide, resolve, start, stop, transaction } from '../../scoped'
+import { dispose, firstAvailable, graph, invoke, optional, provide, resolve, start, stop, transaction } from '../../scoped'
 import { createTestContainer, deferred, drained, phaseOf } from '../../testing/helpers'
 
 function hostClient() {
@@ -137,6 +137,29 @@ describe('perConsumer dependencies', () => {
     expect(phaseOf(a, 'host.client')).toBe('pending')
     expect(graph(a).explain('host.client').blockers).toEqual([{ kind: 'missing-provider', dependency: 'runtime', key: 'runtime' }])
     expect(phaseOf(a, 'a.user')).toBe('pending')
+  })
+})
+
+describe('an optional dependency on a perConsumer key', () => {
+  it('demands the consumer service when the key registers after the dependent', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    const b = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'b' } })
+    await start(root)
+    await start(a)
+    await start(b)
+    const inA: unknown[] = []
+    const inB: unknown[] = []
+    invoke(a, { dependsOn: { kit: optional('kit:x') }, callback: ({ kit }) => void inA.push(kit?.value) })
+    invoke(b, { dependsOn: { kit: optional(firstAvailable('kit:y', 'kit:x')) }, callback: ({ kit }) => void inB.push(kit?.value) })
+    await drained(root)
+    expect(inA).toEqual([undefined])
+    expect(inB).toEqual([undefined])
+
+    provide(root, 'kit:x', { perConsumer: true, build: ({ consumer }) => ({ consumer }) })
+    await drained(root)
+    expect(inA).toEqual([undefined, { consumer: { kind: 'extension', id: 'a' } }])
+    expect(inB).toEqual([undefined, { consumer: { kind: 'extension', id: 'b' } }])
   })
 })
 
