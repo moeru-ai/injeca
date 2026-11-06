@@ -1,8 +1,20 @@
-# Injeca
+<!-- Generated from README.md of the repository by `pnpm docs:update`. Edit README.md instead. -->
 
-Pure functional dependency injection for TypeScript, with unit lifecycles, run-time changes, and status propagation. No classes, no decorators, and no extra wrappers.
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/hero-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/hero-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="injeca: ask for what you want, and injeca finds what it needs and builds it. Twelve units wait in the registry. resolve() asks for window, tray, speech, and chat, and a map of the graph walks back from that call to the eight units it needs, in two batches. Each batch builds at once, and the eight pieces lock together into one cube: that whole is app. The four units that it does not need stay pending in the registry." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/hero-light.webp" />
+</picture>
 
-> Heavily inspired by [uber/fx](https://go.uber.org/fx), [uber/fig](https://go.uber.org/fig), and [uber/dig](https://go.uber.org/dig) in the Go ecosystem.
+# injeca
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
@@ -10,7 +22,13 @@ Pure functional dependency injection for TypeScript, with unit lifecycles, run-t
 [![JSDocs][jsdocs-src]][jsdocs-href]
 [![License][license-src]][license-href]
 
-## Installation
+Pure functional dependency injection for TypeScript. Units declare their dependencies, own their lifecycle, and converge when the graph changes at run time. No classes, no decorators, and no extra wrappers.
+
+> Heavily inspired by [uber/fx](https://go.uber.org/fx), [uber/fig](https://go.uber.org/fig), and [uber/dig](https://go.uber.org/dig) in the Go ecosystem, and by the run-time model of [Cordis](https://github.com/cordiverse/cordis).
+
+**[Open the scenario lab](https://injeca.moeru.ai/)** to see what each primitive does to a graph. The lab runs injeca in the page and steps through each scenario, so every frame shows real behavior. Its sandbox lets you replace, withdraw, and set the status of units yourself, with a preview from `graph().impact()`. The lab is in English and Simplified Chinese ([简体中文](https://injeca.moeru.ai/?lang=zh-Hans)).
+
+## Getting started
 
 ```sh
 npm install injeca
@@ -22,6 +40,33 @@ yarn add injeca
 
 injeca works in Node.js, Electron, browsers, and workers. It has no Node-only code.
 
+Register two units, start, and ask for one:
+
+```ts
+import { injeca } from 'injeca'
+
+const config = injeca.provide('config', () => ({ name: 'injeca' }))
+
+const greeter = injeca.provide('greeter', {
+  dependsOn: { config },
+  build: ({ dependsOn }) => {
+    return (who: string) => `Hello ${who}, from ${dependsOn.config.name}`
+  },
+})
+
+await injeca.start()
+
+const { greeter: greet } = await injeca.resolve({ greeter })
+console.info(greet('world')) // Hello world, from injeca
+
+await injeca.stop()
+```
+
+- `provide` returns a typed key, and `dependsOn` takes keys. `greeter` gets `config` without an import of its value.
+- `start()` builds `config` first, then `greeter`. `stop()` stops them in reverse.
+
+Next, read [Basic usage](#basic-usage) for hooks and the lifecycle, or open [the scenario lab](https://injeca.moeru.ai/) to watch each primitive work.
+
 ### Agent Skills
 
 Install the [injeca skill](https://skills.sh) to your AI coding agent:
@@ -29,6 +74,67 @@ Install the [injeca skill](https://skills.sh) to your AI coding agent:
 ```sh
 npx skills add moeru-ai/injeca
 ```
+
+## What injeca handles
+
+| You need to | Use | Read | Try |
+| --- | --- | --- | --- |
+| Wire units with typed keys, without classes or decorators | `provide`, `dependsOn`, `invoke` | [Basic usage](#basic-usage) | |
+| Start and stop a resource with its unit, in dependency order | `on('start')`, `on('stop')`, `effect` | [Lifecycle in `build`](#lifecycle-in-build) | |
+| Try a start again later | `decide.requeue()`, `maxAttempts` | [Retries](#retries) | [Lab][lab-retry] |
+| Limit how long a hook can take | `timeouts`, `onTimeout` | [Timeouts](#timeouts) | |
+| Stop waiting for any call | `{ signal }`, `timeout()`, `withTimeout()` | [Cancellation](#cancellation) | |
+| Add and remove units after `start()` | `provide`, `withdraw()` | [Changes at run time](#changes-at-run-time) | |
+| Take a new dependency in place, without a rebuild | `on('dependency-change')` | [Changes at run time](#changes-at-run-time) | [Lab][lab-handler] |
+| Swap a running unit without a gap, for example for hot reload | `replace()` | [Atomic replacement](#atomic-replacement) | [Lab][lab-swap] |
+| Publish many units all or nothing, for example a plugin | `transaction()` | [Transactions](#transactions) | [Lab][lab-plugin] |
+| Depend on a key that a plugin provides later | `defineKey()` | [Keys without a provider](#keys-without-a-provider) | [Lab][lab-late] |
+| Work with or without a dependency, or fall back to another provider | `optional()`, `firstAvailable()` | [Keys without a provider](#keys-without-a-provider) | [Lab][lab-late] |
+| Allow only one provider of a key | `defineKey(name, { exclusive: true })` | [Exclusive keys](#exclusive-keys) | [Lab][lab-exclusive] |
+| Accept only some providers, for example by version | `where()` | [Resolution conditions](#resolution-conditions) | |
+| Report a connection that drops and comes back | `setStatus()` | [Status](#status) | [Lab][lab-status] |
+| Give a plugin its own scope, and remove all of it at once | `createContainer({ parent })`, `dispose()` | [Containers](#containers) | [Lab][lab-containers] |
+| Share a plugin unit with other plugins | `visibility: 'parent'` | [Visibility to the parent container](#visibility-to-the-parent-container) | |
+| Build one instance for each consumer container | `instances: 'per-container'` | [Per-container instances](#per-container-instances) | |
+| Watch the state of a unit, or wait for it | `watch()`, `waitFor()`, `observe()`, `peek()` | [Reading state](#reading-state) | |
+| Explain why a unit does not run, or preview a change | `graph().explain()`, `graph().impact()` | [Graph queries](#graph-queries) | |
+| Test timeouts and retries without real time | `manualClock()`, `drained()` | [Testing with a manual clock](#testing-with-a-manual-clock) | |
+
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+## Table of Contents
+
+- [Basic usage](#basic-usage)
+  - [How a unit moves](#how-a-unit-moves)
+- [Lifecycle in `build`](#lifecycle-in-build)
+  - [Retries](#retries)
+  - [Timeouts](#timeouts)
+- [Cancellation](#cancellation)
+  - [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup)
+  - [Testing with a manual clock](#testing-with-a-manual-clock)
+- [Changes at run time](#changes-at-run-time)
+  - [Atomic replacement](#atomic-replacement)
+  - [Transactions](#transactions)
+- [Keys without a provider](#keys-without-a-provider)
+  - [Exclusive keys](#exclusive-keys)
+  - [Resolution conditions](#resolution-conditions)
+- [Status](#status)
+- [Containers](#containers)
+  - [Logging](#logging)
+  - [Visibility to the parent container](#visibility-to-the-parent-container)
+  - [Per-container instances](#per-container-instances)
+- [Reading state](#reading-state)
+  - [Graph queries](#graph-queries)
+  - [Listener registry](#listener-registry)
+- [Packages](#packages)
+- [Migration from 0.2](#migration-from-02)
+- [Migration from 0.3 to 0.4](#migration-from-03-to-04)
+- [Migration from 0.4 to 0.5](#migration-from-04-to-05)
+- [Documentation automation](#documentation-automation)
+- [Development](#development)
+- [License](#license)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## Basic usage
 
@@ -91,6 +197,37 @@ process.once('SIGINT', async () => {
 > })
 > ```
 
+### How a unit moves
+
+Each unit has a phase. A unit runs no code until its required dependencies run.
+
+```text
+           ┌──────────── conflict ◄───────────┐
+           ▼                                   │
+declared → pending → building → starting → running
+                         │          │  ▲        │
+                         │          ▼  │        │
+                         │       retrying       │
+                         ▼          ▼           ▼
+                       failed ◄── stopping ◄────┘
+                                    │
+                                    ▼
+                                withdrawn
+```
+
+| Phase | Meaning |
+| --- | --- |
+| `declared` | A [transaction](#transactions) reserved the unit. Consumers cannot resolve it. |
+| `pending` | The unit waits for its required dependencies. It runs no code. |
+| `conflict` | An [exclusive key](#exclusive-keys) has more than one provider. It runs no code. |
+| `building` | `build` runs. The instance is not visible. |
+| `starting` | The instance is published. The `start` hooks run. |
+| `retrying` | A `start` hook returned `requeue`. The unit waits for the next attempt. |
+| `running` | The instance serves calls. Only this phase has a [status](#status). |
+| `stopping` | The unit waits until its dependents release it. Then the `stop` hooks and the effect disposers run. |
+| `failed` | A build failed, the retries ended, or a hook returned `fail`. |
+| `withdrawn` | The registration is withdrawn and the instance is disposed. |
+
 ## Lifecycle in `build`
 
 The build context gives each unit its own lifecycle:
@@ -120,6 +257,20 @@ on('start', async ({ decide, attempt }) => {
 ### Retries
 
 A `start` hook can return `decide.requeue()` to try again later. The unit keeps its instance, so `build` does not run again.
+
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-retry-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-retry-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="A start hook fails. With decide.fail(), device goes to failed, and monitor and app wait. With decide.requeue(), device waits in retrying with its instance. With requeue and maxAttempts 2, the second failure ends the retries and device goes to failed." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-retry-light.webp" />
+</picture>
 
 ```ts
 on('start', async ({ decide }) => {
@@ -269,6 +420,8 @@ await stopped // resolves, with a warning
 - `drained(container)` waits one real macrotask after each drain of the work queue. Do not use it while the fake timers of the test runner hold `setTimeout`.
 - `createHookContext` and `checkDecision` test a hook handler alone.
 
+The [scenario lab](https://injeca.moeru.ai/) uses the same two functions to step through each scenario.
+
 ## Changes at run time
 
 Units can appear and disappear after `start()`. Dependents converge automatically.
@@ -295,6 +448,13 @@ on('dependency-change', ({ dependsOn, decide }) => {
 })
 ```
 
+| Change | No handler | With a `dependency-change` handler |
+| --- | --- | --- |
+| A required dependency is replaced | Rebuild without a gap | Call the handler |
+| A required dependency is withdrawn | Stop | Stop. The handler gets a notice only. |
+| An optional dependency appears, goes, or is replaced | Rebuild | Call the handler |
+| The status of a dependency changes | Nothing | `dependency-status-change` gets a call, if it has a handler |
+
 A rebuild of a running unit has no gap. The old instance keeps serving while a new instance builds and starts against the new dependencies. Then one batch swaps them, as for `replace()`. The dependents of the unit get `dependency-change` with the new instance. They do not lose it.
 
 - This applies to a rebuild without a handler and to `decide.rebuild()`.
@@ -306,6 +466,20 @@ A rebuild of a running unit has no gap. The old instance keeps serving while a n
 ### Atomic replacement
 
 A withdrawal followed by a new `provide` leaves a gap: all dependents stop. `replace()` has no gap. A hot reload tool uses it.
+
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-swap-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-swap-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="Swap a provider while it runs. withdraw() and provide() leave a gap: speech and app wait in pending. replace() has no gap: tts v1 serves while tts v2 builds. replace() with a dependency-change handler: speech takes tts v2 in its own instance, and app does not change." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-swap-light.webp" />
+</picture>
 
 ```ts
 const tts = injeca.provide(ttsKey, () => createTts())
@@ -325,6 +499,20 @@ await tts.replace(() => createTtsV2())
 ### Transactions
 
 A transaction publishes many units together, for example all parent-visible units of one plugin.
+
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-plugin-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-plugin-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="Load a plugin with many units. With a provide() for each unit, memory runs and agent fails, so half of the plugin is live. With tx.commit(), memory builds while consumers see neither unit. When a build fails in the transaction, nothing is published." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-plugin-light.webp" />
+</picture>
 
 ```ts
 import { transaction } from 'injeca'
@@ -350,6 +538,20 @@ await tx.commit()
 
 `defineKey` creates a typed key. A consumer can depend on it before any provider exists. It stays `pending` and runs no code until a provider registers.
 
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-late-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-late-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="Depend on a key that a plugin provides later. With a plain key, speech and app wait in pending. With optional(), speech runs at once without a TTS. With firstAvailable(), speech uses local-tts, and moves to remote-tts when it runs." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-late-light.webp" />
+</picture>
+
 ```ts
 import { defineKey, firstAvailable, injeca, optional } from 'injeca'
 
@@ -367,6 +569,10 @@ injeca.provide('voice:speech', {
 injeca.provide(llmKey, () => createLocalLlm())
 ```
 
+- A plain key is required. The dependent waits for it.
+- `optional(key)` gives `{ value, status }`, or `undefined` without a provider. The dependent builds at once, and rebuilds when the provider appears or goes.
+- `firstAvailable(...keys)` selects the first candidate that runs and is available. When a candidate earlier in the list starts to run, the dependent moves to it.
+
 ### Exclusive keys
 
 An exclusive key can have only one provider in its resolution area: the container that has the key, with its descendants.
@@ -375,7 +581,7 @@ An exclusive key can have only one provider in its resolution area: the containe
 const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: true })
 ```
 
-If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges. `graph(container).explain()` lists the owner of each provider.
+If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges. `graph(container).explain()` lists the owner of each provider. The [Containers](#containers) figure shows this case.
 
 A [parent-visible registration](#visibility-to-the-parent-container) counts in the area of the parent container. So two sibling plugins that make one exclusive key visible to the parent conflict, and so do a host registration and a parent-visible plugin registration of that key.
 
@@ -428,10 +634,26 @@ injeca.provide('voice:chat', {
 
 A running unit is `ready`, `degraded`, or `unavailable`.
 
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-status-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-status-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="A provider loses its connection. With setStatus('unavailable'), chat and app are unavailable with the same instances, and notes, which uses llm as optional, stays ready. With setStatus('degraded'), chat and app are degraded. With withdraw(), chat and app stop and wait, and notes builds again without llm." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-status-light.webp" />
+</picture>
+
 - `degraded` means that calls still complete, at lower quality.
 - `unavailable` means that the instance exists, but calls fail now.
 - The effective status of a unit is the worst of its own status and the effective status of each required dependency. It goes down the graph.
+- An optional dependency does not change the effective status.
 - A dependency that becomes `unavailable` does not stop or rebuild its dependents. They get a `dependency-status-change` call if they register a handler.
+- Use a status for a condition that passes, such as a reconnect. Withdraw a unit only when it is gone for good.
 
 ```ts
 build: ({ setStatus }) => {
@@ -463,6 +685,20 @@ await stop(container)
 ```
 
 A child container resolves keys from its ancestors. It does not start until `start(child)` runs, so a caller can register all its units first.
+
+<picture>
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-containers-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-containers-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="A plugin brings its own theme. A provider in the child container shadows the host theme only while it runs, so view keeps the host theme while the plugin theme builds. With isolate, view waits for the plugin theme. With an exclusive key, both providers go to conflict, and app and view wait." src="https://raw.githubusercontent.com/moeru-ai/injeca/main/docs/assets/banners/compare-containers-light.webp" />
+</picture>
 
 ```ts
 const plugin = createContainer({
@@ -612,6 +848,21 @@ const entries = listeners(container, gate) // [{ handler, owner, metadata }]
 
 `listeners()` returns the listeners of the container and its children, in registration order. `dispose(container)` removes the listeners of the container.
 
+## Packages
+
+| Package | Description | Status |
+| --- | --- | --- |
+| [`injeca`](https://github.com/moeru-ai/injeca/blob/main/packages/injeca) | The container: units, lifecycle hooks, run-time changes, status propagation, and child containers | Published |
+| [`@injeca/bridge`](https://github.com/moeru-ai/injeca/blob/main/packages/bridge) | Connects an eventa channel to a child container, so that plugins in other processes and languages can share and use units | Planned |
+
+Transport packages that open a channel and report it as a unit use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
+
+More documentation:
+
+- [The injeca 0.3 design](https://github.com/moeru-ai/injeca/blob/main/docs/design-0.3.md): the decisions, the phases, and the convergence rules
+- [The injeca agent skill](https://github.com/moeru-ai/injeca/blob/main/skills/injeca/SKILL.md): `npx skills add moeru-ai/injeca`
+- [The scenario lab](https://injeca.moeru.ai/), from [`apps/docs`](https://github.com/moeru-ai/injeca/blob/main/apps/docs)
+
 ## Migration from 0.2
 
 0.3 keeps the 0.2 call style: `provide`, `invoke`, `resolve`, `start`, `stop`, `createContainer`, and the global `injeca` object. One API changed:
@@ -718,9 +969,40 @@ graph(container).units()
 - An old option such as `perConsumer: true` or `export: true` is not read any more, and the type check rejects it in an object literal. Without the type check, the registration is shared and local.
 - Check the error codes in your own `catch` blocks and the `kind` values in your own code that reads graph queries.
 
+## Documentation automation
+
+The table of contents comes from `doctoc`. `packages/injeca/README.md` is a copy of this README, so npm shows the same guide. Run this after you change this README:
+
+```sh
+pnpm docs:update
+```
+
+`docs:update` refreshes the table of contents, then copies this README to the package. In the copy, relative links point to GitHub, and images point to raw.githubusercontent.com. Do not edit the copy.
+
+The figures come from the scenario lab in [`apps/docs`](https://github.com/moeru-ai/injeca/blob/main/apps/docs). Render them again after a change of the lab or of the behavior that it shows:
+
+```sh
+pnpm -F @injeca/docs banners
+```
+
+The tests in `apps/docs/src/lab/lab.test.ts` run each scenario against the source and keep its frames in snapshots. When a change of injeca changes a figure, a snapshot changes first.
+
+## Development
+
+This repository is a pnpm workspace.
+
+```sh
+pnpm install
+pnpm typecheck
+pnpm test:run
+pnpm lint
+pnpm build
+pnpm -F @injeca/docs dev # the scenario lab
+```
+
 ## License
 
-MIT
+[MIT](https://github.com/moeru-ai/injeca/blob/main/LICENSE)
 
 [npm-version-src]: https://img.shields.io/npm/v/injeca?style=flat&colorA=080f12&colorB=1fa669
 [npm-version-href]: https://npmjs.com/package/injeca
@@ -732,3 +1014,11 @@ MIT
 [license-href]: https://github.com/moeru-ai/injeca/blob/main/LICENSE
 [jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
 [jsdocs-href]: https://www.jsdocs.io/package/injeca
+[lab-swap]: https://injeca.moeru.ai/#swap/replace
+[lab-handler]: https://injeca.moeru.ai/#swap/handler
+[lab-status]: https://injeca.moeru.ai/#status/unavailable
+[lab-late]: https://injeca.moeru.ai/#late/required
+[lab-retry]: https://injeca.moeru.ai/#retry/requeue
+[lab-plugin]: https://injeca.moeru.ai/#plugin/commit
+[lab-containers]: https://injeca.moeru.ai/#containers/shadow
+[lab-exclusive]: https://injeca.moeru.ai/#containers/exclusive
