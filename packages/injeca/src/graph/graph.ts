@@ -95,8 +95,11 @@ export interface InstanceNode {
   disposed: boolean
 }
 
-/** The consumer side of a resolution: a service, or a read such as `peek` that has no service. */
-export type ResolutionConsumer = Pick<ServiceNode, 'container' | 'name'>
+/**
+ * The consumer side of a resolution: a service, or a read such as `peek` that has no service.
+ * `scope` is the container that the edges resolve from. `container` gets the observe records.
+ */
+export type ResolutionConsumer = Pick<ServiceNode, 'container' | 'scope' | 'name' | 'template'>
 
 /** The context that the reconciler creates for each build. The build function of a service adapts it. */
 export interface RawBuildContext {
@@ -211,6 +214,11 @@ export interface ServiceNode {
   readonly kind: ServiceKind
   readonly name: string
   readonly container: ContainerNode
+  /**
+   * The container that the edges of the service resolve from. It is the container of the registration.
+   * A consumer service of a `perConsumer` registration lives in the consumer container, but its edges resolve from the container of its registration, as for a plain registration.
+   */
+  readonly scope: ContainerNode
   readonly edges: readonly DependencyEdge[]
   readonly build: BuildFunction
   readonly metadata: ServiceMetadata

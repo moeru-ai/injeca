@@ -9,7 +9,7 @@ import { selectProvider } from './resolvers'
  * A provider in conflict, or one that `condition` rejects, does not resolve.
  */
 export function resolveKey(consumer: ResolutionConsumer, keyName: string, condition?: ResolutionCondition): Resolution {
-  const selection = selectProvider(consumer.container, keyName, consumer)
+  const selection = selectProvider(consumer.scope, keyName, consumer)
   if (!selection)
     return { kind: 'missing' }
 

@@ -119,6 +119,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
     kind: input.kind,
     name: input.name,
     container,
+    scope: input.template?.container ?? container,
     edges: input.edges,
     build: input.build,
     metadata: input.metadata ?? emptyMetadata,

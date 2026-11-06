@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../diagnostics/errors'
 import { observe } from '../../queries/observe'
 import { waitFor, watch } from '../../queries/watch'
-import { defineKey, dispose, graph, peek, provide, start, transaction } from '../../scoped'
+import { defineKey, dispose, graph, peek, provide, resolve, start, transaction } from '../../scoped'
 import { createTestContainer, deferred, drained, phaseOf, stateOf } from '../../testing/helpers'
 
 const kitKey = defineKey<string>('kit.x', { exclusive: true })
@@ -250,6 +250,25 @@ describe('exported registrations', () => {
     await dispose(b)
     expect(graph(a).services().find(service => service.key === 'kit.client')).toMatchObject({ owner: { kind: 'extension', id: 'a' }, perConsumer: true, exported: true })
     expect(phaseOf(root, 'root:consumer')).toBe('running')
+  })
+
+  it('resolves the dependencies of a perConsumer export from the exporting container, and keeps consumer in the build context', async () => {
+    const { root, a, b } = host()
+    provide(a, 'runtime', () => 'runtime of a')
+    provide(b, 'runtime', () => 'runtime of b')
+    provide(b, 'kit', {
+      export: true,
+      perConsumer: true,
+      dependsOn: { runtime: 'runtime' },
+      build: ({ dependsOn, consumer }) => ({ runtime: dependsOn.runtime, consumer }),
+    })
+    await start(root)
+    await start(a)
+    await start(b)
+
+    // The instance lives in `a`, but `build` runs for the registration in `b`, so `runtime` is the one of `b`.
+    await expect(resolve(a, { kit: 'kit' }, { timeoutMs: 500 })).resolves.toEqual({ kit: { runtime: 'runtime of b', consumer: { kind: 'extension', id: 'a' } } })
+    expect(graph(a).dependencies('kit')[0]).toMatchObject({ resolution: 'resolved', provider: { owner: { kind: 'extension', id: 'b' } } })
   })
 })
 

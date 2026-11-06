@@ -106,6 +106,40 @@ describe('perConsumer', () => {
   })
 })
 
+describe('perConsumer dependencies', () => {
+  it('resolves the dependencies of a perConsumer registration from its own container, not from the consumer container', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    provide(root, 'runtime', () => 'runtime of host')
+    // The consumer container has a key of the same name. The registration does not see it.
+    provide(a, 'runtime', () => 'runtime of a')
+    provide(root, 'host.client', {
+      perConsumer: true,
+      dependsOn: { runtime: 'runtime' },
+      build: ({ dependsOn, consumer }) => ({ runtime: dependsOn.runtime, consumer }),
+    })
+    await start(root)
+    await start(a)
+
+    await expect(resolve(a, { client: 'host.client' })).resolves.toEqual({ client: { runtime: 'runtime of host', consumer: { kind: 'extension', id: 'a' } } })
+  })
+
+  it('keeps a consumer service pending when only the consumer container has its dependency', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const a = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'a' } })
+    provide(a, 'runtime', () => 'runtime of a')
+    provide(root, 'host.client', { perConsumer: true, dependsOn: { runtime: 'runtime' }, build: ({ dependsOn }) => dependsOn.runtime })
+    provide(a, 'a.user', { dependsOn: { client: 'host.client' }, build: ({ dependsOn }) => dependsOn.client })
+    await start(root)
+    void start(a)
+    await drained(root)
+
+    expect(phaseOf(a, 'host.client')).toBe('pending')
+    expect(graph(a).explain('host.client').blockers).toEqual([{ kind: 'missing-provider', dependency: 'runtime', key: 'runtime' }])
+    expect(phaseOf(a, 'a.user')).toBe('pending')
+  })
+})
+
 describe('perConsumer replace (B1)', () => {
   it('swaps no consumer when one consumer build fails, and keeps the old template and instances', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })

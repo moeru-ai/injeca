@@ -20,12 +20,13 @@ export function slotOf(container: ContainerNode, keyName: string): WritableSigna
  * Lists the registrations of `keyName` that a consumer in `container` can see, nearest first.
  *
  * At each level, from `container` up through its ancestors, the candidates are the registration of that container, then the exports of its child containers in creation order.
- * The walk ends at a container that isolates the key. So an isolated key also hides the exports of the siblings. A service does not resolve itself.
+ * The walk ends at a container that isolates the key. So an isolated key also hides the exports of the siblings.
+ * A service does not resolve itself. A consumer service of a `perConsumer` registration does not resolve its registration.
  */
 export function candidatesOf(container: ContainerNode, keyName: string, consumer?: ResolutionConsumer): ServiceNode[] {
   const candidates: ServiceNode[] = []
   const add = (candidate: ServiceNode | undefined): void => {
-    if (candidate && candidate !== consumer && !candidates.includes(candidate))
+    if (candidate && candidate !== consumer && candidate !== consumer?.template && !candidates.includes(candidate))
       candidates.push(candidate)
   }
   for (let current: ContainerNode | undefined = container; current; current = current.parent) {
@@ -70,7 +71,7 @@ export function selectProvider(container: ContainerNode, keyName: string, consum
 }
 
 /** Finds the service for `keyName` that a consumer in `container` sees. A `perConsumer` registration without a service for the container gives the registration. */
-export function findProvider(container: ContainerNode, keyName: string, consumer?: ServiceNode): ServiceNode | undefined {
+export function findProvider(container: ContainerNode, keyName: string, consumer?: ResolutionConsumer): ServiceNode | undefined {
   const selection = selectProvider(container, keyName, consumer)
   return selection && (selection.provider ?? selection.registration)
 }

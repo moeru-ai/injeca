@@ -78,7 +78,7 @@ function lookup(scope: ContainerNode, name: string): ServiceNode | undefined {
 /** The providers that the edges of `service` select now, served or not. */
 function targetsOf(service: ServiceNode): ServiceNode[] {
   return service.edges.flatMap(edge => edge.candidates.flatMap((keyName) => {
-    const provider = findProvider(service.container, keyName, service)
+    const provider = findProvider(service.scope, keyName, service)
     return provider ? [provider] : []
   }))
 }
