@@ -116,9 +116,9 @@ export async function awaitWithdrawal(service: ServiceNode): Promise<void> {
     throw errorFrom(errors, `Withdrawal of '${service.name}' failed.`)
 }
 
-/** Withdraws a service or an invocation. Resolves `false` when it is already withdrawn. It is the `withdraw()` entry point. */
-export async function withdrawService(service: ServiceNode): Promise<boolean> {
-  const released = untracked(() => {
+/** Releases a service or an invocation. Returns `false` when it is already withdrawn. */
+export function releasePresent(service: ServiceNode): boolean {
+  return untracked(() => {
     // A stale registration cannot change the service or a newer service in the same slot.
     if (!service.signals.present())
       return false
@@ -126,9 +126,4 @@ export async function withdrawService(service: ServiceNode): Promise<boolean> {
     batch(() => releaseService(service))
     return true
   })
-  if (!released)
-    return false
-
-  await awaitWithdrawal(service)
-  return true
 }

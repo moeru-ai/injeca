@@ -57,6 +57,15 @@ export interface ReplaceOptions {
   signal?: AbortSignal
 }
 
+/** The options of `withdraw()` of a registration or an invocation. */
+export interface WithdrawOptions {
+  /**
+   * Ends the wait when the signal aborts, and rejects with the reason. The withdrawal continues. There is no default.
+   * The service gets a `wait-aborted` record in the observe stream when it did not finish its withdrawal. An aborted signal still starts the withdrawal.
+   */
+  signal?: AbortSignal
+}
+
 /**
  * The result of `provide`: the typed key of the service, with `withdraw()` and `replace()`.
  */
@@ -65,8 +74,11 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
    * Withdraws the service. Dependents stop first. Then the service runs its `stop` hooks and effect disposers.
    *
    * Resolves `false` for a stale registration and does not change any service. Rejects with the teardown errors.
+   *
+   * A call from a cleanup that the withdrawal waits for cannot wait: of the service, of a consumer service of it, or of a service that holds it.
+   * injeca finds such a call by the signal of the cleanup, or by the synchronous part of the cleanup. It warns, sends a `reentrant-call` record, and resolves `true` at once. The withdrawal continues.
    */
-  readonly withdraw: () => Promise<boolean>
+  readonly withdraw: (options?: WithdrawOptions) => Promise<boolean>
   /**
    * Replaces the instance of the service without a gap.
    *
@@ -82,6 +94,6 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
 export interface InvocationHandle {
   /** The name of the invocation. Graph queries, for example `graph(container).dependencies(key)` and `explain(key)`, accept it. */
   readonly key: string
-  /** Withdraws the invocation. Resolves `false` when it is already withdrawn. Rejects with the teardown errors. */
-  readonly withdraw: () => Promise<boolean>
+  /** Withdraws the invocation. Resolves `false` when it is already withdrawn. Rejects with the teardown errors. `options` work as for `withdraw()` of a registration. */
+  readonly withdraw: (options?: WithdrawOptions) => Promise<boolean>
 }

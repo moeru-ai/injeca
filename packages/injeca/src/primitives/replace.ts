@@ -1,13 +1,14 @@
 import type { RegistrationNode, ServiceDefinition, ServiceNode, SwapOutcome } from '../graph/graph'
 import type { PendingSwap } from '../reconciler/swap'
-import type { Registration } from '../types'
+import type { Registration, WithdrawOptions } from '../types'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
-import { cancelPending, cancelSuccessor, createService, currentService, publishService, readDefinition, releaseService, withdrawRegistration } from '../graph/nodes'
+import { cancelPending, cancelSuccessor, createService, currentService, publishService, readDefinition, releaseService } from '../graph/nodes'
 import { onAbort, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
 import { completeSwap, createSuccessor } from '../reconciler/swap'
+import { withdrawRegistration } from './withdraw'
 
 function outcomeResult(outcome: SwapOutcome, name: string): boolean {
   switch (outcome.kind) {
@@ -239,11 +240,11 @@ export function registrationOf(key: unknown): RegistrationNode | undefined {
 }
 
 /** Creates the public result of `provide`: the typed key with `withdraw()` and `replace()`. A transaction passes its own `withdraw`. */
-export function registrationApi(registration: RegistrationNode, overrides: { readonly withdraw?: () => Promise<boolean> } = {}): Registration<string, unknown, undefined> {
+export function registrationApi(registration: RegistrationNode, overrides: { readonly withdraw?: (options?: WithdrawOptions) => Promise<boolean> } = {}): Registration<string, unknown, undefined> {
   const api: Registration<string, unknown, undefined> = Object.freeze({
     key: registration.name,
     ...(registration.exclusive ? { exclusive: true } : {}),
-    withdraw: overrides.withdraw ?? (() => withdrawRegistration(registration)),
+    withdraw: overrides.withdraw ?? ((options?: WithdrawOptions) => withdrawRegistration(registration, options)),
     replace: ((option: unknown, options?: unknown) => replace(registration, option, options)) as Registration<string, unknown, undefined>['replace'],
   })
   registrations.set(api, registration)

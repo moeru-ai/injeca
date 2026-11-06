@@ -1,9 +1,9 @@
 import type { ContainerNode, RegistrationNode, ServiceDefinition, ServiceNode, TransactionEntry, TransactionNode } from '../graph/graph'
 import type { TransactionMembers } from '../reconciler/commit'
-import type { Container, DeclareOptions, KeyReference, Registration, Transaction, TransactionCommitOptions, TransactionProvide, TransactionReplace } from '../types'
+import type { Container, DeclareOptions, KeyReference, Registration, Transaction, TransactionCommitOptions, TransactionProvide, TransactionReplace, WithdrawOptions } from '../types'
 
 import { DuplicateServiceError, InvalidArgumentError, ReplaceWhileStoppingError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
-import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase, withdrawRegistration } from '../graph/nodes'
+import { assertActive, cancelPending, createRegistration, currentService, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase } from '../graph/nodes'
 import { slotOf } from '../graph/resolvers/resolvers'
 import { onAbort, readSignal } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
@@ -11,6 +11,7 @@ import { abortTransaction, buildMembers, orderMembers, rollbackMembers, startMem
 import { isExclusiveKey, normalizeName } from './keys'
 import { assertNoDuplicate, publishRegistration, serviceOf } from './provide'
 import { registrationApi, registrationOf, replaceRunning, replaceTemplate, takeOver } from './replace'
+import { withdrawRegistration } from './withdraw'
 
 function readName(key: unknown, action: string): string {
   let name: unknown
@@ -259,9 +260,9 @@ export function transaction(container: Container): Transaction {
   /**
    * The `withdraw()` of a registration from `tx.provide`. Before the commit, it removes the provide from the transaction and resolves `true`.
    * A declaration of the key stays, so the commit fails with `transaction-incomplete` unless the declaration is optional.
-   * During the commit, it waits for the commit, then withdraws the published service.
+   * During the commit, it waits for the commit, then withdraws the published service with `options`.
    */
-  const withdrawEntry = async (entry: TransactionEntry, registration: RegistrationNode): Promise<boolean> => {
+  const withdrawEntry = async (entry: TransactionEntry, registration: RegistrationNode, options: WithdrawOptions | undefined): Promise<boolean> => {
     if (state.state === 'open') {
       if (entry.registration !== registration)
         return false
@@ -284,7 +285,7 @@ export function transaction(container: Container): Transaction {
     if (state.state === 'committing')
       await state.settled
 
-    return withdrawRegistration(registration)
+    return withdrawRegistration(registration, options)
   }
 
   const provide = ((key: KeyReference, option: unknown): Registration<string, unknown, undefined> => {
@@ -306,7 +307,7 @@ export function transaction(container: Container): Transaction {
     entry.exported = definition.exported
     untracked(() => reserveKey(state, entry))
 
-    return registrationApi(registration, { withdraw: () => withdrawEntry(entry, registration) })
+    return registrationApi(registration, { withdraw: options => withdrawEntry(entry, registration, options) })
   }) as TransactionProvide
 
   const replace = ((key: KeyReference, option: unknown): void => {

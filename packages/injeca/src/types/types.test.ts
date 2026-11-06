@@ -1,5 +1,5 @@
 import type { Decision, FailDecision, HandledDecision, ServiceHook } from '../primitives/decision'
-import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus } from './index'
+import type { BuildContext, DependencyChange, DependencySnapshot, GraphService, LifecycleContext, ListenerEntry, OptionalValue, OwnerRecord, PolicyOptions, ProviderInfo, Registration, ResolveDependencyDeclaration, ServiceState, ServiceStatus, WithdrawOptions } from './index'
 
 import { describe, expectTypeOf, it } from 'vitest'
 
@@ -27,6 +27,7 @@ describe('call-site types', () => {
     expectTypeOf(llm.key).toEqualTypeOf<'airi.llm'>()
     expectTypeOf(resolve(app, { llm, shorthand, asyncShorthand })).resolves.toEqualTypeOf<{ llm: Llm, shorthand: number, asyncShorthand: string }>()
     expectTypeOf(llm.withdraw).returns.resolves.toEqualTypeOf<boolean>()
+    expectTypeOf(llm.withdraw).parameter(0).toEqualTypeOf<WithdrawOptions | undefined>()
   })
 
   it('infers each dependsOn value, and types an optional dependency as { value, status } | undefined', () => {

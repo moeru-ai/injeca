@@ -172,6 +172,7 @@ export type {
   TransactionProvide,
   TransactionReplace,
   WaitAbortedObserveRecord,
+  WithdrawOptions,
 } from './types'
 
 export const injeca = {

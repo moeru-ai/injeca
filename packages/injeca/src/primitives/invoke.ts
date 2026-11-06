@@ -1,9 +1,10 @@
 import type { BuildFunction, ServiceNode } from '../graph/graph'
-import type { Container, DependencyDeclarations, DependencyMap, InvocationHandle, InvokeOption, InvokeOptionWithKeys } from '../types'
+import type { Container, DependencyDeclarations, DependencyMap, InvocationHandle, InvokeOption, InvokeOptionWithKeys, WithdrawOptions } from '../types'
 
 import { InvalidArgumentError } from '../diagnostics/errors'
-import { assertActive, createService, nodeOf, readEdges, withdrawService } from '../graph/nodes'
+import { assertActive, createService, nodeOf, readEdges } from '../graph/nodes'
 import { batch, untracked } from '../helpers/signals'
+import { withdrawInvocation } from './withdraw'
 
 /** The loose shape of all invoke forms. The overloads check the types. */
 export type InvokeAnyOption = ((dependencies: never, context: never) => unknown) | { callback: (dependencies: never, context: never) => unknown, dependsOn?: unknown }
@@ -53,5 +54,5 @@ export function invokeIn(container: Container, option: InvokeAnyOption): Invocat
 
   container.logger.invoke(edges.map(edge => edge.keyName))
 
-  return Object.freeze({ key: name, withdraw: () => withdrawService(registered) })
+  return Object.freeze({ key: name, withdraw: (options?: WithdrawOptions) => withdrawInvocation(registered, options) })
 }
