@@ -72,6 +72,7 @@ export function explainService(service: ServiceNode): ServiceExplanation {
   }
 
   const status = service.signals.effective()
+  const successor = service.successor
   return Object.freeze({
     name: service.name,
     kind: service.kind === 'invocation' ? 'invocation' : 'service',
@@ -79,6 +80,7 @@ export function explainService(service: ServiceNode): ServiceExplanation {
     phase,
     ...withoutUndefined({ status: status?.status, reason: status?.reason, cause: status?.cause }),
     blockers: Object.freeze(blockers),
+    ...withoutUndefined({ replacement: successor?.signals.present() ? explainService(successor) : undefined }),
   })
 }
 
@@ -127,6 +129,11 @@ export function describeExplanations(explanations: readonly ServiceExplanation[]
       const reasons = explanation.blockers.map(describeBlocker)
       if (explanation.cause)
         reasons.push(`it is ${explanation.status ?? 'unavailable'}, because ${describeCause(explanation.cause)}`)
+      const { replacement } = explanation
+      if (replacement) {
+        const blockers = replacement.blockers.map(describeBlocker)
+        reasons.push(`its replacement is ${replacement.phase ?? 'missing'}${blockers.length > 0 ? ` (${blockers.join(', ')})` : ''}`)
+      }
       return `- ${explanation.name} is ${explanation.phase}${reasons.length > 0 ? `: ${reasons.join(', ')}` : ''}`
     })
     .join('\n')

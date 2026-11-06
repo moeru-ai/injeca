@@ -3,7 +3,8 @@ import type { BuildContext } from '../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ReplaceWhileStoppingError } from '../diagnostics/errors'
-import { provide, start, stop } from '../scoped'
+import { describeExplanations } from '../diagnostics/explain'
+import { graph, provide, start, stop } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, stateOf } from '../testing/helpers'
 
 describe('replace', () => {
@@ -251,5 +252,24 @@ describe('replace', () => {
     await llm.replace({ dependsOn: { config }, build: ({ dependsOn }) => build(dependsOn.config.model) })
     expect(build).toHaveBeenCalledTimes(1)
     expect(stateOf(app, llm).phase).toBe('running')
+  })
+
+  it('adds the pending successor to explain(), with its phase and blockers', async () => {
+    const app = createTestContainer()
+    const module = provide(app, 'module', () => 1)
+    await start(app)
+
+    void module.replace({ dependsOn: { missing: 'missing' }, build: () => 2 })
+    await drained(app)
+    expect(graph(app).explain('module')).toMatchObject({
+      phase: 'running',
+      blockers: [],
+      replacement: { name: 'module', phase: 'pending', blockers: [{ kind: 'missing-provider', dependency: 'missing', key: 'missing' }] },
+    })
+    expect(describeExplanations([graph(app).explain('module')])).toBe(`- module is running: its replacement is pending (no provider for 'missing' (missing))`)
+
+    provide(app, 'missing', () => 'here')
+    await drained(app)
+    expect(graph(app).explain('module')).not.toHaveProperty('replacement')
   })
 })

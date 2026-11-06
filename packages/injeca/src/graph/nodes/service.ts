@@ -132,6 +132,7 @@ export function createService(input: CreateServiceInput): ServiceNode {
     registration: input.registration,
     swap: input.swap,
     replacedBy: undefined,
+    successor: undefined,
     transaction: input.transaction,
     revision: 0,
     signals: {

@@ -244,6 +244,11 @@ export interface ServiceNode {
   swap: SwapState | undefined
   /** The service that replaced this one. */
   replacedBy: ServiceNode | undefined
+  /**
+   * The new service that waits to replace this one, until the swap or the end of the replacement.
+   * It comes from `replace()`, from a transaction, or from a make-before-break rebuild. For a `perConsumer` registration, it is the new registration.
+   */
+  successor: ServiceNode | undefined
   /** The transaction that builds this service. The reconciler does not touch the service until the transaction ends. */
   transaction: TransactionNode | undefined
   /** Increments when the service gets new options. Part of the epoch. */

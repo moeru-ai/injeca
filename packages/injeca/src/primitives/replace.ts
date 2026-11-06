@@ -46,6 +46,8 @@ export function createSuccessor(target: ServiceNode, definition: ServiceDefiniti
             return
 
           settled = true
+          if (target.successor === service)
+            target.successor = undefined
           onSettle(service!, result)
           outcome.resolve(result)
         },
@@ -53,6 +55,7 @@ export function createSuccessor(target: ServiceNode, definition: ServiceDefiniti
     })
     service.signals.demanded(target.signals.demanded())
     target.container.services.add(service)
+    target.successor = service
   })
 
   return { service: service!, outcome: outcome.promise }
@@ -124,6 +127,8 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
   const finish = (result: SwapOutcome): void => {
     settled = true
     template.swap = undefined
+    if (target.successor === template)
+      target.successor = undefined
     if (registration.pending === template)
       registration.pending = undefined
     outcome.resolve(result)
@@ -159,6 +164,7 @@ export function replaceTemplate(registration: RegistrationNode, target: ServiceN
     // `cancelPending` of a newer replacement, or a withdrawal, cancels this replacement.
     template.swap = { target, held: false, settle: abandon }
     registration.pending = template
+    target.successor = template
 
     for (const consumer of target.signals.consumers().values()) {
       if (!consumer.signals.serving())
