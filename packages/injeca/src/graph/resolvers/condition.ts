@@ -1,5 +1,5 @@
 import type { ProviderInfo, ResolutionCondition } from '../../types'
-import type { ServiceNode } from '../graph'
+import type { ResolutionConsumer, ServiceNode } from '../graph'
 
 import { untracked } from '../../helpers/signals'
 import { reportCallbackError } from '../observers'
@@ -19,7 +19,7 @@ export function providerInfo(registration: ServiceNode): ProviderInfo {
  * Tells whether `condition` accepts the provider registration.
  * A thrown error counts as `false` and goes to the observe stream of the consumer.
  */
-export function acceptsProvider(consumer: ServiceNode, keyName: string, condition: ResolutionCondition, registration: ServiceNode): boolean {
+export function acceptsProvider(consumer: ResolutionConsumer, keyName: string, condition: ResolutionCondition, registration: ServiceNode): boolean {
   let byProvider = verdicts.get(condition)
   if (!byProvider) {
     byProvider = new WeakMap()

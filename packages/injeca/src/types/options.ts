@@ -65,6 +65,8 @@ export interface Registration<Key, T, D extends DependencyMap | undefined> exten
 
 /** The result of `invoke`. */
 export interface InvocationHandle {
+  /** The name of the invocation. Graph queries, for example `graph(container).dependencies(key)` and `explain(key)`, accept it. */
+  readonly key: string
   /** Withdraws the invocation. Resolves `false` when it is already withdrawn. Rejects with the teardown errors. */
   readonly withdraw: () => Promise<boolean>
 }

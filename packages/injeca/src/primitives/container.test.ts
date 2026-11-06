@@ -910,14 +910,70 @@ describe('dispose', () => {
     await start(child)
 
     await dispose(parent)
-    // Child containers dispose at the same time as the parent services. Dependents stop first. The parent effects run last, in reverse order.
-    expect(order.indexOf('child service stop')).toBeLessThan(order.indexOf('parent service stop'))
-    expect(order.indexOf('child service stop')).toBeLessThan(order.indexOf('child effect'))
-    expect(order.slice(-2)).toEqual(['parent effect 2', 'parent effect 1'])
-    expect(order).toHaveLength(5)
+    // The child container disposes first, with its effects (G11). Then the parent services stop. The parent effects run last, in reverse order.
+    expect(order).toEqual(['child service stop', 'child effect', 'parent service stop', 'parent effect 2', 'parent effect 1'])
     expect(() => provide(parent, 'airi.llm', () => 'llm')).toThrow(BuildAfterDisposeError)
     expect(() => createTestContainer({ parent: child })).toThrow(BuildAfterDisposeError)
-    expect(() => effect(parent, () => {})).toThrow(BuildAfterDisposeError)
+  })
+
+  it('disposes child containers in reverse creation order, each one with its effects, before the parent services (G11)', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    await start(root)
+    const session = createTestContainer({ parent: root, owner: { kind: 'session' } })
+    const order: string[] = []
+    effect(session, () => () => {
+      order.push('session effect')
+    })
+    provide(session, 'session', ({ on, effect: instanceEffect }) => {
+      on('stop', () => order.push('session stop hook'))
+      instanceEffect(() => () => {
+        order.push('session instance effect')
+      })
+      return 'session'
+    })
+    await start(session)
+    for (const id of ['first', 'second']) {
+      const module = createTestContainer({ parent: session, owner: { kind: 'module', id } })
+      effect(module, () => () => {
+        order.push(`${id} module effect`)
+      })
+      provide(module, `module.${id}`, ({ on }) => {
+        on('stop', () => order.push(`${id} module stop hook`))
+        return id
+      })
+      await start(module)
+    }
+
+    await dispose(session)
+    expect(order).toEqual([
+      'second module stop hook',
+      'second module effect',
+      'first module stop hook',
+      'first module effect',
+      'session stop hook',
+      'session instance effect',
+      'session effect',
+    ])
+  })
+
+  it('runs the disposer of an effect at once when the disposal started or ended (G12)', async () => {
+    const app = createTestContainer()
+    const slow = deferred()
+    effect(app, () => () => slow.promise)
+    const disposal = dispose(app)
+
+    const during = vi.fn()
+    effect(app, () => during)
+    expect(during).toHaveBeenCalledTimes(1)
+
+    slow.resolve()
+    await disposal
+    const after = vi.fn()
+    effect(app, () => after)
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(() => effect(app, () => () => {
+      throw new Error('cleanup failed')
+    })).toThrow('cleanup failed')
   })
 
   it('keeps the identity of a single error', async () => {
@@ -954,7 +1010,8 @@ describe('dispose', () => {
 
     const result = await dispose(app).catch((error: unknown) => error)
     expect(result).toBeInstanceOf(AggregateError)
-    expect((result as AggregateError).errors).toEqual([serviceError, childError, effectError])
+    // The errors keep the order of the disposal: the child container first, then the services, then the effects (G11).
+    expect((result as AggregateError).errors).toEqual([childError, serviceError, effectError])
     expect(remaining).toHaveBeenCalledTimes(1)
   })
 

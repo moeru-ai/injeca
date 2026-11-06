@@ -6,7 +6,7 @@ import { causeOf } from '../graph/status'
 import { withoutUndefined } from '../helpers/without-undefined'
 
 /** The owners of conflicting declarations, in container order. The order of the registrations has no effect. */
-function ownersOf(declarations: readonly ServiceNode[]): readonly OwnerRecord[] {
+export function ownersOf(declarations: readonly ServiceNode[]): readonly OwnerRecord[] {
   return Object.freeze([...declarations].sort((a, b) => a.container.seq - b.container.seq).map(declaration => declaration.container.owner))
 }
 

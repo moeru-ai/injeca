@@ -68,6 +68,8 @@ describe('superseded runs', () => {
 
     speechStartGate.resolve()
     await withdrawal
+    // The withdrawal does not wait for the start run (G2). The late decision arrives after it.
+    await drained(app)
     // The fail decision is ignored. The service waits for a provider again. It is not failed.
     expect(stateOf(app, 'voice.speech').phase).toBe('pending')
     expect(records).toContainEqual(expect.objectContaining({ type: 'decision', key: 'voice.speech', hook: 'start', decision: 'fail', ignored: true }))

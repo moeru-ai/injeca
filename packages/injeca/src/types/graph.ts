@@ -1,6 +1,6 @@
 import type { Container } from './container'
-import type { KeyReference, ServiceMetadata } from './keys'
-import type { OwnerRecord, ServiceExplanation, ServicePhase, ServiceStatus } from './service'
+import type { ConditionalDependency, DependencyDeclaration, DependencyMap, FallbackDependency, KeyReference, OptionalDependency, ProvidedBy, ProvidedKey, ServiceMetadata } from './keys'
+import type { OwnerRecord, ServiceExplanation, ServicePhase, ServiceStatus, StatusCause } from './service'
 
 /** One service, invocation, or declared service in a graph query result. */
 export interface GraphService {
@@ -89,6 +89,46 @@ export interface Graph {
   readonly cycles: () => readonly (readonly GraphService[])[]
   /** The services that a proposed change stops, rebuilds, or notifies. It runs on a copy of the graph. */
   readonly impact: (change: ImpactChange) => ImpactResult
-  /** Why the service of `key` is not `running`: missing, conflicting, rejected, failed, or unavailable dependencies. */
-  readonly explain: (key: KeyReference) => ServiceExplanation | undefined
+  /**
+   * Why the service of `key` is not `running`: missing, conflicting, rejected, failed, or unavailable dependencies.
+   * A key without a service gives `phase: undefined` and one `missing-provider` blocker.
+   */
+  readonly explain: (key: KeyReference) => ServiceExplanation
 }
+
+/** The value type of a dependency declaration for `peek`. */
+export type PeekValue<D>
+  = D extends OptionalDependency<infer T>
+    ? T
+    : D extends FallbackDependency<infer T>
+      ? T
+      : D extends ConditionalDependency<infer T>
+        ? T
+        : D extends ProvidedKey<string, infer T, DependencyMap | undefined>
+          ? T
+          : D extends ProvidedBy<infer T>
+            ? T
+            : unknown
+
+/**
+ * The result of `peek`: the value now, or the reason why no value is available now.
+ *
+ * - `resolved`: a running provider serves the key with the status `ready` or `degraded`.
+ * - `unavailable`: a running provider has the effective status `unavailable`. `reason` and `cause` tell why.
+ * - `not-running`: a provider exists, but it does not run. `phase` is its phase. A `failed` provider has `error`.
+ * - `rejected`: a resolution condition rejected the provider.
+ * - `conflict`: the key is exclusive and has more than one declaration. `owners` lists them.
+ * - `missing`: no provider exists.
+ *
+ * `key` is the key name of the provider. For `firstAvailable`, it is the selected key, or the first key when no key has a provider.
+ */
+export type PeekResult<T>
+  = | { readonly kind: 'resolved', readonly key: string, readonly owner: OwnerRecord, readonly value: T, readonly status: Exclude<ServiceStatus, 'unavailable'>, readonly instanceId: string }
+    | { readonly kind: 'unavailable', readonly key: string, readonly owner: OwnerRecord, readonly instanceId: string, readonly reason?: string, readonly cause?: StatusCause }
+    | { readonly kind: 'not-running', readonly key: string, readonly owner: OwnerRecord, readonly phase: ServicePhase, readonly error?: unknown }
+    | { readonly kind: 'rejected', readonly key: string, readonly owner: OwnerRecord, readonly metadata: ServiceMetadata }
+    | { readonly kind: 'conflict', readonly key: string, readonly owners: readonly OwnerRecord[] }
+    | { readonly kind: 'missing', readonly key: string }
+
+/** A dependency declaration that `peek` reads. An `optional` marker has no effect. */
+export type PeekDependency = DependencyDeclaration

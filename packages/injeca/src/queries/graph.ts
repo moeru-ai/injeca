@@ -273,14 +273,18 @@ export function graph(container: Container): Graph {
       return Object.freeze({ stopped: sorted(result.stopped), rebuilt: sorted(result.rebuilt), notified: sorted(result.notified) })
     }),
 
-    explain: (key: KeyReference): ServiceExplanation | undefined => untracked(() => {
+    explain: (key: KeyReference): ServiceExplanation => untracked(() => {
       const name = readKey(key, 'explain')
       const service = lookup(scope, name)
       if (service)
         return explainService(service)
 
       const declared = declaredOf(scope).find(({ entry }) => entry.name === name)
-      return declared && Object.freeze({ name, kind: 'service', owner: declared.container.owner, phase: 'declared', blockers: Object.freeze([]) })
+      if (declared)
+        return Object.freeze({ name, kind: 'service', owner: declared.container.owner, phase: 'declared', blockers: Object.freeze([]) })
+
+      // No service exists for the key. A consumer in the container waits for a provider.
+      return Object.freeze({ name, kind: 'service', owner: scope.owner, phase: undefined, blockers: Object.freeze([Object.freeze({ kind: 'missing-provider', dependency: name, key: name })]) })
     }),
   })
 }

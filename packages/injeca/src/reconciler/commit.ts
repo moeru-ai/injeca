@@ -2,6 +2,7 @@ import type { InstanceNode, ServiceNode, TransactionNode } from '../graph/graph'
 import type { ResolutionCondition } from '../types'
 import type { SnapshotEntry } from './snapshot'
 
+import { releaseReservations } from '../graph/nodes'
 import { acceptsProvider } from '../graph/resolvers/condition'
 import { inConflict } from '../graph/resolvers/exclusive'
 import { resolveKey } from '../graph/resolvers/plain'
@@ -178,6 +179,7 @@ export function abortTransaction(transaction: TransactionNode, error: unknown): 
   if (!committing) {
     transaction.container.transactions.delete(transaction)
     transaction.settled = Promise.resolve()
+    releaseReservations(transaction)
   }
 
   return transaction.settled ?? Promise.resolve()

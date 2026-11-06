@@ -95,6 +95,9 @@ export interface InstanceNode {
   disposed: boolean
 }
 
+/** The consumer side of a resolution: a service, or a read such as `peek` that has no service. */
+export type ResolutionConsumer = Pick<ServiceNode, 'container' | 'name'>
+
 /** The context that the reconciler creates for each build. The build function of a service adapts it. */
 export interface RawBuildContext {
   readonly container: Container
@@ -150,6 +153,13 @@ export interface SwapState {
   readonly target: ServiceNode
   /** Settles the `replace` call. Only the first call has an effect. */
   readonly settle: (outcome: SwapOutcome) => void
+  /**
+   * Set for a consumer service of a `perConsumer` replacement. The service does not swap in alone when it completes `start`.
+   * It calls `ready`, and the replacement swaps all consumer services in one batch.
+   */
+  readonly ready?: (service: ServiceNode) => void
+  /** `true` after the service completed `start` and waits for the batch swap of its replacement. */
+  held: boolean
 }
 
 /**
@@ -178,6 +188,8 @@ export interface ServiceSignals {
   readonly instance: WritableSignal<InstanceNode | undefined>
   /** `true` when a `resolve` call or an active dependent needs the service before `start()`. */
   readonly demanded: WritableSignal<boolean>
+  /** The `watch` and `waitFor` subscriptions that demand a consumer service of a `perConsumer` registration. A subscription removes itself when it ends. `stop()` clears the set. */
+  readonly subscribers: WritableSignal<ReadonlySet<object>>
   /** `true` when the service converges: its container is started, or something demands it. */
   readonly active: () => boolean
   readonly serving: () => boolean
@@ -227,6 +239,11 @@ export interface ServiceNode {
   parkedEpoch: string | undefined
   /** The error that moved the service to `failed`. */
   failure: { readonly error: unknown } | undefined
+  /**
+   * The demanders of a consumer service that already got a build since the service last reached `running`.
+   * A failed consumer service builds again on the demand of a new demander, but not again for the same demander. So a waiting dependent cannot cause a retry loop.
+   */
+  readonly demanders: Set<object>
   /** The teardown errors that the withdrawal reports. */
   readonly teardownErrors: unknown[]
   /** Resolves with the teardown errors when the service is `withdrawn`. */
@@ -257,7 +274,9 @@ export interface TransactionEntry {
   target: RegistrationNode | undefined
   /** The registration that `tx.provide` returned. */
   registration: RegistrationNode | undefined
-  readonly exclusive: boolean
+  exclusive: boolean
+  /** The declaration that reserves an exclusive key until the commit or the abort. See `nodes/reservation.ts`. */
+  reservation: ServiceNode | undefined
 }
 
 export interface TransactionNode {

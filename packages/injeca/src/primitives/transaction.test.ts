@@ -202,3 +202,110 @@ describe('transactions', () => {
     expect(build).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('withdraw before the commit (B4)', () => {
+  it('removes the provide from the transaction, so the declared key fails the commit', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const build = vi.fn(() => 'status')
+    const tx = transaction(app)
+    tx.declare(statusKitKey)
+    const status = tx.provide(statusKitKey, build)
+
+    await expect(status.withdraw()).resolves.toBe(true)
+    await expect(status.withdraw()).resolves.toBe(false)
+    await expect(tx.commit()).rejects.toBeInstanceOf(TransactionIncompleteError)
+    expect(build).not.toHaveBeenCalled()
+    expect(graph(app).services()).toEqual([])
+  })
+
+  it('drops a provide without a declaration, and keeps an optional declaration', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const tx = transaction(app)
+    tx.declare(statusKitKey, { optional: true })
+    const status = tx.provide(statusKitKey, () => 'status')
+    const character = tx.provide(characterKey, () => 'character')
+    tx.provide('kept', () => 'kept')
+
+    await expect(status.withdraw()).resolves.toBe(true)
+    await expect(character.withdraw()).resolves.toBe(true)
+    await tx.commit()
+    await drained(app)
+    expect(graph(app).services().map(service => `${service.key}:${service.phase}`)).toEqual(['kept:running'])
+    // The key is free again after the withdrawal.
+    provide(app, characterKey, () => 'other')
+  })
+
+  it('withdraws the published service when it is called during the commit', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const gate = deferred()
+    const tx = transaction(app)
+    const status = tx.provide(statusKitKey, () => gate.promise.then(() => 'status'))
+    const committed = tx.commit()
+    const withdrawn = status.withdraw()
+    gate.resolve()
+    await committed
+
+    await expect(withdrawn).resolves.toBe(true)
+    await drained(app)
+    expect(graph(app).services()).toEqual([])
+  })
+})
+
+describe('declare reserves the key (G5)', () => {
+  it('fails another provide of the key in the same container before the commit or the abort', async () => {
+    const app = createTestContainer()
+    await start(app)
+    const tx = transaction(app)
+    tx.declare(statusKitKey)
+
+    expect(() => provide(app, statusKitKey, () => 'other')).toThrow(DuplicateServiceError)
+    expect(() => transaction(app).declare(statusKitKey)).toThrow(DuplicateServiceError)
+    expect(() => transaction(app).provide(statusKitKey, () => 'other')).toThrow(DuplicateServiceError)
+
+    await tx.abort()
+    provide(app, statusKitKey, () => 'other')
+    await drained(app)
+    expect(phaseOf(app, statusKitKey)).toBe('running')
+  })
+
+  it('puts a provider of an exclusive key in another container of the area in conflict until the abort', async () => {
+    const kitKey = defineKey<string>('kit.exclusive', { exclusive: true })
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const child = createTestContainer({ parent: root, owner: { kind: 'extension' } })
+    await start(root)
+    await start(child)
+    const build = vi.fn(() => 'child kit')
+    const tx = transaction(root)
+    tx.declare(kitKey)
+
+    provide(child, kitKey, build)
+    await drained(root)
+    expect(phaseOf(child, kitKey)).toBe('conflict')
+    expect(build).not.toHaveBeenCalled()
+    expect(graph(child).explain(kitKey)?.blockers).toEqual([{ kind: 'conflict', key: 'kit.exclusive', owners: [{ kind: 'host' }, { kind: 'extension' }] }])
+
+    await tx.abort()
+    await drained(root)
+    expect(phaseOf(child, kitKey)).toBe('running')
+  })
+
+  it('keeps the conflict after the commit, because both declarations are published', async () => {
+    const kitKey = defineKey<string>('kit.exclusive', { exclusive: true })
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const child = createTestContainer({ parent: root, owner: { kind: 'extension' } })
+    await start(root)
+    await start(child)
+    const tx = transaction(root)
+    tx.declare(kitKey)
+    tx.provide(kitKey, () => 'root kit')
+    provide(child, kitKey, () => 'child kit')
+
+    await tx.commit()
+    await drained(root)
+    expect(phaseOf(root, kitKey)).toBe('conflict')
+    expect(phaseOf(child, kitKey)).toBe('conflict')
+  })
+})

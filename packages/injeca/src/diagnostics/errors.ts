@@ -8,6 +8,7 @@ export type InjecaErrorCode
     | 'invalid-argument'
     | 'invalid-decision'
     | 'reentrant-dispose'
+    | 'service-failed'
     | 'replace-while-stopping'
     | 'stale-registration'
     | 'start-timeout'
@@ -138,7 +139,20 @@ export class StartTimeoutError extends InjecaError {
   }
 }
 
-/** `waitFor()` did not match before its configured timeout. */
+/** `waitFor()` found the service in `failed`, or waiting for a required provider in `failed`. `cause` is the failure. */
+export class ServiceFailedError extends InjecaError {
+  declare readonly code: 'service-failed'
+  /** The key name that the caller waited for. */
+  readonly key: string
+
+  constructor(message: string, key: string, options?: InjecaErrorOptions) {
+    super('service-failed', message, options)
+    this.name = 'ServiceFailedError'
+    this.key = key
+  }
+}
+
+/** `waitFor()` or `resolve()` did not match before its configured timeout. */
 export class WaitTimeoutError extends InjecaError {
   declare readonly code: 'wait-timeout'
 

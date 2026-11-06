@@ -173,6 +173,7 @@ provide(container, 'modules:camera', {
 - When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides. Without it, the result is `fail` with a `HookTimeoutError` (`hook-timeout`).
 - `onTimeout` runs synchronously. `context.decide` has the methods of the hook that timed out.
 - After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container cannot block that disposal.
+- `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 
 ## Changes at run time
 
@@ -212,6 +213,7 @@ await tts.replace(() => createTtsV2())
 ```
 
 - The swap is one batch. It occurs only after the new instance completes `start`. The new instance is `ready`.
+- For a `perConsumer` registration, each running consumer gets a new instance first. The swap of all consumers is one batch, after each new instance completes `start`. If one fails, no consumer changes.
 - If the new `build` or `start` fails, `replace()` rejects and the old instance does not change. This is also the usual fix for an `unavailable` provider.
 - The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild.
 - A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A service in `stopping` rejects with `ReplaceWhileStoppingError`.
@@ -236,6 +238,8 @@ await tx.commit()
 - A service whose dependencies are not available goes to `pending`. That is not a failure.
 - A declared service without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
 - `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
+- `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateServiceError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
+- `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
 
 ## Keys without a provider
 
@@ -344,6 +348,8 @@ await dispose(plugin)
 ```
 
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects. A disposed container cannot be used again.
+- `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the services of the parent stop, and then its effects run.
+- `effect(container, setup)` after the disposal started runs the disposer at once.
 - `start(container, { timeoutMs })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
 - A service with a missing provider, or in a dependency cycle, stays `pending`. Use `timeoutMs` to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
@@ -352,6 +358,8 @@ await dispose(plugin)
 ### Per-consumer services
 
 `perConsumer: true` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container. The instance disposes with the consumer container.
+
+A failed consumer instance builds again on the next demand from its container: a new `resolve`, `watch`, or `waitFor` call, or a dependent that starts to wait. Each demander gets one new build for each failure.
 
 ```ts
 const hostClient = injeca.provide('host:client', {
@@ -376,7 +384,23 @@ const stopObserving = observe(container, (record) => {})
 ```
 
 - `watch` sends the current state at once, then each change, in order.
+- `waitFor` rejects with a `ServiceFailedError` (`service-failed`) when the service failed, or waits for a required provider that failed. Its `cause` is the failure.
+- For a `perConsumer` key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
 - `observe` sends each phase change, status change, decision, and hook timeout in the container and its children.
+
+`peek` reads a value now, without a wait, and never builds anything. `resolve` takes `signal` and `timeoutMs` to stop a wait:
+
+```ts
+import { peek, resolve, where } from 'injeca'
+
+const result = peek(container, where(llmKey, ({ metadata }) => metadata.version === '2'))
+if (result.kind === 'resolved')
+  result.value.chat()
+else
+  console.info(result.kind) // 'missing', 'rejected', 'conflict', 'not-running', or 'unavailable'
+
+const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 }) // rejects with WaitTimeoutError
+```
 
 ### Graph queries
 
@@ -392,7 +416,7 @@ queries.dependencies(server) // the direct edges of a service
 queries.dependents(config) // the services that use a service now
 queries.order() // providers before their dependents
 queries.cycles() // each dependency cycle
-queries.explain(server) // why a service is not running
+queries.explain(server) // why a service is not running, also for a key without a provider
 queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }
 ```
 
@@ -444,7 +468,7 @@ Other differences:
 
 - `start()` waits for a missing provider. 0.2 threw an error. Use `start({ timeoutMs })` to fail after a time.
 - `resolve()` waits for a missing provider too. Before `start()`, it builds the services that it needs, with their `start` hooks.
-- `invoke()` returns a handle with `withdraw()`. Its callback runs again when a required dependency gets a new instance.
+- `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. Its callback runs again when a required dependency gets a new instance.
 
 ## License
 

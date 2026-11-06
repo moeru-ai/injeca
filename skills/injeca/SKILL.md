@@ -200,6 +200,23 @@ queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notifie
 
 Graph queries are pure reads. Use `explain()` for diagnostics and `impact()` to preview an action.
 
+## Reading without waiting
+
+```ts
+import { peek, resolve } from 'injeca'
+
+const result = peek(container, llmKey) // never builds or waits
+if (result.kind === 'resolved')
+  use(result.value)
+else
+  console.info(result.kind) // missing, rejected, conflict, not-running, or unavailable
+
+const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
+```
+
+- `waitFor` rejects with `ServiceFailedError` (`service-failed`) when the service fails.
+- `invoke()` returns `{ key, withdraw }`. Graph queries accept the key.
+
 ## Key rules
 
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.

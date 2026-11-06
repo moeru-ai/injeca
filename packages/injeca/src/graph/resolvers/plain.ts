@@ -1,5 +1,5 @@
 import type { ResolutionCondition } from '../../types'
-import type { DependencyEdge, Resolution, ServiceNode } from '../graph'
+import type { DependencyEdge, Resolution, ResolutionConsumer } from '../graph'
 
 import { acceptsProvider } from './condition'
 import { selectProvider } from './resolvers'
@@ -8,7 +8,7 @@ import { selectProvider } from './resolvers'
  * Resolves one key name: the selected provider, and its instance when the provider serves.
  * A provider in conflict, or one that `condition` rejects, does not resolve.
  */
-export function resolveKey(consumer: ServiceNode, keyName: string, condition?: ResolutionCondition): Resolution {
+export function resolveKey(consumer: ResolutionConsumer, keyName: string, condition?: ResolutionCondition): Resolution {
   const selection = selectProvider(consumer.container, keyName, consumer)
   if (!selection)
     return { kind: 'missing' }
@@ -30,7 +30,7 @@ export function resolveKey(consumer: ServiceNode, keyName: string, condition?: R
 }
 
 /** Resolves a plain or an optional edge. It has one candidate key. */
-export function resolvePlain(consumer: ServiceNode, edge: DependencyEdge): Resolution {
+export function resolvePlain(consumer: ResolutionConsumer, edge: DependencyEdge): Resolution {
   const [keyName] = edge.candidates
   return keyName === undefined ? { kind: 'missing' } : resolveKey(consumer, keyName, edge.condition)
 }

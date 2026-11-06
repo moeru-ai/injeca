@@ -1,4 +1,4 @@
-import type { DependencyEdge, Resolution, ServiceNode } from '../graph'
+import type { DependencyEdge, Resolution, ResolutionConsumer } from '../graph'
 
 import { resolveKey } from './plain'
 import { isAvailable } from './resolvers'
@@ -8,7 +8,7 @@ import { isAvailable } from './resolvers'
  * If no serving candidate is available, the first serving candidate stays selected, so that a running dependent does not lose it.
  * Without a serving candidate, the edge reports the first candidate that exists.
  */
-export function resolveFallback(consumer: ServiceNode, edge: DependencyEdge): Resolution {
+export function resolveFallback(consumer: ResolutionConsumer, edge: DependencyEdge): Resolution {
   let firstUnresolved: Resolution | undefined
   let firstServing: Resolution | undefined
   for (const keyName of edge.candidates) {

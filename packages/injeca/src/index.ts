@@ -19,6 +19,7 @@ export {
   InvalidDecisionError,
   ReentrantDisposeError,
   ReplaceWhileStoppingError,
+  ServiceFailedError,
   StaleRegistrationError,
   StartTimeoutError,
   TransactionIncompleteError,
@@ -72,6 +73,7 @@ export {
   listen,
   listeners,
   optional,
+  peek,
   provide,
   resolve,
   start,
@@ -80,7 +82,7 @@ export {
   where,
 } from './scoped'
 
-export type { StartOptions } from './scoped'
+export type { ResolveOptions, StartOptions } from './scoped'
 export type {
   BuildContext,
   ConditionalDependency,
@@ -131,6 +133,9 @@ export type {
   OptionalValue,
   OwnerRecord,
   OwnerValue,
+  PeekDependency,
+  PeekResult,
+  PeekValue,
   PhaseObserveRecord,
   PolicyOptions,
   ProviderInfo,
