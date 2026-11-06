@@ -6,7 +6,7 @@ description: >-
   go.uber.org/fx and go.uber.org/dig. Use this skill when the user imports from 'injeca', mentions
   injeca, wires services with start and stop hooks, manages startup and shutdown order, adds or
   withdraws or replaces services at run time, uses transactions, exclusive keys, or graph queries,
-  configures start retries and hook timeouts, builds a plugin system on a container, or migrates
+  configures start retries, hook timeouts, and AbortSignal cancellation, builds a plugin system on a container, or migrates
   from the injeca 0.2 `lifecycle` key. Also use it when the user asks about class-free alternatives to
   tsyringe, inversify, or awilix.
 license: MIT
@@ -132,6 +132,26 @@ injeca.provide('modules:camera', {
 - injeca has no built-in delay, limit, or timeout. Without `maxAttempts`, retries continue. At the limit, the service stops, then goes to `failed`. `start()` or `replace()` moves it out.
 - A withdrawn required dependency or `stop()` cancels the wait and stops the service.
 - A timeout records a `timeout` record in `observe`, then `onTimeout` decides. Without it, the result is `fail` with `hook-timeout`. A `stop` timeout ends a stuck cleanup, and the disposal continues.
+- At a `start` or `stop` timeout, the `signal` of the hook aborts with the `HookTimeoutError`.
+
+## Cancellation
+
+Each call that can wait takes `{ signal }`, a standard `AbortSignal`. There is no `timeoutMs` option. Make a timeout signal on the container clock with `timeout(container, ms)`, never with `AbortSignal.timeout()`:
+
+```ts
+import { dispose, resolve, start, timeout, withTimeout } from 'injeca'
+
+await start(container, { signal: timeout(container, 10_000) }) // StartTimeoutError with explanations
+const { llm } = await resolve(container, { llm: llmKey }, { signal: withTimeout(request.signal, 5_000, container) })
+await registration.replace(next, { signal }) // false when the signal aborts before the swap
+await tx.commit({ signal }) // aborts and rolls back before the publish
+await dispose(container, { signal: timeout(container, 5_000) })
+```
+
+- A timeout reason has `name === 'TimeoutError'`. `resolve` and `waitFor` turn it into `WaitTimeoutError` (`wait-timeout`). `start` turns it into `StartTimeoutError` (`start-timeout`). Another reason rejects as it is.
+- `start`, `stop`, and `dispose` stop only the wait. The services keep converging, and the cleanups keep running. `stop` and `dispose` send a `wait-aborted` record for each service that did not stop.
+- After an aborted `dispose`, the container stays in `disposing`. Call `dispose(container)` again to wait for the result.
+- An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
 
 ## Run-time changes
 
@@ -188,14 +208,14 @@ injeca.provide(llmKey, () => createLocalLlm()) // the build result must match Ll
 ## Status and reading state
 
 ```ts
-import { observe, waitFor, watch } from 'injeca'
+import { observe, timeout, waitFor, watch } from 'injeca'
 
 build: ({ setStatus }) => {
   setStatus('unavailable', { reason: 'reconnecting' })
 }
 
 watch(container, server, ({ phase, status }) => {})
-await waitFor(container, server, { status: 'ready', timeoutMs: 5_000 })
+await waitFor(container, server, { status: 'ready', signal: timeout(container, 5_000) })
 observe(container, record => {})
 ```
 
@@ -219,7 +239,7 @@ Graph queries are pure reads. Use `explain()` for diagnostics and `impact()` to 
 ## Reading without waiting
 
 ```ts
-import { peek, resolve } from 'injeca'
+import { peek, resolve, timeout } from 'injeca'
 
 const result = peek(container, llmKey) // never builds or waits
 if (result.kind === 'resolved')
@@ -227,7 +247,7 @@ if (result.kind === 'resolved')
 else
   console.info(result.kind) // missing, rejected, conflict, not-running, or unavailable
 
-const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
+const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(container, 5_000) })
 ```
 
 - `waitFor` rejects with `ServiceFailedError` (`service-failed`) when the service fails.
@@ -237,11 +257,11 @@ const { llm } = await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
 
 1. Use typed keys from `provide()` or `defineKey()` in `dependsOn`. Do not use `any`.
 2. Put start and stop logic in `on('start')` and `on('stop')`. The `lifecycle` key of 0.2 does not exist.
-3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start({ timeoutMs })` to fail with an explanation.
+3. A missing provider or a cycle keeps a service `pending`. `start()` waits. Use `start(container, { signal: timeout(container, ms) })` to fail with an explanation.
 4. A cleanup must not await the disposal of its own container. A configured `stop` timeout ends such a cleanup.
 5. Code that keeps a dependency must be a service or an invocation, so that it converges. `resolve()` is for one-time code.
 6. Use `replace()`, not `withdraw()` and `provide()`, to change a service without a gap.
-7. Do not use `Math.random` or real timers in retry tests. Pass `clock` and `random` to `createContainer`.
+7. Do not use `Math.random` or real timers in retry and timeout tests. Pass `clock` and `random` to `createContainer`. `timeout(container, ms)` uses that clock.
 
 ## Documentation
 
