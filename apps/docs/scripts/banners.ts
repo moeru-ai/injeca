@@ -50,6 +50,7 @@ const origin = `http://127.0.0.1:${address.port}`
 
 const work = mkdtempSync(join(tmpdir(), 'injeca-banners-'))
 mkdirSync(out, { recursive: true })
+mkdirSync(join(root, 'public'), { recursive: true })
 
 /** A minimal client of the Chrome DevTools protocol over the WebSocket that Node has built in. */
 class DevTools {
@@ -174,8 +175,20 @@ async function screenshot(devtools: DevTools, file: string): Promise<string> {
   return file
 }
 
-/** The hero: one still frame, at 2x. */
+/** The scenes that are one still frame. The others are comparisons, and animated. */
+const STILLS = new Set(['hero', 'og', 'features', 'phases'])
+
+/** A still frame at 2x, as WebP. The Open Graph image is a PNG at 1x in the public folder of the page, in the light theme only. */
 async function still(scene: string, theme: string): Promise<void> {
+  if (scene === 'og') {
+    if (theme !== 'light')
+      return
+    await withPage(scene, theme, 1, async (devtools) => {
+      const png = await screenshot(devtools, join(root, 'public', 'og.png'))
+      console.info(png)
+    })
+    return
+  }
   await withPage(scene, theme, 2, async (devtools) => {
     const png = await screenshot(devtools, join(work, `${scene}-${theme}.png`))
     const webp = join(out, `${scene}-${theme}.webp`)
@@ -229,7 +242,7 @@ try {
   for (const theme of THEMES) {
     const only = process.env.BANNERS?.split(',')
     for (const scene of Object.keys(CAPTURE_SIZES).filter(scene => !only || only.includes(scene)))
-      await (scene === 'hero' ? still : animated)(scene, theme)
+      await (STILLS.has(scene) ? still : animated)(scene, theme)
   }
 }
 finally {
