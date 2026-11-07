@@ -26,6 +26,20 @@ Pure functional dependency injection for TypeScript. Units declare their depende
 
 **[Open the scenario lab](https://injeca.moeru.ai/)** to see what each primitive does to a graph. The lab runs injeca in the page and steps through each scenario, so every frame shows real behavior. Its sandbox lets you replace, withdraw, and set the status of units yourself, with a preview from `graph().impact()`. The lab is in English and Simplified Chinese ([简体中文](https://injeca.moeru.ai/?lang=zh-Hans)).
 
+<picture>
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/features-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/features-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="The seven things that injeca handles, as seven cards. Dependency injection: provide(), dependsOn, and on('start'). Swap at run time: replace(), withdraw(), and on('dependency-change'). Status awareness: setStatus(), watch(), and waitFor(). Isolated containers: createContainer(), isolate, and visibility. Transactions with rollback: transaction() and tx.commit(). Ask why: graph().explain(), graph().impact(), and observe(). Built for testing: manualClock(), drained(), and createHookContext()." src="./docs/assets/banners/features-light.webp" />
+</picture>
+
 ## Getting started
 
 ```sh
@@ -63,7 +77,7 @@ await injeca.stop()
 - `provide` returns a typed key, and `dependsOn` takes keys. `greeter` gets `config` without an import of its value.
 - `start()` builds `config` first, then `greeter`. `stop()` stops them in reverse.
 
-Next, read [Wire units together](#wire-units-together-without-classes-or-decorators) for keys and the lifecycle, or open [the scenario lab](https://injeca.moeru.ai/) to watch each primitive work.
+Next, read [Dependency injection](#dependency-injection) for keys and the lifecycle, or open [the scenario lab](https://injeca.moeru.ai/) to watch each primitive work.
 
 ### Agent Skills
 
@@ -77,28 +91,13 @@ npx skills add moeru-ai/injeca
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 ## Table of Contents
 
-- [Wire units together, without classes or decorators](#wire-units-together-without-classes-or-decorators)
-  - [How a unit moves](#how-a-unit-moves)
-- [Start and stop resources in the right order](#start-and-stop-resources-in-the-right-order)
-  - [Call dispose from a cleanup](#call-dispose-from-a-cleanup)
-- [Retry a start that fails, with a limit](#retry-a-start-that-fails-with-a-limit)
-  - [Limit how long a hook runs](#limit-how-long-a-hook-runs)
-- [Stop waiting after a time limit](#stop-waiting-after-a-time-limit)
-- [Swap a dependency while the app runs](#swap-a-dependency-while-the-app-runs)
-  - [Add and remove units after start](#add-and-remove-units-after-start)
-- [Know when a dependency is degraded or down](#know-when-a-dependency-is-degraded-or-down)
-- [Depend on something a plugin provides later](#depend-on-something-a-plugin-provides-later)
-  - [Allow only one provider of a key](#allow-only-one-provider-of-a-key)
-  - [Accept only some providers](#accept-only-some-providers)
-- [Load a plugin's units all or nothing](#load-a-plugins-units-all-or-nothing)
-- [Give each plugin its own container](#give-each-plugin-its-own-container)
-  - [Share a plugin unit with other plugins](#share-a-plugin-unit-with-other-plugins)
-  - [Build one instance for each container](#build-one-instance-for-each-container)
-  - [Turn on logging](#turn-on-logging)
-- [Find out why a unit is not running, and preview a change](#find-out-why-a-unit-is-not-running-and-preview-a-change)
-  - [Read state without waiting](#read-state-without-waiting)
-  - [Listener registry](#listener-registry)
-- [Test timeouts and retries without waiting](#test-timeouts-and-retries-without-waiting)
+- [Dependency injection](#dependency-injection)
+- [Swap at run time](#swap-at-run-time)
+- [Status awareness](#status-awareness)
+- [Isolated containers](#isolated-containers)
+- [Transactions with rollback](#transactions-with-rollback)
+- [Ask why](#ask-why)
+- [Built for testing](#built-for-testing)
 - [API at a glance](#api-at-a-glance)
 - [Packages](#packages)
 - [Migration from 0.2](#migration-from-02)
@@ -110,9 +109,14 @@ npx skills add moeru-ai/injeca
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-## Wire units together, without classes or decorators
+## Dependency injection
 
-Yes. `provide()` registers a unit and returns a typed key. Another unit lists that key in `dependsOn`, and injeca builds it after its dependencies, with typed values. No unit imports the value of another.
+Most programs are a set of parts that need each other: a config, a database, and a server that uses both. In injeca, each part is a unit. A unit names what it depends on, builds its value from them, and owns the hooks that start and stop it. injeca works out the order, so you write no wiring code and no teardown list.
+
+<details>
+<summary><strong>How do I wire units together, without classes or decorators?</strong></summary>
+
+Register each unit with `provide()`. It returns a typed key. Another unit lists that key in `dependsOn`, and injeca builds it after its dependencies, with typed values. No unit imports the value of another.
 
 ```ts
 import { createServer } from 'node:http'
@@ -130,7 +134,7 @@ const server = provide(container, 'server', {
   build: ({ dependsOn, on }) => {
     const app = createServer()
 
-    // The hooks run with the unit. See "Start and stop resources in the right order".
+    // The hooks run with the unit. See "How do I start and stop resources in the right order?"
     on('start', () => app.listen(dependsOn.config.port))
     on('stop', () => app.close())
 
@@ -163,7 +167,7 @@ process.once('SIGINT', async () => {
 - `provide(container, name, build)` is the short form for a unit without dependencies. `provide(container, { dependsOn, build })` without a name also works.
 - `resolve()` waits for a missing provider. Before `start()`, it builds the units that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. The callback runs again when a required dependency gets a new instance.
-- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Turn on logging](#turn-on-logging).
+- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Turn on logging](#ask-why).
 
 > [!WARNING]
 >
@@ -183,40 +187,46 @@ process.once('SIGINT', async () => {
 > })
 > ```
 
-### How a unit moves
+</details>
+
+<details>
+<summary><strong>How does a unit move from build to stop?</strong></summary>
+
+<picture>
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/phases-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/phases-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="The phases of a unit. A transaction reserves it as declared, and commit() makes it pending. When what it needs runs, it goes to building, starting while its start hooks run, and running. A start hook can requeue: retrying, then starting for the next try. A build that throws, or the end of the tries, leads to failed. A second provider of an exclusive key leads to conflict, and back to pending when one provider is left. stop() and withdraw() lead to stopping, and after withdraw() the unit is withdrawn and its instance disposed. A running unit also has a status from setStatus(): ready, degraded, or unavailable." src="./docs/assets/banners/phases-light.webp" />
+</picture>
 
 Each unit has a phase. A unit runs no code until its required dependencies run.
 
-```text
-           ┌──────────── conflict ◄───────────┐
-           ▼                                   │
-declared → pending → building → starting → running
-                         │          │  ▲        │
-                         │          ▼  │        │
-                         │       retrying       │
-                         ▼          ▼           ▼
-                       failed ◄── stopping ◄────┘
-                                    │
-                                    ▼
-                                withdrawn
-```
-
 | Phase | Meaning |
 | --- | --- |
-| `declared` | A [transaction](#load-a-plugins-units-all-or-nothing) reserved the unit. Consumers cannot resolve it. |
+| `declared` | A [transaction](#transactions-with-rollback) reserved the unit. Consumers cannot resolve it. |
 | `pending` | The unit waits for its required dependencies. It runs no code. |
-| `conflict` | An [exclusive key](#allow-only-one-provider-of-a-key) has more than one provider. It runs no code. |
+| `conflict` | An [exclusive key](#isolated-containers) has more than one provider. It runs no code. |
 | `building` | `build` runs. The instance is not visible. |
 | `starting` | The instance is published. The `start` hooks run. |
 | `retrying` | A `start` hook returned `requeue`. The unit waits for the next attempt. |
-| `running` | The instance serves calls. Only this phase has a [status](#know-when-a-dependency-is-degraded-or-down). |
+| `running` | The instance serves calls. Only this phase has a [status](#status-awareness). |
 | `stopping` | The unit waits until its dependents release it. Then the `stop` hooks and the effect disposers run. |
 | `failed` | A build failed, the retries ended, or a hook returned `fail`. |
 | `withdrawn` | The registration is withdrawn and the instance is disposed. |
 
-## Start and stop resources in the right order
+</details>
 
-Yes. Register `start` and `stop` hooks inside `build`. A `start` hook runs after the unit's dependencies run. A `stop` hook runs before they stop, so each hook can still use them.
+<details>
+<summary><strong>How do I start and stop resources in the right order?</strong></summary>
+
+Register `start` and `stop` hooks inside `build`. A `start` hook runs after the unit's dependencies run. A `stop` hook runs before they stop, so each hook can still use them.
 
 ```ts
 import { createContainer, provide, start, stop } from 'injeca'
@@ -284,16 +294,19 @@ The build context has these fields:
 | `on('stop', handler)` | Runs before the unit stops. Its dependencies are still available. |
 | `effect(setup)` | Runs `setup` at once. The disposer that it returns runs when the instance is disposed, after the `stop` hooks. |
 | `signal` | An `AbortSignal` that aborts when a newer target replaces this build, or when the container is disposed |
-| `setStatus(status, reason?)` | Sets the status of the instance. See [Know when a dependency is degraded or down](#know-when-a-dependency-is-degraded-or-down). |
+| `setStatus(status, reason?)` | Sets the status of the instance. See [Know when a dependency is degraded or down](#status-awareness). |
 
 - A hook gets a hook context with a typed `decide`, `attempt`, `previous`, and `signal`. Return a decision to tell injeca what to do next.
 - A return value that is not a decision, for example the result of `app.listen()`, selects the default of the hook.
 - A `start` hook accepts `handled`, `requeue`, `stop`, and `fail`. A `stop` hook accepts `handled` and `fail`. Another decision is a type error.
 - `on()` is valid only while `build` runs. A later call throws `HookOutsideBuildError` (`hook-outside-build`).
 
-### Call dispose from a cleanup
+</details>
 
-A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose unit it holds. Pass the `signal` of the cleanup, so that injeca knows the caller:
+<details>
+<summary><strong>Can I call dispose from a cleanup?</strong></summary>
+
+Pass the `signal` of the cleanup to the call, so that injeca knows the caller. Then the call resolves at once, and the teardown continues. Without the signal, the call can wait for itself. A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose unit it holds.
 
 ```ts
 import { createContainer, dispose, provide } from 'injeca'
@@ -322,9 +335,12 @@ provide(plugin, 'plugin:window', ({ on }) => {
 - Such a call writes a warning with `logger.warn`, sends a `reentrant-call` record to `observe`, and resolves at once. A re-entrant `withdraw()` resolves `true`. The stop, the disposal, or the withdrawal continues. Other callers get a promise that settles when it ends.
 - A call without a signal after an `await` is not found. It waits for itself until a configured `stop` timeout ends the cleanup. The warning of that timeout tells about this cause.
 
-## Retry a start that fails, with a limit
+</details>
 
-Yes. Return `decide.requeue()` from a `start` hook. The unit keeps its instance, so `build` does not run again. injeca runs the hook again after the delay that you set, until `maxAttempts` ends the retries.
+<details>
+<summary><strong>How do I retry a start that fails, with a limit?</strong></summary>
+
+Return `decide.requeue()` from a `start` hook. The unit keeps its instance, so `build` does not run again. injeca runs the hook again after the delay that you set, until `maxAttempts` ends the retries.
 
 ```ts
 import { createContainer, provide, start } from 'injeca'
@@ -389,9 +405,12 @@ await start(container)
 
 [Try it in the lab →][lab-retry]
 
-### Limit how long a hook runs
+</details>
 
-`start` and `stop` hooks wait until they settle. Set `timeouts` to limit them, and `onTimeout` to decide what happens then. injeca has no built-in timeout.
+<details>
+<summary><strong>How do I limit how long a hook runs?</strong></summary>
+
+Set `timeouts` on the container or on the unit, and `onTimeout` to decide what happens then. Without them, `start` and `stop` hooks wait until they settle. injeca has no built-in timeout.
 
 ```ts
 import { createContainer, provide } from 'injeca'
@@ -416,15 +435,18 @@ provide(container, 'tts', {
 - When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the unit, or of the container, decides.
 - Without `onTimeout`, a `start` timeout gives `fail` with a `HookTimeoutError` (`hook-timeout`).
 - Without `onTimeout`, a `stop` timeout counts as `handled`. injeca writes a warning with `logger.warn`, and `stop()`, `dispose()`, and `withdraw()` resolve as usual. Only `decide.fail()` from `onTimeout` fails them.
-- During a stop or a disposal of the container, the warning tells that a cleanup can be waiting for its own container. Then that cleanup must pass its signal. See [Call dispose from a cleanup](#call-dispose-from-a-cleanup).
+- During a stop or a disposal of the container, the warning tells that a cleanup can be waiting for its own container. Then that cleanup must pass its signal. See [Call dispose from a cleanup](#dependency-injection).
 - After a `stop` timeout, the remaining cleanups still run, but injeca does not wait for them. So a cleanup that awaits the disposal of its own container without its signal cannot block that disposal.
 - A cleanup or a `start` hook that injeca stopped waiting for can still fail later. injeca writes that failure with `logger.warn`, and a late `stop` decision gets a `decision` record with `ignored: true`. A rejection with the abort reason of the callback signal has no warning, because the callback only followed its abort.
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 - At a `start` timeout, the `signal` of the hook aborts with the `HookTimeoutError`. A `stop` handler sees the `stop` timeout on its `signal` in the same way.
 
-## Stop waiting after a time limit
+</details>
 
-Yes. Each call that can wait takes `{ signal }`, a standard `AbortSignal`. `timeout(container, ms)` makes a signal on the container clock. injeca has no built-in timeout for these calls.
+<details>
+<summary><strong>How do I stop waiting after a time limit?</strong></summary>
+
+Pass `{ signal }`, a standard `AbortSignal`, to the call. Each call that can wait takes one. `timeout(container, ms)` makes a signal on the container clock. injeca has no built-in timeout for these calls.
 
 ```ts
 import { createContainer, provide, resolve, start, StartTimeoutError, stop, timeout, withTimeout } from 'injeca'
@@ -454,7 +476,7 @@ export async function handle(request: Request) {
 await stop(container, { signal: timeout(container, 5_000) })
 ```
 
-- `timeout(container, ms)` aborts after `ms` on the clock of the container, with a `DOMException` named `TimeoutError`. Tests with a [manual clock](#test-timeouts-and-retries-without-waiting) control it. `AbortSignal.timeout()` does not use the container clock.
+- `timeout(container, ms)` aborts after `ms` on the clock of the container, with a `DOMException` named `TimeoutError`. Tests with a [manual clock](#built-for-testing) control it. `AbortSignal.timeout()` does not use the container clock.
 - `withTimeout(signal, ms, container)` aborts when `signal` aborts, or after `ms`. `signal` can be `undefined`.
 - An aborted signal ends the call at once. A call removes its listener from the signal when it settles.
 - A timeout reason is a reason with `name === 'TimeoutError'`, from `timeout()` or from `AbortSignal.timeout()`.
@@ -472,9 +494,30 @@ await stop(container, { signal: timeout(container, 5_000) })
 | `registration.replace(option, { signal })` | Cancels a pending replacement, as a newer `replace()` does. The old instance stays, and `replace()` resolves `false`. After the swap, the abort has no effect. |
 | `tx.commit({ signal })` | Before the publish, the transaction aborts and rolls back, and `commit()` rejects at once with the reason. After the publish, the abort has no effect. |
 
-## Swap a dependency while the app runs
+</details>
 
-Yes. `replace()` builds the new instance next to the old one and switches only when the new one runs. Nothing that depends on it stops, and a failed build changes nothing.
+## Swap at run time
+
+An app that loads plugins, or reloads its code, changes its graph while it runs. injeca treats this as the normal case, not as an exception. You can add, withdraw, or replace a unit at any time, and the units that depend on it converge to the new graph without a gap.
+
+<picture>
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-swap-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-swap-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="Swap a provider while it runs, in three ways in turn. withdraw() and provide() leave a gap: speech and app stop and wait in pending. replace() has no gap: tts v1 serves while tts v2 builds, then speech rebuilds against v2 while the old speech serves. replace() with a dependency-change handler: speech takes tts v2 in its own instance, and app does not change." src="./docs/assets/banners/compare-swap-light.webp" />
+</picture>
+
+<details>
+<summary><strong>How do I swap a dependency while the app runs?</strong></summary>
+
+Use `replace()`. It builds the new instance next to the old one and switches only when the new one runs. Nothing that depends on it stops, and a failed build changes nothing.
 
 ```ts
 import { createContainer, provide, start } from 'injeca'
@@ -526,21 +569,6 @@ provide(container, 'speech', {
   },
 })
 ```
-
-<picture>
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-swap-dark.webp"
-    media="(prefers-color-scheme: dark)"
-  />
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-swap-light.webp"
-    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
-  />
-  <img width="100%" alt="Swap a provider while it runs, in three ways in turn. withdraw() and provide() leave a gap: speech and app stop and wait in pending. replace() has no gap: tts v1 serves while tts v2 builds, then speech rebuilds against v2 while the old speech serves. replace() with a dependency-change handler: speech takes tts v2 in its own instance, and app does not change." src="./docs/assets/banners/compare-swap-light.webp" />
-</picture>
-
 - A withdrawal followed by a new `provide` leaves a gap: all dependents stop. `replace()` has no gap. A hot reload tool uses it.
 - The swap is one batch. It occurs only after the new instance completes `start`. The new instance is `ready`.
 - For a per-container registration, each running consumer gets a new instance first. The swap of all consumers is one batch, after each new instance completes `start`. If one fails, no consumer changes.
@@ -549,13 +577,16 @@ provide(container, 'speech', {
 - The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the units above it.
 - `graph(container).explain(key)` shows the new instance as `replacement` while the swap waits, with its phase and blockers.
 - A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A unit in `stopping` rejects with `ReplaceWhileStoppingError`.
-- `replace(option, { signal })` cancels the pending replacement when the signal aborts, and resolves `false`. See [Stop waiting after a time limit](#stop-waiting-after-a-time-limit).
+- `replace(option, { signal })` cancels the pending replacement when the signal aborts, and resolves `false`. See [Stop waiting after a time limit](#dependency-injection).
 
 [Try it in the lab →][lab-swap] · [Try the handler →][lab-handler]
 
-### Add and remove units after start
+</details>
 
-Units can appear and disappear after `start()`. Dependents converge automatically.
+<details>
+<summary><strong>How do I add and remove units after start?</strong></summary>
+
+Call `provide()` or `withdraw()` at any time. Units can appear and disappear after `start()`, and dependents converge automatically.
 
 ```ts
 import { createContainer, provide, start } from 'injeca'
@@ -593,88 +624,12 @@ A rebuild of a running unit has no gap. The old instance keeps serving while a n
 - If the new instance fails, the old instance stops and the unit goes to `failed`.
 - A `replace()` during the rebuild cancels the rebuild and replaces the unit.
 
-## Know when a dependency is degraded or down
+</details>
 
-Yes. A running unit calls `setStatus()` with `ready`, `degraded`, or `unavailable`. The status goes down the graph to each unit that requires it. No unit stops or rebuilds, and each unit keeps its instance.
+<details>
+<summary><strong>How do I depend on something a plugin provides later?</strong></summary>
 
-```ts
-import { createContainer, optional, provide, start, timeout, waitFor, watch } from 'injeca'
-
-const container = createContainer()
-
-const llm = provide(container, 'llm', ({ setStatus }) => {
-  const client = connectLlm()
-
-  // A reconnect passes, so report it with a status. Do not withdraw the unit.
-  client.on('reconnecting', () => setStatus('unavailable', { reason: 'reconnecting' }))
-  client.on('rate-limited', () => setStatus('degraded', 'rate limited'))
-  client.on('ready', () => setStatus('ready'))
-
-  return client
-})
-
-// chat requires llm. Its effective status is the worst of its own status and that of llm.
-const chat = provide(container, 'chat', {
-  dependsOn: { llm },
-  build: ({ dependsOn, on }) => {
-    const chat = createChat(dependsOn.llm)
-
-    // Optional. Without this handler, a status change does nothing to chat.
-    on('dependency-status-change', ({ dependsOn }) => {
-      chat.setOffline(dependsOn.llm.status === 'unavailable')
-    })
-
-    return chat
-  },
-})
-
-// notes uses llm as optional, so the status of llm does not change the status of notes.
-provide(container, 'notes', {
-  dependsOn: { llm: optional(llm) },
-  build: ({ dependsOn }) => createNotes(dependsOn.llm?.value),
-})
-
-await start(container)
-
-// watch() sends the current state at once, then each change, in order.
-const stopWatching = watch(container, chat, ({ phase, status, reason }) => {
-  console.info('chat', phase, status, reason)
-})
-
-// waitFor() waits for a status. The signal ends the wait with WaitTimeoutError.
-await waitFor(container, chat, { status: 'ready', signal: timeout(container, 5_000) })
-stopWatching()
-```
-
-<picture>
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-status-dark.webp"
-    media="(prefers-color-scheme: dark)"
-  />
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-status-light.webp"
-    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
-  />
-  <img width="100%" alt="A provider loses its connection, in three ways in turn. With setStatus('unavailable'), chat and app are unavailable with the same instances, and notes, which uses llm as optional, stays ready. With setStatus('degraded'), chat and app are degraded. With withdraw(), chat and app stop and wait in pending, and notes builds again without llm." src="./docs/assets/banners/compare-status-light.webp" />
-</picture>
-
-- `degraded` means that calls still complete, at lower quality.
-- `unavailable` means that the instance exists, but calls fail now.
-- Only a `running` unit has a status. The effective status of a unit is the worst of its own status and the effective status of each required dependency.
-- An optional dependency does not change the effective status.
-- A dependency that becomes `unavailable` does not stop or rebuild its dependents. They get a `dependency-status-change` call if they register a handler.
-- Use a status for a condition that passes, such as a reconnect. Withdraw a unit only when it is gone for good.
-- `setStatus(status, { reason, cause })` also takes a `cause`, so that a remote plugin can report a cause inside the plugin. `setStatus` stays valid after `build` returns.
-- `waitFor` rejects with a `UnitFailedError` (`unit-failed`) when the unit failed, or waits for a required provider that failed. Its `cause` is the failure.
-- For a per-container key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
-
-[Try it in the lab →][lab-status]
-
-## Depend on something a plugin provides later
-
-Yes. `defineKey()` makes a typed key without a provider. A unit can depend on it now. It stays `pending` and runs no code until a provider registers. `optional()` and `firstAvailable()` let it run without one, or fall back to another provider.
+Depend on a key from `defineKey()`. It is a typed key without a provider, and a unit can depend on it now. The unit stays `pending` and runs no code until a provider registers. `optional()` and `firstAvailable()` let it run without one, or fall back to another provider.
 
 ```ts
 import { createContainer, defineKey, firstAvailable, optional, provide, start } from 'injeca'
@@ -727,26 +682,12 @@ await started
 
 [Try it in the lab →][lab-late]
 
-### Allow only one provider of a key
+</details>
 
-An exclusive key can have only one provider in its resolution area: the container that has the key, with its descendants.
+<details>
+<summary><strong>How do I accept only some providers?</strong></summary>
 
-```ts
-import { defineKey } from 'injeca'
-
-const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: true })
-```
-
-- If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges.
-- `graph(container).explain()` lists the owner of each provider. The figure in [Give each plugin its own container](#give-each-plugin-its-own-container) shows this case.
-- A [parent-visible registration](#share-a-plugin-unit-with-other-plugins) counts in the area of the parent container. So two sibling plugins that make one exclusive key visible to the parent conflict, and so do a host registration and a parent-visible plugin registration of that key.
-- An isolated key (`createContainer({ isolate: [key] })`) ends the resolution area of an exclusive key of an ancestor.
-
-[Try it in the lab →][lab-exclusive]
-
-### Accept only some providers
-
-`where(key, condition)` accepts a provider only when the condition returns `true`. The condition reads the `key`, the `owner`, and the `metadata` of the provider.
+Wrap the key in `where(key, condition)`. injeca accepts a provider only when the condition returns `true`. The condition reads the `key`, the `owner`, and the `metadata` of the provider.
 
 ```ts
 import type { ProviderInfo } from 'injeca'
@@ -783,69 +724,141 @@ provide(container, 'whiteboard:view', {
 - `where`, `firstAvailable`, and `optional` combine in any order. A candidate with two conditions must pass both.
 - `graph(container).explain()` names each candidate that a condition rejected.
 
-## Load a plugin's units all or nothing
+</details>
 
-Yes. A transaction builds many units and publishes them in one batch, for example all parent-visible units of one plugin. If one build fails, nothing publishes.
+## Status awareness
 
-```ts
-import { createContainer, defineKey, transaction } from 'injeca'
-
-const container = createContainer()
-const memoryKey = defineKey<Memory>('plugin:memory')
-const agentKey = defineKey<Agent>('plugin:agent')
-const toolsKey = defineKey<Tools>('plugin:tools')
-
-const tx = transaction(container)
-
-// declare() reserves a key before its build is known, for example while the plugin loads.
-// Graph queries show it as `declared`. Consumers cannot resolve it yet.
-tx.declare(agentKey, { dependsOn: { memory: memoryKey } })
-// An optional declaration does not need a provide. Without one, the commit drops it.
-tx.declare(toolsKey, { optional: true })
-
-// The units of one transaction can use each other. The order of the calls does not matter.
-tx.provide(agentKey, { dependsOn: { memory: memoryKey }, build: ({ dependsOn }) => createAgent(dependsOn.memory) })
-tx.provide(memoryKey, () => createMemory())
-
-try {
-  // Builds memory, then agent. If both builds succeed, both publish in one batch,
-  // then their `start` hooks run. commit() resolves after the publish.
-  await tx.commit()
-}
-catch (error) {
-  // One build failed. Nothing was published, and no `start` hook ran.
-  console.error('plugin failed to load', error)
-}
-```
+A dependency is not only present or gone. A model API can be rate limited, and a socket can be reconnecting, while the instance still exists. injeca lets a running unit report this with a status. It carries the status down to each unit that requires it, and it stops or rebuilds nothing.
 
 <picture>
   <source
     width="100%"
-    srcset="./docs/assets/banners/compare-plugin-dark.webp"
+    srcset="./docs/assets/banners/compare-status-dark.webp"
     media="(prefers-color-scheme: dark)"
   />
   <source
     width="100%"
-    srcset="./docs/assets/banners/compare-plugin-light.webp"
+    srcset="./docs/assets/banners/compare-status-light.webp"
     media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
   />
-  <img width="100%" alt="Load a plugin with two units, in three ways in turn. With a provide() for each unit, memory runs and agent fails, so half of the plugin is live. With tx.commit(), memory builds while consumers see neither unit, then both publish together. When a build fails in the transaction, nothing is published." src="./docs/assets/banners/compare-plugin-light.webp" />
+  <img width="100%" alt="A provider loses its connection, in three ways in turn. With setStatus('unavailable'), chat and app are unavailable with the same instances, and notes, which uses llm as optional, stays ready. With setStatus('degraded'), chat and app are degraded. With withdraw(), chat and app stop and wait in pending, and notes builds again without llm." src="./docs/assets/banners/compare-status-light.webp" />
 </picture>
 
-- Nothing is visible to consumers before `commit()`. Graph queries show the declared units.
-- A `tx.provide` without `dependsOn` uses the edges of its `tx.declare`.
-- A unit whose dependencies are not available goes to `pending`. That is not a failure.
-- A declared unit without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
-- `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
-- `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateUnitError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
-- `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
-- `tx.commit({ signal })` aborts the transaction when the signal aborts before the publish. See [Stop waiting after a time limit](#stop-waiting-after-a-time-limit).
+<details>
+<summary><strong>How do I know when a dependency is degraded or down?</strong></summary>
 
-[Try it in the lab →][lab-plugin]
+Let the unit report a status. A running unit calls `setStatus()` with `ready`, `degraded`, or `unavailable`. The status goes down the graph to each unit that requires it. No unit stops or rebuilds, and each unit keeps its instance.
 
-## Give each plugin its own container
+```ts
+import { createContainer, optional, provide, start, timeout, waitFor, watch } from 'injeca'
 
-Yes. A child container resolves keys from its ancestors, so a plugin uses the units of the host. `dispose()` removes everything that the plugin registered, at once.
+const container = createContainer()
+
+const llm = provide(container, 'llm', ({ setStatus }) => {
+  const client = connectLlm()
+
+  // A reconnect passes, so report it with a status. Do not withdraw the unit.
+  client.on('reconnecting', () => setStatus('unavailable', { reason: 'reconnecting' }))
+  client.on('rate-limited', () => setStatus('degraded', 'rate limited'))
+  client.on('ready', () => setStatus('ready'))
+
+  return client
+})
+
+// chat requires llm. Its effective status is the worst of its own status and that of llm.
+const chat = provide(container, 'chat', {
+  dependsOn: { llm },
+  build: ({ dependsOn, on }) => {
+    const chat = createChat(dependsOn.llm)
+
+    // Optional. Without this handler, a status change does nothing to chat.
+    on('dependency-status-change', ({ dependsOn }) => {
+      chat.setOffline(dependsOn.llm.status === 'unavailable')
+    })
+
+    return chat
+  },
+})
+
+// notes uses llm as optional, so the status of llm does not change the status of notes.
+provide(container, 'notes', {
+  dependsOn: { llm: optional(llm) },
+  build: ({ dependsOn }) => createNotes(dependsOn.llm?.value),
+})
+
+await start(container)
+
+// watch() sends the current state at once, then each change, in order.
+const stopWatching = watch(container, chat, ({ phase, status, reason }) => {
+  console.info('chat', phase, status, reason)
+})
+
+// waitFor() waits for a status. The signal ends the wait with WaitTimeoutError.
+await waitFor(container, chat, { status: 'ready', signal: timeout(container, 5_000) })
+stopWatching()
+```
+- `degraded` means that calls still complete, at lower quality.
+- `unavailable` means that the instance exists, but calls fail now.
+- Only a `running` unit has a status. The effective status of a unit is the worst of its own status and the effective status of each required dependency.
+- An optional dependency does not change the effective status.
+- A dependency that becomes `unavailable` does not stop or rebuild its dependents. They get a `dependency-status-change` call if they register a handler.
+- Use a status for a condition that passes, such as a reconnect. Withdraw a unit only when it is gone for good.
+- `setStatus(status, { reason, cause })` also takes a `cause`, so that a remote plugin can report a cause inside the plugin. `setStatus` stays valid after `build` returns.
+- `waitFor` rejects with a `UnitFailedError` (`unit-failed`) when the unit failed, or waits for a required provider that failed. Its `cause` is the failure.
+- For a per-container key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
+
+[Try it in the lab →][lab-status]
+
+</details>
+
+<details>
+<summary><strong>How do I read state without waiting?</strong></summary>
+
+Use `peek`. It reads a value now, without a wait, and never builds anything. `observe` sends each event of the container and its children.
+
+```ts
+import { observe, peek, where } from 'injeca'
+
+const result = peek(host, where(llmKey, ({ metadata }) => metadata.version === '2'))
+if (result.kind === 'resolved')
+  result.value.chat('hello')
+else
+  console.info(result.kind) // 'missing', 'rejected', 'conflict', 'not-running', or 'unavailable'
+
+const stopObserving = observe(host, (record) => {
+  // A phase change, status change, decision, hook timeout, aborted wait, or re-entrant call.
+  console.info(record.type)
+})
+stopObserving()
+```
+
+- `observe` sends each phase change, status change, decision, hook timeout, aborted wait, and re-entrant call in the container and its children.
+- To follow one unit, or to wait for it, use `watch` and `waitFor`. See [Know when a dependency is degraded or down](#status-awareness).
+
+</details>
+
+## Isolated containers
+
+A plugin uses what the host gives, adds its own units, and must leave cleanly. injeca gives each plugin a child container for this. The child sees the units of its ancestors and keeps its own units local, unless it shares them. One `dispose()` removes everything that the plugin brought.
+
+<picture>
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-containers-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-containers-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="A plugin brings its own theme, in three ways in turn. A provider in the child container shadows the host theme only while it runs, so view keeps the host theme while the plugin theme builds. With isolate, view waits for the plugin theme. With an exclusive key, both providers go to conflict, and app and view wait." src="./docs/assets/banners/compare-containers-light.webp" />
+</picture>
+
+<details>
+<summary><strong>How do I give each plugin its own container?</strong></summary>
+
+Create a child container with `createContainer({ parent })`. A child container resolves keys from its ancestors, so a plugin uses the units of the host. `dispose()` removes everything that the plugin registered, at once.
 
 ```ts
 import { createContainer, defineKey, dispose, effect, provide, start, timeout } from 'injeca'
@@ -885,21 +898,6 @@ await start(plugin, { signal: timeout(plugin, 10_000) })
 // A disposed container cannot be used again.
 await dispose(plugin)
 ```
-
-<picture>
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-containers-dark.webp"
-    media="(prefers-color-scheme: dark)"
-  />
-  <source
-    width="100%"
-    srcset="./docs/assets/banners/compare-containers-light.webp"
-    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
-  />
-  <img width="100%" alt="A plugin brings its own theme, in three ways in turn. A provider in the child container shadows the host theme only while it runs, so view keeps the host theme while the plugin theme builds. With isolate, view waits for the plugin theme. With an exclusive key, both providers go to conflict, and app and view wait." src="./docs/assets/banners/compare-containers-light.webp" />
-</picture>
-
 - Create containers also to keep tests apart.
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects.
 - `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the units of the parent stop, and then its effects run.
@@ -909,13 +907,16 @@ await dispose(plugin)
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
 - `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the parent-visible units of the sibling containers. It does not hide the parent-visible units of its own child containers.
 - Only a root container reads `clock` and `random`. A child container uses those of its root.
-- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a unit that holds a unit of the container. It warns and resolves at once. See [Call dispose from a cleanup](#call-dispose-from-a-cleanup).
+- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a unit that holds a unit of the container. It warns and resolves at once. See [Call dispose from a cleanup](#dependency-injection).
 
 [Try it in the lab →][lab-containers]
 
-### Share a plugin unit with other plugins
+</details>
 
-A registration in a child container is visible only in that container and its descendants. This is `visibility: 'local'`, the default. `visibility: 'parent'` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
+<details>
+<summary><strong>How do I share a plugin unit with other plugins?</strong></summary>
+
+Register it with `visibility: 'parent'`. A registration in a child container is visible only in that container and its descendants. This is `visibility: 'local'`, the default. `visibility: 'parent'` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
 
 ```ts
 import { createContainer, defineKey, provide } from 'injeca'
@@ -940,9 +941,12 @@ provide(pluginB, 'b:session', { dependsOn: { memory: memoryKitKey }, build: ({ d
 - `replace()` keeps the visibility. On a root container, `visibility: 'parent'` has no effect.
 - `graph(parent)`, `peek`, `watch`, `waitFor`, and `observe` see the unit. `graph().units()` marks it with `visibility: 'parent'`, and its `owner` is the owner of its own container.
 
-### Build one instance for each container
+</details>
 
-A registration has one instance for all consumers by default. This is `instances: 'shared'`. `instances: 'per-container'` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container.
+<details>
+<summary><strong>How do I build one instance for each container?</strong></summary>
+
+Register it with `instances: 'per-container'`. Then `build` runs once for each consumer container. The build context has `consumer`, the owner record of that container. By default, a registration has one instance for all consumers. This is `instances: 'shared'`.
 
 ```ts
 import { createContainer, provide } from 'injeca'
@@ -962,27 +966,102 @@ provide(host, 'host:client', {
 - A dependent demands its consumer instance through a required, an optional, or a `firstAvailable` edge. This is also true when the key registers after the dependent.
 - A failed consumer instance builds again on the next demand from its container: a new `resolve`, `watch`, or `waitFor` call, or a dependent that starts to wait. Each demander gets one new build for each failure.
 
-### Turn on logging
+</details>
 
-`logging: true` writes the lifecycle trace: each `provide`, `invoke`, build, `start` and `stop` hook, and `running`. It is off by default.
+<details>
+<summary><strong>How do I allow only one provider of a key?</strong></summary>
+
+Define the key with `defineKey(name, { exclusive: true })`. An exclusive key can have only one provider in its resolution area: the container that has the key, with its descendants.
 
 ```ts
-import { createContainer, createLoggLogger, createNoopLogger, injeca } from 'injeca'
+import { defineKey } from 'injeca'
 
-const app = createContainer({ logging: true }) // writes PROVIDE, RUN, HOOK OnStart, RUNNING, and the other lines
-const plugin = createContainer({ parent: app, logging: false }) // a child uses the value of its parent, unless it sets its own
-const quiet = createContainer({ logger: createNoopLogger() }) // also no warnings, for tests
-
-injeca.getContainer().logging = true // the global container
-injeca.setLogger(createLoggLogger(logg)) // a logger from @guiiai/logg
+const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: true })
 ```
 
-- `logger.warn` always writes, whatever `logging` is. injeca warns for a re-entrant call, a `stop` timeout, and a late failure of a callback that it stopped waiting for.
-- The logger is `options.logger`, then the logger of the parent container, then `createDefaultLogger()`. It writes with `console`.
+- If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges.
+- `graph(container).explain()` lists the owner of each provider. The figure in [Give each plugin its own container](#isolated-containers) shows this case.
+- A [parent-visible registration](#isolated-containers) counts in the area of the parent container. So two sibling plugins that make one exclusive key visible to the parent conflict, and so do a host registration and a parent-visible plugin registration of that key.
+- An isolated key (`createContainer({ isolate: [key] })`) ends the resolution area of an exclusive key of an ancestor.
 
-## Find out why a unit is not running, and preview a change
+[Try it in the lab →][lab-exclusive]
 
-Yes. `graph(container)` reads the graph of the container and its children. `explain()` lists what blocks a unit. `impact()` tells what a change would stop or rebuild before you make it. Neither changes state.
+</details>
+
+## Transactions with rollback
+
+A plugin often brings several units that work only together. If one of them fails to build, the others must not go live alone. A transaction builds all of them first. It publishes them in one batch only when each build succeeds, and otherwise it rolls back.
+
+<picture>
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-plugin-dark.webp"
+    media="(prefers-color-scheme: dark)"
+  />
+  <source
+    width="100%"
+    srcset="./docs/assets/banners/compare-plugin-light.webp"
+    media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
+  />
+  <img width="100%" alt="Load a plugin with two units, in three ways in turn. With a provide() for each unit, memory runs and agent fails, so half of the plugin is live. With tx.commit(), memory builds while consumers see neither unit, then both publish together. When a build fails in the transaction, nothing is published." src="./docs/assets/banners/compare-plugin-light.webp" />
+</picture>
+
+<details>
+<summary><strong>How do I load a plugin's units all or nothing?</strong></summary>
+
+Use a transaction. It builds many units and publishes them in one batch, for example all parent-visible units of one plugin. If one build fails, nothing publishes.
+
+```ts
+import { createContainer, defineKey, transaction } from 'injeca'
+
+const container = createContainer()
+const memoryKey = defineKey<Memory>('plugin:memory')
+const agentKey = defineKey<Agent>('plugin:agent')
+const toolsKey = defineKey<Tools>('plugin:tools')
+
+const tx = transaction(container)
+
+// declare() reserves a key before its build is known, for example while the plugin loads.
+// Graph queries show it as `declared`. Consumers cannot resolve it yet.
+tx.declare(agentKey, { dependsOn: { memory: memoryKey } })
+// An optional declaration does not need a provide. Without one, the commit drops it.
+tx.declare(toolsKey, { optional: true })
+
+// The units of one transaction can use each other. The order of the calls does not matter.
+tx.provide(agentKey, { dependsOn: { memory: memoryKey }, build: ({ dependsOn }) => createAgent(dependsOn.memory) })
+tx.provide(memoryKey, () => createMemory())
+
+try {
+  // Builds memory, then agent. If both builds succeed, both publish in one batch,
+  // then their `start` hooks run. commit() resolves after the publish.
+  await tx.commit()
+}
+catch (error) {
+  // One build failed. Nothing was published, and no `start` hook ran.
+  console.error('plugin failed to load', error)
+}
+```
+- Nothing is visible to consumers before `commit()`. Graph queries show the declared units.
+- A `tx.provide` without `dependsOn` uses the edges of its `tx.declare`.
+- A unit whose dependencies are not available goes to `pending`. That is not a failure.
+- A declared unit without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
+- `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
+- `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateUnitError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
+- `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
+- `tx.commit({ signal })` aborts the transaction when the signal aborts before the publish. See [Stop waiting after a time limit](#dependency-injection).
+
+[Try it in the lab →][lab-plugin]
+
+</details>
+
+## Ask why
+
+When a unit does not run, the cause is usually somewhere else in the graph: a missing provider, a failed dependency, or a conflict. injeca keeps the whole graph as data, so you can ask it. You can also preview what a change does before you make it, and follow each event as it occurs.
+
+<details>
+<summary><strong>How do I find out why a unit is not running, and preview a change?</strong></summary>
+
+Ask `graph(container)`. It reads the graph of the container and its children. `explain()` lists what blocks a unit. `impact()` tells what a change would stop or rebuild before you make it. Neither changes state.
 
 ```ts
 import { graph } from 'injeca'
@@ -1014,32 +1093,33 @@ queries.cycles() // each dependency cycle
 - `impact()` lets a user interface preview an action: "Disabling the plugin also stops X and Y."
 - `order(keys)` gives only those units and their transitive dependencies.
 
-### Read state without waiting
+</details>
 
-`peek` reads a value now, without a wait, and never builds anything. `observe` sends each event of the container and its children.
+<details>
+<summary><strong>How do I turn on logging?</strong></summary>
+
+Set `logging: true` on the container. It writes the lifecycle trace: each `provide`, `invoke`, build, `start` and `stop` hook, and `running`. It is off by default.
 
 ```ts
-import { observe, peek, where } from 'injeca'
+import { createContainer, createLoggLogger, createNoopLogger, injeca } from 'injeca'
 
-const result = peek(host, where(llmKey, ({ metadata }) => metadata.version === '2'))
-if (result.kind === 'resolved')
-  result.value.chat('hello')
-else
-  console.info(result.kind) // 'missing', 'rejected', 'conflict', 'not-running', or 'unavailable'
+const app = createContainer({ logging: true }) // writes PROVIDE, RUN, HOOK OnStart, RUNNING, and the other lines
+const plugin = createContainer({ parent: app, logging: false }) // a child uses the value of its parent, unless it sets its own
+const quiet = createContainer({ logger: createNoopLogger() }) // also no warnings, for tests
 
-const stopObserving = observe(host, (record) => {
-  // A phase change, status change, decision, hook timeout, aborted wait, or re-entrant call.
-  console.info(record.type)
-})
-stopObserving()
+injeca.getContainer().logging = true // the global container
+injeca.setLogger(createLoggLogger(logg)) // a logger from @guiiai/logg
 ```
 
-- `observe` sends each phase change, status change, decision, hook timeout, aborted wait, and re-entrant call in the container and its children.
-- To follow one unit, or to wait for it, use `watch` and `waitFor`. See [Know when a dependency is degraded or down](#know-when-a-dependency-is-degraded-or-down).
+- `logger.warn` always writes, whatever `logging` is. injeca warns for a re-entrant call, a `stop` timeout, and a late failure of a callback that it stopped waiting for.
+- The logger is `options.logger`, then the logger of the parent container, then `createDefaultLogger()`. It writes with `console`.
 
-### Listener registry
+</details>
 
-injeca does not dispatch events. It stores listeners that a container owns, so that a consumer can run them by its own rules.
+<details>
+<summary><strong>Can injeca keep listeners for my own events?</strong></summary>
+
+injeca stores them, but it does not dispatch them. `listen()` stores a listener that a container owns, and `listeners()` returns them, so that a consumer can run them by its own rules.
 
 ```ts
 import { listen, listeners } from 'injeca'
@@ -1052,9 +1132,16 @@ const entries = listeners(host, gate) // [{ handler, owner, metadata }]
 
 `listeners()` returns the listeners of the container and its children, in registration order. `dispose(container)` removes the listeners of the container.
 
-## Test timeouts and retries without waiting
+</details>
 
-Yes. `injeca/testing` has a manual clock. A test moves the time, so it controls `timeout()`, `withTimeout()`, requeue delays, and policy timeouts without real time.
+## Built for testing
+
+Retries, backoff, and timeouts are hard to test when they use real time. injeca reads the time from a clock that you can replace. With a manual clock, a test moves the time by hand. A hook handler can also be tested alone, without a container.
+
+<details>
+<summary><strong>How do I test timeouts and retries without waiting?</strong></summary>
+
+Use the manual clock from `injeca/testing`. A test moves the time, so it controls `timeout()`, `withTimeout()`, requeue delays, and policy timeouts without real time.
 
 ```ts
 import { createContainer, provide, start, stop } from 'injeca'
@@ -1079,7 +1166,12 @@ await stopped // resolves, with a warning
 - `drained(container)` waits one real macrotask after each drain of the work queue. Do not use it while the fake timers of the test runner hold `setTimeout`.
 - `createContainer({ random: () => 0.5 })` makes the backoff jitter deterministic.
 
-To test a hook handler alone, without a container, use `createHookContext` and `checkDecision`:
+</details>
+
+<details>
+<summary><strong>How do I test a hook handler without a container?</strong></summary>
+
+Use `createHookContext` and `checkDecision` from `injeca/testing`. They test a hook handler alone, without a container:
 
 ```ts
 import type { HookContextFor } from 'injeca'
@@ -1098,32 +1190,34 @@ console.info(decision?.kind) // 'requeue'
 
 The [scenario lab](https://injeca.moeru.ai/) uses the same functions to step through each scenario.
 
+</details>
+
 ## API at a glance
 
 | Primitive | What it does | Section |
 | --- | --- | --- |
-| `createContainer(options?)` | Creates a container. `parent`, `owner`, `isolate`, `maxAttempts`, `timeouts`, `onTimeout`, `clock`, `random`, `logging`, `logger` | [Give each plugin its own container](#give-each-plugin-its-own-container) |
-| `provide(container, name \| key, option)` | Registers a unit and returns its typed key, with `withdraw()` and `replace()` | [Wire units together](#wire-units-together-without-classes-or-decorators) |
-| `invoke(container, { dependsOn, callback })` | Runs a callback when its dependencies run | [Wire units together](#wire-units-together-without-classes-or-decorators) |
-| `resolve(container, deps, { signal })` | Waits for units and gives their values | [Wire units together](#wire-units-together-without-classes-or-decorators) |
-| `start(container)`, `stop(container)` | Builds and starts all units in order, or stops them in reverse | [Start and stop resources](#start-and-stop-resources-in-the-right-order) |
-| `dispose(container)` | Stops, withdraws all registrations, and runs the effects | [Give each plugin its own container](#give-each-plugin-its-own-container) |
-| `effect(container, setup)` | Runs a setup with a disposer for the container | [Give each plugin its own container](#give-each-plugin-its-own-container) |
-| `on(hook, handler)`, `effect(setup)` in `build` | Registers `start`, `stop`, `dependency-change`, and `dependency-status-change` hooks, and instance effects | [Start and stop resources](#start-and-stop-resources-in-the-right-order) |
-| `decide.handled()`, `.rebuild()`, `.requeue()`, `.stop()`, `.fail()` | Tells injeca what to do after a hook | [Retry a start](#retry-a-start-that-fails-with-a-limit) |
-| `timeout(container, ms)`, `withTimeout(signal, ms, container)` | Makes an `AbortSignal` on the container clock | [Stop waiting](#stop-waiting-after-a-time-limit) |
-| `registration.replace(option)` | Swaps the instance without a gap | [Swap a dependency](#swap-a-dependency-while-the-app-runs) |
-| `registration.withdraw()` | Removes the unit. Dependents stop first. | [Add and remove units after start](#add-and-remove-units-after-start) |
-| `setStatus(status, reason?)` in `build` | Reports `ready`, `degraded`, or `unavailable` | [Know when a dependency is down](#know-when-a-dependency-is-degraded-or-down) |
-| `watch(container, key, listener)`, `waitFor(container, key, options)` | Follows the state of one unit, or waits for it | [Know when a dependency is down](#know-when-a-dependency-is-degraded-or-down) |
-| `defineKey(name, { exclusive? })` | Makes a typed key without a provider | [Depend on something a plugin provides later](#depend-on-something-a-plugin-provides-later) |
-| `optional(dep)`, `firstAvailable(...deps)`, `where(dep, condition)` | Makes a dependency optional, gives a fallback, or filters providers | [Depend on something a plugin provides later](#depend-on-something-a-plugin-provides-later) |
-| `transaction(container)` | Declares, provides, and publishes units all or nothing | [Load a plugin all or nothing](#load-a-plugins-units-all-or-nothing) |
-| `graph(container)` | `units`, `dependencies`, `dependents`, `order`, `cycles`, `explain`, `impact` | [Find out why a unit is not running](#find-out-why-a-unit-is-not-running-and-preview-a-change) |
-| `peek(container, dep)`, `observe(container, listener)` | Reads a value now, or follows each event | [Read state without waiting](#read-state-without-waiting) |
-| `listen(container, key, handler)`, `listeners(container, key)` | Stores listeners that a container owns | [Listener registry](#listener-registry) |
-| `injeca.provide`, `injeca.start`, … | The same calls on the global container | [Wire units together](#wire-units-together-without-classes-or-decorators) |
-| `manualClock()`, `drained()`, `createHookContext()`, `checkDecision()` from `injeca/testing` | Tests time and hooks without waiting | [Test without waiting](#test-timeouts-and-retries-without-waiting) |
+| `createContainer(options?)` | Creates a container. `parent`, `owner`, `isolate`, `maxAttempts`, `timeouts`, `onTimeout`, `clock`, `random`, `logging`, `logger` | [Isolated containers](#isolated-containers) |
+| `provide(container, name \| key, option)` | Registers a unit and returns its typed key, with `withdraw()` and `replace()` | [Dependency injection](#dependency-injection) |
+| `invoke(container, { dependsOn, callback })` | Runs a callback when its dependencies run | [Dependency injection](#dependency-injection) |
+| `resolve(container, deps, { signal })` | Waits for units and gives their values | [Dependency injection](#dependency-injection) |
+| `start(container)`, `stop(container)` | Builds and starts all units in order, or stops them in reverse | [Dependency injection](#dependency-injection) |
+| `dispose(container)` | Stops, withdraws all registrations, and runs the effects | [Isolated containers](#isolated-containers) |
+| `effect(container, setup)` | Runs a setup with a disposer for the container | [Isolated containers](#isolated-containers) |
+| `on(hook, handler)`, `effect(setup)` in `build` | Registers `start`, `stop`, `dependency-change`, and `dependency-status-change` hooks, and instance effects | [Dependency injection](#dependency-injection) |
+| `decide.handled()`, `.rebuild()`, `.requeue()`, `.stop()`, `.fail()` | Tells injeca what to do after a hook | [Dependency injection](#dependency-injection) |
+| `timeout(container, ms)`, `withTimeout(signal, ms, container)` | Makes an `AbortSignal` on the container clock | [Dependency injection](#dependency-injection) |
+| `registration.replace(option)` | Swaps the instance without a gap | [Swap at run time](#swap-at-run-time) |
+| `registration.withdraw()` | Removes the unit. Dependents stop first. | [Swap at run time](#swap-at-run-time) |
+| `setStatus(status, reason?)` in `build` | Reports `ready`, `degraded`, or `unavailable` | [Status awareness](#status-awareness) |
+| `watch(container, key, listener)`, `waitFor(container, key, options)` | Follows the state of one unit, or waits for it | [Status awareness](#status-awareness) |
+| `defineKey(name, { exclusive? })` | Makes a typed key without a provider | [Swap at run time](#swap-at-run-time) |
+| `optional(dep)`, `firstAvailable(...deps)`, `where(dep, condition)` | Makes a dependency optional, gives a fallback, or filters providers | [Swap at run time](#swap-at-run-time) |
+| `transaction(container)` | Declares, provides, and publishes units all or nothing | [Transactions with rollback](#transactions-with-rollback) |
+| `graph(container)` | `units`, `dependencies`, `dependents`, `order`, `cycles`, `explain`, `impact` | [Ask why](#ask-why) |
+| `peek(container, dep)`, `observe(container, listener)` | Reads a value now, or follows each event | [Status awareness](#status-awareness) |
+| `listen(container, key, handler)`, `listeners(container, key)` | Stores listeners that a container owns | [Ask why](#ask-why) |
+| `injeca.provide`, `injeca.start`, … | The same calls on the global container | [Dependency injection](#dependency-injection) |
+| `manualClock()`, `drained()`, `createHookContext()`, `checkDecision()` from `injeca/testing` | Tests time and hooks without waiting | [Built for testing](#built-for-testing) |
 
 ## Packages
 
@@ -1192,14 +1286,14 @@ await start(container, { signal: timeout(container, 10_000) })
 - The errors do not change. A timeout gives `WaitTimeoutError` or `StartTimeoutError`. The error message no longer has the milliseconds. The `cause` is the `TimeoutError` reason.
 - A call with `timeoutMs` and `signal` becomes one signal: `withTimeout(signal, ms, container)`.
 - A `TimeoutError` reason from your own signal, for example `AbortSignal.timeout()`, now also gives `WaitTimeoutError` or `StartTimeoutError`. Another reason rejects as it is, as before.
-- `stop`, `dispose`, `withdraw`, `replace`, and `tx.commit` take `{ signal }` too. See [Cancellation](#stop-waiting-after-a-time-limit).
+- `stop`, `dispose`, `withdraw`, `replace`, and `tx.commit` take `{ signal }` too. See [Cancellation](#dependency-injection).
 - `timeouts: { start, stop }` and `onTimeout` keep their shape. A `stop` handler now sees the `stop` timeout on its `signal`.
 - A `stop` timeout no longer fails `stop()`, `dispose()`, or `withdraw()`. Without `onTimeout`, it counts as `handled`, with a warning. In 0.3, the callers rejected with `HookTimeoutError`. To keep a failure, return `context.decide.fail(error)` from `onTimeout` for the `stop` hook.
 - `observe` has two new record types, `wait-aborted` and `reentrant-call`. A `switch` on `record.type` with an exhaustive check needs a case for each. Their `call` can be `'stop'`, `'dispose'`, or `'withdraw'`.
-- `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()`, `dispose()`, or `withdraw()` from a cleanup that its wait includes resolves at once with a warning. See [Calling dispose from a cleanup](#call-dispose-from-a-cleanup).
+- `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()`, `dispose()`, or `withdraw()` from a cleanup that its wait includes resolves at once with a warning. See [Calling dispose from a cleanup](#dependency-injection).
 - A custom `Logger` needs `warn(message)`. `createDefaultLogger`, `createLoggLogger`, and `createNoopLogger` have it. injeca also writes stop timeouts and late failures of abandoned callbacks with it.
-- `injeca/testing` exports `manualClock` and `drained`. See [Testing with a manual clock](#test-timeouts-and-retries-without-waiting).
-- The `enabled` option of `createContainer` is removed. The lifecycle logs are off by default. `logging: true` turns them on. Warnings always go to the logger. See [Logging](#turn-on-logging).
+- `injeca/testing` exports `manualClock` and `drained`. See [Testing with a manual clock](#built-for-testing).
+- The `enabled` option of `createContainer` is removed. The lifecycle logs are off by default. `logging: true` turns them on. Warnings always go to the logger. See [Logging](#ask-why).
 
 ```ts
 // 0.3
