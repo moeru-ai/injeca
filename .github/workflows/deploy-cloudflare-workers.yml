@@ -21,7 +21,7 @@ jobs:
       name: Docs Production
       url: https://injeca.moeru.ai/
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           run_install: false
