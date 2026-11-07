@@ -9,12 +9,13 @@ import { edgesOf } from '../lab/scenarios'
 import { framesOf, ready } from '../lab/store'
 
 /**
- * The README figure of one chapter, as an animated banner at about 2.8:1. It plays each primitive in turn, the way the
- * chapter of the lab does: the real graph at each step that the lab recorded, with the note of the step and its
- * caption. The list on the left shows which primitive plays, and what it leads to.
+ * The README figure of one chapter, as an animated banner at about 3:1. It plays each primitive in turn, the way the
+ * chapter of the lab does: the real graph at each step that the lab recorded, with its transitions, the note of the
+ * step, and a caption of what happens now. The tabs on top show which primitive plays, and what it leads to.
  *
- * The banner script drives it: `__captureFrames` holds how long each frame shows, and `__captureAt(i)` draws frame
- * `i`. Opened in a browser, it plays on its own.
+ * The banner script drives it: `__captureFrames` holds how long each step shows, `__captureAt(i)` moves to step `i`,
+ * and the script records the transitions in between on virtual time, at `__captureFps` frames a second. Opened in a
+ * browser, it plays on its own.
  */
 const props = defineProps<{ scenario: Scenario, number: number }>()
 
@@ -46,6 +47,7 @@ function play(): void {
 type Target = Window & { __captureFrames?: number[], __captureAt?: (i: number) => void }
 onMounted(() => {
   const target = window as Target
+  ;(target as Target & { __captureFps?: number }).__captureFps = 15
   target.__captureAt = (i: number) => {
     driven = true
     clearTimeout(timer)
@@ -62,110 +64,86 @@ watch(() => props.scenario, () => (index.value = 0))
 
 <template>
   <div class="compare" role="img" :aria-label="`${scenario.question} ${scenario.variants.map(v => `${v.primitive}: ${v.outcome}.`).join(' ')}`">
-    <div class="left">
-      <span class="n mono">{{ String(number).padStart(2, '0') }}</span>
-      <p class="title">
-        {{ scenario.title }}
-      </p>
-      <p class="question">
-        {{ scenario.question }}
-      </p>
-      <ol class="variants">
-        <li v-for="(v, i) in scenario.variants" :key="v.id" class="variant" :class="{ on: i === current?.v }">
-          <code>{{ v.primitive }}</code>
-          <span class="outcome"><i class="dot" :class="v.tone" />{{ v.outcome }}</span>
-        </li>
-      </ol>
+    <ol class="variants">
+      <li v-for="(v, i) in scenario.variants" :key="v.id" class="variant" :class="{ on: i === current?.v }">
+        <code>{{ v.primitive }}</code>
+        <span class="outcome"><i class="dot" :class="v.tone" />{{ v.outcome }}</span>
+      </li>
+    </ol>
+    <div class="stage">
+      <Stage
+        v-if="current"
+        :nodes="scenario.nodes"
+        :boxes="scenario.boxes"
+        :edges="edgesOf(scenario, variant)"
+        :frame="current.frame"
+        :focus="current.frame.focus"
+        :note="current.frame.note"
+        :width="1000"
+        :height="250"
+      />
     </div>
-    <div class="right">
-      <div class="stage">
-        <Stage
-          v-if="current"
-          :nodes="scenario.nodes"
-          :boxes="scenario.boxes"
-          :edges="edgesOf(scenario, variant)"
-          :frame="current.frame"
-          :focus="current.frame.focus"
-          :note="current.frame.note"
-          :width="840"
-          :height="300"
-          :animated="false"
-        />
-      </div>
-      <p v-if="current" class="caption">
-        <span class="dots" aria-hidden="true">
-          <i v-for="s in steps" :key="s" :class="{ done: s - 1 < current.s, on: s - 1 === current.s }" />
-        </span>
-        <span class="text">{{ current.frame.caption }}</span>
-      </p>
-    </div>
+    <p v-if="current" class="caption">
+      <span class="dots" aria-hidden="true">
+        <i v-for="s in steps" :key="s" :class="{ done: s - 1 < current.s, on: s - 1 === current.s }" />
+      </span>
+      <Transition name="caption" mode="out-in">
+        <span :key="index" class="text">{{ current.frame.caption }}</span>
+      </Transition>
+    </p>
   </div>
 </template>
 
 <style scoped>
 .compare {
-  display: grid;
+  display: flex;
   overflow: hidden;
   width: 1440px;
-  height: 520px;
+  height: 480px;
+  flex-direction: column;
   align-items: center;
-  gap: 48px;
-  padding: 0 56px;
+  justify-content: space-between;
+  padding: 36px 56px 34px;
   border-radius: 32px;
   background: var(--paper);
-  grid-template-columns: 400px minmax(0, 1fr);
 }
 
-.n {
-  color: var(--new);
-  font-size: 13px;
-}
-
-.title {
-  margin: 8px 0 0;
-  font-family: var(--font-display);
-  font-size: 30px;
-  line-height: 1.15;
-}
-
-.question {
-  margin: 12px 0 0;
-  color: var(--ink-2);
-  font-size: 17px;
-  line-height: 1.45;
-}
-
+/* The primitives, as tabs. The one that plays has a fill, and the others step back. */
 .variants {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 24px 0 0;
-  padding: 0;
+  gap: 6px;
+  margin: 0;
+  padding: 5px;
+  border-radius: 18px;
+  background: var(--control);
   list-style: none;
 }
 
 .variant {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
-  border-radius: 14px;
-  opacity: 0.45;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 16px;
+  border-radius: 13px;
+  opacity: 0.5;
+  transition:
+    background 0.3s,
+    opacity 0.3s;
 }
 
 .variant.on {
-  background: var(--control);
+  background: var(--knob);
   opacity: 1;
 }
 
 .variant code {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .outcome {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   color: var(--ink-2);
   font-size: 14px;
 }
@@ -185,18 +163,9 @@ watch(() => props.scenario, () => (index.value = 0))
   background: var(--bad);
 }
 
-.right {
-  display: flex;
-  height: 440px;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 28px 32px 24px;
-  border-radius: 24px;
-  background: var(--surface);
-}
-
 .stage {
   display: grid;
+  width: 100%;
   flex: 1;
   place-items: center;
 }
@@ -204,9 +173,9 @@ watch(() => props.scenario, () => (index.value = 0))
 .caption {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   margin: 0;
-  font-size: 16px;
+  font-size: 19px;
   line-height: 1.4;
 }
 
@@ -217,10 +186,11 @@ watch(() => props.scenario, () => (index.value = 0))
 }
 
 .dots i {
-  width: 18px;
+  width: 20px;
   height: 4px;
   border-radius: 2px;
   background: var(--control-2);
+  transition: background 0.3s;
 }
 
 .dots i.done {
@@ -233,5 +203,22 @@ watch(() => props.scenario, () => (index.value = 0))
 
 .text {
   color: var(--ink);
+}
+
+.caption-enter-active,
+.caption-leave-active {
+  transition:
+    opacity 0.25s,
+    transform 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.caption-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.caption-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 </style>

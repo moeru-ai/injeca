@@ -30,18 +30,11 @@ const props = withDefaults(defineProps<{
   at?: number
   /** Where the scene starts, as a part of the width. The left of the canvas stays free for text that floats over it. */
   left?: number
-  /**
-   * For an animated banner: the scene does not run on its own. The capture script calls `__captureAt(i)` for each
-   * frame of `__captureFrames`, and the scene draws that exact moment of the loop.
-   */
-  scrub?: boolean
 }>(), { left: 0 })
 
 const still = props.at !== undefined
-/** The frames of an animated banner, a second each. */
-const SCRUB_FPS = 15
-/** In scrub mode, how far the current step has gone, from 0 to 1. The bar of the step shows it. */
-const scrubbed = ref<number>()
+/** In a still: an arrow for each piece in flight, from where it left the conveyor to its place in the cube, on screen. */
+const arrows = ref<{ id: string, d: string }[]>([])
 
 /** What the page shows around the scene. The timeline sets it. */
 const ui = reactive({
@@ -198,7 +191,7 @@ function hoverElement(id: string | undefined, event?: Event): void {
 onMounted(() => {
   const scene = new Scene()
   const camera = new PerspectiveCamera(30, 1, 0.1, 100)
-  renderer = new WebGLRenderer({ canvas: canvas.value!, antialias: true, alpha: true, preserveDrawingBuffer: still || props.scrub })
+  renderer = new WebGLRenderer({ canvas: canvas.value!, antialias: true, alpha: true, preserveDrawingBuffer: still })
   // The canvas covers the whole hero, so a full Retina ratio would paint four times the pixels for little gain.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
   const group = new Group()
@@ -325,10 +318,7 @@ onMounted(() => {
   function render(time: number): void {
     const dt = last ? Math.min(0.05, (time - last) / 1000) : 0
     last = time
-    // A scrubbed frame takes the conveyor from the time of the loop, so each frame is the same on each run.
-    if (props.scrub)
-      scroll = time / 1000 * 0.45
-    else if (!paused && !still)
+    if (!paused && !still)
       scroll += dt * 0.45
     const t = time / 1000
     group.rotation.y = still ? 0.04 : Math.sin(t * 0.25) * 0.12
@@ -395,14 +385,59 @@ onMounted(() => {
     inside = false
   })
 
-  if (still || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  // A still draws one moment of the loop: the real timeline at `at`, with an arrow for each piece in flight.
+  if (still) {
+    const line = buildTimeline()
+    line.pause()
+    // Step to the moment, so each callback of the timeline runs on the way, as in a live loop.
+    for (let ms = 0; ms <= props.at!; ms += 50)
+      line.seek(Math.min(ms, props.at!))
+    line.seek(props.at!)
+    scroll = props.at! / 1000 * 0.45
+    let frames = 0
+    const settle = () => {
+      render(props.at!)
+      if (++frames < 6)
+        return requestAnimationFrame(settle)
+      arrows.value = flights()
+    }
+    requestAnimationFrame(settle)
+    timeline = line
+    return
+  }
+
+  /** The arrows of the pieces in flight: an arc from each piece to its place in the cube, on screen. */
+  function flights(): { id: string, d: string }[] {
+    const screen = (point: Vector3) => {
+      projected.copy(point).applyMatrix4(group.matrixWorld).project(camera)
+      return { x: (projected.x + 1) / 2 * width, y: (1 - projected.y) / 2 * height }
+    }
+    return UNITS.flatMap((unit) => {
+      const state = pieces.get(unit.id)!
+      if (unit.unused || state.t <= 0.02 || state.t >= 0.98)
+        return []
+      const now = screen(meshes.get(unit.id)!.position)
+      const to = screen(packed.get(unit.id)!)
+      const dx = to.x - now.x
+      const dy = to.y - now.y
+      const length = Math.hypot(dx, dy)
+      // Leave room around the piece and around its place, so the arrow sits in the gap between them.
+      const start = { x: now.x + dx / length * 46, y: now.y + dy / length * 46 }
+      const end = { x: to.x - dx / length * 40, y: to.y - dy / length * 40 }
+      // An arc that bows up, as a piece rises and falls into its place.
+      const bow = Math.min(60, length * 0.22)
+      const control = { x: (start.x + end.x) / 2 + dy / length * bow * Math.sign(-dx || 1), y: (start.y + end.y) / 2 - Math.abs(dx / length) * bow }
+      return [{ id: unit.id, d: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}` }]
+    })
+  }
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     finalState()
     for (const [id, state] of pieces) {
       const needed = BATCH_OF.has(id)
       Object.assign(state, { t: needed ? 1 : 0, color: needed ? 1 : 0, dim: needed ? 0 : 1 })
     }
     scroll = 1.2
-    // A few frames, so the size, the palette, and the page settle before a screenshot.
     let frames = 0
     const settle = (time: number) => {
       render(time)
@@ -415,22 +450,6 @@ onMounted(() => {
 
   timeline = buildTimeline()
 
-  if (props.scrub) {
-    timeline.pause()
-    const line = timeline
-    const frames = Math.round(TIMES.end / 1000 * SCRUB_FPS)
-    const target = window as unknown as { __captureFrames?: number[], __captureAt?: (i: number) => void }
-    target.__captureAt = (i: number) => {
-      const ms = i * 1000 / SCRUB_FPS
-      line.seek(ms)
-      const start = STARTS.findLast(at => at <= ms) ?? 0
-      scrubbed.value = Math.min(1, (ms - start) / durations[STARTS.indexOf(start)]!)
-      render(ms)
-    }
-    // Wait for the palette and the size, then offer the frames.
-    requestAnimationFrame(() => requestAnimationFrame(() => (target.__captureFrames = Array.from({ length: frames }, () => 1000 / SCRUB_FPS))))
-    return
-  }
   const loop = (time: number) => {
     render(time)
     frame = requestAnimationFrame(loop)
@@ -612,6 +631,15 @@ const durations = STEPS.map((_, i) => STARTS[i + 1]! - STARTS[i]!)
     </div>
 
     <div class="region">
+      <!-- A still: the motion of the pieces in flight, as arrows from the conveyor into the cube. -->
+      <svg v-if="arrows.length" class="arrows" aria-hidden="true">
+        <defs>
+          <marker id="hero-arrow-head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="context-stroke" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </marker>
+        </defs>
+        <path v-for="arrow in arrows" :key="arrow.id" :d="arrow.d" class="arrow" marker-end="url(#hero-arrow-head)" />
+      </svg>
       <span
         v-for="unit in UNITS"
         :key="unit.id"
@@ -660,8 +688,7 @@ const durations = STEPS.map((_, i) => STARTS[i + 1]! - STARTS[i]!)
         <!-- One bar for each step. The steps before are full, and the bar of this step fills while it plays. -->
         <span class="bars" aria-hidden="true">
           <span v-for="(step, i) in steps" :key="step.title" class="bar" :class="{ done: i < ui.phase }">
-            <span v-if="i === ui.phase && scrubbed !== undefined" class="fill scrubbed" :style="{ transform: `scaleX(${scrubbed})` }" />
-            <span v-else-if="i === ui.phase" :key="`${ui.phase}`" class="fill" :class="{ held: !playing }" :style="{ animationDuration: `${durations[i]}ms` }" />
+            <span v-if="i === ui.phase" :key="`${ui.phase}`" class="fill" :class="{ held: !playing }" :style="{ animationDuration: `${durations[i]}ms` }" />
           </span>
         </span>
         <span class="n mono">0{{ ui.phase + 1 }}</span>
@@ -720,6 +747,23 @@ canvas {
 .map,
 .caption {
   pointer-events: auto;
+}
+
+.arrows {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  width: 100%;
+  height: 100%;
+}
+
+.arrow {
+  fill: none;
+  stroke: var(--new);
+  stroke-dasharray: 2 7;
+  stroke-linecap: round;
+  stroke-opacity: 0.85;
+  stroke-width: 2.5;
 }
 
 .label {
@@ -896,10 +940,6 @@ canvas {
   background: var(--new);
   transform-origin: 0 50%;
   animation: fill linear forwards;
-}
-
-.fill.scrubbed {
-  animation: none;
 }
 
 .fill.held {
