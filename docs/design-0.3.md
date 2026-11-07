@@ -408,6 +408,7 @@ A withdrawal followed by a new `provide` leaves a gap with no provider. During t
 - While the swap waits, `explain()` of the service has `replacement`: the explanation of the new instance, with its phase and blockers.
 - A service in `stopping` cannot be replaced. The call fails with `replace-while-stopping`. Wait until the service stops, then call `provide`.
 - `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. It rejects with the build or start error. It rejects with `replace-while-stopping` when the container stops before the swap.
+- `replace(option, { signal })` rejects when the signal aborts before the swap. The abort cancels the replacement, as a newer `replace()` does, and the old instance stays. A timeout reason gives `wait-timeout`, and its message explains the new instance. Another reason rejects as it is. See [Cancellation](#cancellation). So a caller can tell a timeout from a supersede.
 - A service without a serving instance (`pending`, `conflict`, `failed`, `building`, `starting`, or `retrying`) has no old instance to keep. The new registration takes the slot at once.
 - An option without `metadata`, `maxAttempts`, `timeouts`, or `onTimeout` keeps that value of the registration. `perConsumer` does not change.
 
@@ -595,11 +596,13 @@ injeca uses the standard `AbortSignal` for cancellation and for timeouts of a ca
 | `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The services that did not stop stay in `stopping` until their cleanups settle. Each one gets a `wait-aborted` record. An aborted signal still starts the stop. |
 | `dispose(container, { signal })` | Rejects with the reason. The disposal continues, and the container stays in `disposing`. Calls on it fail with `build-after-dispose`. A later `dispose()` waits for the same disposal and gets its result. Each service that did not stop gets a `wait-aborted` record. An aborted signal still starts the disposal. |
 | `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The service gets a `wait-aborted` record when it did not finish. An aborted signal still starts the withdrawal. The `withdraw()` of an invocation takes the same option. |
-| `registration.replace(option, { signal })` | Cancels the pending replacement, as a newer `replace()` does. The old instance stays, and the call resolves `false`. An aborted signal resolves `false` and changes nothing. After the swap, the abort has no effect. |
-| `tx.commit({ signal })` | Before the publish, the transaction aborts with the reason, and the commit rejects at once. The rollback continues: the build in progress gets the abort on its `signal`, and the key reservations end when the rollback settles. After the publish, the abort has no effect. |
+| `registration.replace(option, { signal })` | Cancels the pending replacement, as a newer `replace()` does. The old instance stays, and the call rejects. A timeout reason gives `wait-timeout` with the reason as `cause`, and its message explains the new instance. Another reason rejects as it is. An aborted signal rejects at once and changes nothing. After the swap, the abort has no effect. A stale registration still resolves `false`. |
+| `tx.commit({ signal })` | Before the publish, the transaction aborts with the reason, and the commit rejects at once. The rollback continues: the build in progress gets the abort on its `signal`, and the key reservations end when the rollback settles. A `tx.replace` keeps the old instance. After the publish, the abort has no effect. The commit does not wait for the swap of a `tx.replace`, so the signal does not reach it. |
 
-- `replace` resolves `false` and does not reject, because a cancelled replacement changes nothing. This is the same result as for a newer `replace()`.
-- Only `resolve`, `waitFor`, and `start` turn a timeout reason into a typed error. They wait for a state, so the error tells which state did not come. The other calls reject with the reason.
+- Before 0.5, an aborted `replace` resolved `false`, the same result as for a newer `replace()`. A caller did not see the difference between a timeout and a supersede. The AIRI extension host had to `resolve()` the new dependencies first only to get a useful timeout error. In 0.5, the abort rejects, and a supersede still resolves `false`, because a supersede is not an abort.
+- `resolve`, `waitFor`, `start`, and `replace` turn a timeout reason into a typed error. They wait for a state, so the error tells which state did not come. The other calls reject with the reason.
+- The message of the `wait-timeout` error of `replace` explains the new instance, or each consumer successor of a per-container replacement that did not complete `start`. It uses the format of `start-timeout`. injeca reads the explanations before the cancel, because the cancel removes the new instance. The error has no `explanations` field.
+- `replace` and `tx.commit` send no `wait-aborted` record. A `wait-aborted` record tells that work continues after its waiter left. The abort of `replace` and `tx.commit` cancels the work, and the new instance leaves with its usual phase records.
 - The policy timeouts stay numbers: `timeouts: { start, stop }` and `onTimeout`. See [Timeouts](#timeouts).
 
 #### Calling dispose from a cleanup
@@ -683,7 +686,7 @@ The consumer defines the rules that run these listeners. For example, the AIRI h
 ## Errors
 
 - All errors are typed classes with a stable `code`: `duplicate-service`, `stale-registration`, `invalid-decision`, `build-after-dispose`, `hook-outside-build`, `transaction-incomplete`, `replace-while-stopping`, `service-failed`, `start-timeout`, `wait-timeout`, `hook-timeout`, `invalid-argument`. 0.4 removes `reentrant-dispose`, because a re-entrant `stop` or `dispose` resolves at once.
-- `waitFor` and `resolve` reject with `wait-timeout` when their signal aborts with a timeout reason. `start` rejects with `start-timeout` in the same case. The `cause` is the reason. `hook-timeout` is the error of a policy timeout. No timeout code was removed in 0.4.
+- `waitFor`, `resolve`, and `replace` reject with `wait-timeout` when their signal aborts with a timeout reason. `start` rejects with `start-timeout` in the same case. The `cause` is the reason. The message of `replace` explains the new instance. `hook-timeout` is the error of a policy timeout. No timeout code was removed in 0.4.
 - A signal option that is not an `AbortSignal`, and a `timeout()` time that is not a finite number of 0 or more, throw `invalid-argument`.
 - Read caller-owned properties once, inside a narrow `try`. A read failure becomes a typed error.
 - A `provide` with an `export` option that is not a boolean throws `invalid-argument`.
@@ -777,6 +780,15 @@ Status: steps 1 to 5 are done. Only the publish of version 0.3.0 remains. The ma
     - The re-entry check of `stop()` and `dispose()` also finds a cleanup outside the subtree that holds a service of the subtree, directly or through other instances. It uses the holder walk of `withdraw()`. Before, such a cleanup waited for itself until the `stop` timeout.
     - `logging?: boolean` replaces `enabled`. The lifecycle trace is off by default. `warn` does not depend on it. A child container inherits `logging` from its parent. `createTestContainer` passes a noop logger unless the test gives a `logger`. This is a breaking change.
     - Changed assertions: the tests that passed `enabled: false` pass a noop logger now. The `stop` timeout tests expect `stop()` and `dispose()` to resolve, not to reject with `hook-timeout`. The type test checks the `tx.commit` signal without a second commit, because the second commit rejected unhandled.
+5e. Version 0.5. Two breaking changes, with no compatibility path. See the "Migration from 0.4 to 0.5" section of the README.
+  - "Service" is now "unit". `perConsumer: true` is now `instances: 'per-container'`, `export: true` is now `visibility: 'parent'`, `graph().services()` is now `units()`, the `Service*` types and errors are now `Unit*`, and `kind: 'service'` is now `'unit'`. The behavior does not change. The rest of this document still uses the 0.4 names.
+  - An aborted `replace` rejects. See [Cancellation](#cancellation) and [Atomic replacement](#atomic-replacement). `registration.replace(option, { signal })` rejects when the signal aborts before the swap. A timeout reason gives `wait-timeout`, and its message explains the new instance. Another reason rejects as it is. An aborted signal rejects at once. Before, all three cases resolved `false`.
+  - A newer `replace()`, a withdrawal, and a stale registration still resolve `false`. After the swap, the abort has no effect.
+  - The same rule applies to a per-container replacement. Its timeout message explains each consumer successor that did not complete `start`.
+  - `tx.commit({ signal })` does not change. It already rejects with the reason, and it does not wait for the swap of a `tx.replace`.
+  - `WaitTimeoutError` does not change its shape. Only its message tells what `replace` waits for.
+  - `replace` sends no `wait-aborted` record, as `tx.commit` does not.
+  - Changed assertions: the tests that expected `false` for an aborted `replace` signal expect a rejection now. The other assertions did not change.
 6. Next. Bridge: the `@injeca/bridge` package in `packages/bridge` connects an eventa channel to a child container. It has its own design document. See [Remote plugins](#remote-plugins). Transport packages that open a channel and report its state as a service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
 
 After the release, one AIRI pull request migrates the `lifecycle` callers. See [Migration of AIRI callers](#migration-of-airi-callers). An experiment with main-process hot reload in `stage-tamagotchi` can follow.
@@ -848,7 +860,7 @@ Each rule in this document needs a test. These cases are required:
 61. `timeout(container, ms)` aborts on the container clock with a `TimeoutError` reason. `withTimeout` aborts with the first reason. `anySignal` works without `AbortSignal.any` and removes its listeners.
 62. `resolve`, `waitFor`, and `start` reject with `wait-timeout` or `start-timeout` for a timeout reason, and with the reason for another reason. An aborted signal rejects at once. The services of `start` keep converging.
 63. `stop` and `dispose` with an aborted signal stop waiting, send `wait-aborted` records, and the cleanups keep running. A later `dispose()` gets the result.
-64. `replace` with an aborted signal cancels the pending replacement and resolves `false`. The old instance stays. After the swap, the abort has no effect.
+64. `replace` with an aborted signal cancels the pending replacement and rejects. A timeout reason gives `wait-timeout` with a message that names the missing dependency of the new option, also for a `start` hook that did not settle. Another reason rejects as it is. An already aborted signal rejects at once and builds nothing. A newer `replace()` still resolves `false`, and a later abort has no effect. A stale registration resolves `false`. The old instance stays. After the swap, the abort has no effect. No `wait-aborted` record is sent. Each case removes its listener.
 65. `tx.commit` with an aborted signal before the publish rejects, publishes nothing, and frees the keys after the rollback. After the publish, the abort has no effect.
 66. Each call removes its listener from the signal when it settles. A policy timeout aborts the hook signal with `hook-timeout`, and its timer stops when the hook settles first.
 67. A `stop` timeout without `onTimeout` resolves `stop()`, `dispose()`, and `withdraw()` for every caller, sends the `timeout` record and a `handled` decision, and warns. The warning has the hint only while the container stops or disposes. `decide.fail()` from `onTimeout` still fails the stop.
@@ -858,6 +870,8 @@ Each rule in this document needs a test. These cases are required:
 71. `manualClock` and `drained` from `injeca/testing` drive `timeout()` and a policy timeout without real time.
 72. A container writes no lifecycle trace by default, and writes each lifecycle method with `logging: true`. `warn` writes in both cases. A child inherits `logging` unless it sets its own. Types: `enabled` is not an option.
 73. A cleanup of a parent service that holds an export of a child container, directly or through other instances, and that calls `dispose(child)` or `stop(child)` with its signal, resolves at once with a warning and one `reentrant-call` record. A `perConsumer` export counts for `dispose`. A signal of a holder that is not stopping, or of a stopping service that holds nothing of the child, still waits.
+74. A per-container replacement with an aborted signal rejects with the reason, and its timeout message has one line for each waiting consumer unit. The old consumer units stay.
+75. `tx.commit({ signal })` with a `tx.replace` rejects with the reason before the publish, and the old instance stays.
 
 ## Appendix: plugin-sdk
 

@@ -2,9 +2,10 @@ import type { RegistrationNode, SwapOutcome, UnitDefinition, UnitNode } from '..
 import type { PendingSwap } from '../reconciler/swap'
 import type { Registration, WithdrawOptions } from '../types'
 
-import { ReplaceWhileStoppingError } from '../diagnostics/errors'
+import { ReplaceWhileStoppingError, WaitTimeoutError } from '../diagnostics/errors'
+import { describeExplanations, explainUnit } from '../diagnostics/explain'
 import { cancelPending, cancelSuccessor, createUnit, currentUnit, publishUnit, readDefinition, releaseUnit } from '../graph/nodes'
-import { onAbort, readSignal } from '../helpers/abort'
+import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
 import { completeSwap, createSuccessor } from '../reconciler/swap'
@@ -170,16 +171,53 @@ export function replaceRunning(registration: RegistrationNode, target: UnitNode,
 }
 
 /**
- * Waits for the outcome of the pending replacement `pending`. When `signal` aborts first, it cancels the replacement, as a newer `replace` does.
- * The cancel settles the outcome as `cancelled`. The listener goes when the outcome settles.
+ * The rejection of a `replace()` that `reason` aborted, as `waitFor` and `resolve` map a reason.
+ * A timeout reason gives `wait-timeout` with the reason as `cause`. Its message explains the `waiting` units. Another reason is the rejection itself.
  */
-async function awaitOutcome(registration: RegistrationNode, pending: UnitNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
-  const removeAbort = onAbort(signal, () => {
-    if (registration.pending === pending)
-      batch(() => cancelPending(registration))
+function replaceAbortError(name: string, reason: unknown, waiting: () => readonly UnitNode[]): unknown {
+  if (!isTimeoutReason(reason))
+    return reason
+
+  const explanations = waiting().map(explainUnit)
+  const details = explanations.length > 0 ? ` The replacement is not running:\n${describeExplanations(explanations)}` : ''
+  return new WaitTimeoutError(`replace('${name}') timed out before the swap.${details}`, { cause: reason })
+}
+
+/** The new units that a replacement waits for: `pending` itself, or each consumer successor of the per-container template `pending`. */
+function waitingUnits(target: UnitNode, pending: UnitNode): readonly UnitNode[] {
+  if (target.instances !== 'per-container')
+    return [pending]
+
+  const successors: UnitNode[] = []
+  for (const consumer of target.signals.consumers().values()) {
+    const successor = consumer.successor
+    if (successor?.template === pending && successor.signals.present())
+      successors.push(successor)
+  }
+
+  return successors
+}
+
+/**
+ * Waits for the outcome of the pending replacement `pending` of `target`. When `signal` aborts first, it cancels the replacement, as a newer `replace` does.
+ * Then it rejects with the reason, or with `wait-timeout` for a timeout reason. Its message explains the new units, read before the cancel.
+ * A newer `replace` or a withdrawal still resolves `false`. The listener goes when the outcome settles.
+ */
+async function awaitOutcome(registration: RegistrationNode, target: UnitNode, pending: UnitNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
+  let abortError: { readonly error: unknown } | undefined
+  const removeAbort = onAbort(signal, (reason) => {
+    if (registration.pending !== pending)
+      return
+
+    abortError = { error: replaceAbortError(registration.name, reason, () => waitingUnits(target, pending)) }
+    batch(() => cancelPending(registration))
   })
   try {
-    return outcomeResult(await outcome, registration.name)
+    const result = await outcome
+    if (result.kind === 'cancelled' && abortError)
+      throw abortError.error
+
+    return outcomeResult(result, registration.name)
   }
   finally {
     removeAbort()
@@ -195,7 +233,7 @@ async function replace(registration: RegistrationNode, option: unknown, options:
 
   const definition = readDefinition(registration.name, option, target)
   if (signal?.aborted)
-    return false
+    throw replaceAbortError(registration.name, signal.reason, () => [])
   const phase = untracked(() => target.signals.phase())
   if (phase === 'stopping')
     throw new ReplaceWhileStoppingError(`'${registration.name}' is stopping. Wait until it stops, then call provide.`)
@@ -221,7 +259,7 @@ async function replace(registration: RegistrationNode, option: unknown, options:
       })
       return replaceTemplate(registration, target, template!)
     })
-    return awaitOutcome(registration, template!, outcome, signal)
+    return awaitOutcome(registration, target, template!, outcome, signal)
   }
   if (phase !== 'running') {
     untracked(() => replaceAtOnce(registration, target, definition))
@@ -229,7 +267,7 @@ async function replace(registration: RegistrationNode, option: unknown, options:
   }
 
   const pending = untracked(() => replaceRunning(registration, target, definition))
-  return awaitOutcome(registration, pending.unit, pending.outcome, signal)
+  return awaitOutcome(registration, target, pending.unit, pending.outcome, signal)
 }
 
 const registrations = new WeakMap<object, RegistrationNode>()

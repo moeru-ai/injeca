@@ -141,7 +141,7 @@ export class UnitFailedError extends InjecaError {
   }
 }
 
-/** `waitFor()` or `resolve()` did not match before its configured timeout. */
+/** `waitFor()`, `resolve()`, or `replace()` did not reach its state before the timeout signal aborted. */
 export class WaitTimeoutError extends InjecaError {
   declare readonly code: 'wait-timeout'
 
