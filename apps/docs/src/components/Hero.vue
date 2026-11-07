@@ -11,13 +11,16 @@ const props = defineProps<{ capture?: boolean }>()
 
 const repo = 'https://github.com/moeru-ai/injeca'
 // `&at=<ms>` picks the moment of a capture. By default it is app, whole, with the units that it does not need left on the conveyor.
-const at = Number(new URLSearchParams(location.search).get('at') ?? TIMES.app)
+const params = new URLSearchParams(location.search)
+const at = Number(params.get('at') ?? TIMES.app)
+// `&animate` makes the capture an animated banner: the script draws each frame of the loop.
+const animate = params.has('animate')
 </script>
 
 <template>
   <header id="top" class="hero" :class="{ capture: props.capture }">
     <div class="scene">
-      <HeroScene :at="props.capture ? at : undefined" :left="0.36" />
+      <HeroScene :at="props.capture && !animate ? at : undefined" :scrub="props.capture && animate" :left="0.36" />
     </div>
     <div v-if="!props.capture" class="corner">
       <button type="button" class="round lang" :aria-label="$t('page.hero.to-language')" :title="$t('page.hero.to-language')" @click="toggleLocale">

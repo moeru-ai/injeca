@@ -30,9 +30,18 @@ const props = withDefaults(defineProps<{
   at?: number
   /** Where the scene starts, as a part of the width. The left of the canvas stays free for text that floats over it. */
   left?: number
+  /**
+   * For an animated banner: the scene does not run on its own. The capture script calls `__captureAt(i)` for each
+   * frame of `__captureFrames`, and the scene draws that exact moment of the loop.
+   */
+  scrub?: boolean
 }>(), { left: 0 })
 
 const still = props.at !== undefined
+/** The frames of an animated banner, a second each. */
+const SCRUB_FPS = 15
+/** In scrub mode, how far the current step has gone, from 0 to 1. The bar of the step shows it. */
+const scrubbed = ref<number>()
 
 /** What the page shows around the scene. The timeline sets it. */
 const ui = reactive({
@@ -189,7 +198,7 @@ function hoverElement(id: string | undefined, event?: Event): void {
 onMounted(() => {
   const scene = new Scene()
   const camera = new PerspectiveCamera(30, 1, 0.1, 100)
-  renderer = new WebGLRenderer({ canvas: canvas.value!, antialias: true, alpha: true, preserveDrawingBuffer: still })
+  renderer = new WebGLRenderer({ canvas: canvas.value!, antialias: true, alpha: true, preserveDrawingBuffer: still || props.scrub })
   // The canvas covers the whole hero, so a full Retina ratio would paint four times the pixels for little gain.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
   const group = new Group()
@@ -316,7 +325,10 @@ onMounted(() => {
   function render(time: number): void {
     const dt = last ? Math.min(0.05, (time - last) / 1000) : 0
     last = time
-    if (!paused && !still)
+    // A scrubbed frame takes the conveyor from the time of the loop, so each frame is the same on each run.
+    if (props.scrub)
+      scroll = time / 1000 * 0.45
+    else if (!paused && !still)
       scroll += dt * 0.45
     const t = time / 1000
     group.rotation.y = still ? 0.04 : Math.sin(t * 0.25) * 0.12
@@ -402,6 +414,23 @@ onMounted(() => {
   }
 
   timeline = buildTimeline()
+
+  if (props.scrub) {
+    timeline.pause()
+    const line = timeline
+    const frames = Math.round(TIMES.end / 1000 * SCRUB_FPS)
+    const target = window as unknown as { __captureFrames?: number[], __captureAt?: (i: number) => void }
+    target.__captureAt = (i: number) => {
+      const ms = i * 1000 / SCRUB_FPS
+      line.seek(ms)
+      const start = STARTS.findLast(at => at <= ms) ?? 0
+      scrubbed.value = Math.min(1, (ms - start) / durations[STARTS.indexOf(start)]!)
+      render(ms)
+    }
+    // Wait for the palette and the size, then offer the frames.
+    requestAnimationFrame(() => requestAnimationFrame(() => (target.__captureFrames = Array.from({ length: frames }, () => 1000 / SCRUB_FPS))))
+    return
+  }
   const loop = (time: number) => {
     render(time)
     frame = requestAnimationFrame(loop)
@@ -631,7 +660,8 @@ const durations = STEPS.map((_, i) => STARTS[i + 1]! - STARTS[i]!)
         <!-- One bar for each step. The steps before are full, and the bar of this step fills while it plays. -->
         <span class="bars" aria-hidden="true">
           <span v-for="(step, i) in steps" :key="step.title" class="bar" :class="{ done: i < ui.phase }">
-            <span v-if="i === ui.phase" :key="`${ui.phase}`" class="fill" :class="{ held: !playing }" :style="{ animationDuration: `${durations[i]}ms` }" />
+            <span v-if="i === ui.phase && scrubbed !== undefined" class="fill scrubbed" :style="{ transform: `scaleX(${scrubbed})` }" />
+            <span v-else-if="i === ui.phase" :key="`${ui.phase}`" class="fill" :class="{ held: !playing }" :style="{ animationDuration: `${durations[i]}ms` }" />
           </span>
         </span>
         <span class="n mono">0{{ ui.phase + 1 }}</span>
@@ -866,6 +896,10 @@ canvas {
   background: var(--new);
   transform-origin: 0 50%;
   animation: fill linear forwards;
+}
+
+.fill.scrubbed {
+  animation: none;
 }
 
 .fill.held {
