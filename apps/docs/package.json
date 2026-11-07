@@ -1,7 +1,7 @@
 {
   "name": "@injeca/docs",
   "type": "module",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "The injeca scenario lab: the real container, driven step by step, to show what each primitive does",
   "scripts": {
