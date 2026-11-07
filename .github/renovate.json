@@ -14,5 +14,12 @@
     "workarounds:all"
   ],
   "rangeStrategy": "bump",
-  "labels": ["dependencies"]
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Widen peer dependency ranges. Raising the lower bound of a peer range breaks consumers that pin an older version.",
+      "matchDepTypes": ["peerDependencies"],
+      "rangeStrategy": "widen"
+    }
+  ]
 }
