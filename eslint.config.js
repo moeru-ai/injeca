@@ -16,8 +16,8 @@ export default defineConfig(
       'cspell.config.yaml',
       'cspell.config.yml',
       'skills/injeca/SKILL.md',
-      // The design document has pseudo-code signatures that do not parse as TypeScript.
-      'docs/design-*.md',
+      // The reference notes keep pseudo-code signatures that do not parse as TypeScript.
+      'docs/ai/references/**/*.md',
     ],
   },
   {

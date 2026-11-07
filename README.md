@@ -24,7 +24,7 @@ Pure functional dependency injection for TypeScript. Units declare their depende
 
 > Heavily inspired by [uber/fx](https://go.uber.org/fx), [uber/fig](https://go.uber.org/fig), and [uber/dig](https://go.uber.org/dig) in the Go ecosystem, and by the run-time model of [Cordis](https://github.com/cordiverse/cordis).
 
-**[Open the scenario lab](https://injeca.moeru.ai/)** to see what each primitive does to a graph. The lab runs injeca in the page and steps through each scenario, so every frame shows real behavior. Its sandbox lets you replace, withdraw, and set the status of units yourself, with a preview from `graph().impact()`. The lab is in English and Simplified Chinese ([简体中文](https://injeca.moeru.ai/?lang=zh-Hans)).
+**[Open the Docs](https://injeca.moeru.ai/)** to see what each primitive does to a graph. Its Playground runs injeca in the page and steps through each scenario, so every frame shows real behavior, and lets you replace, withdraw, and set the status of units yourself, with a preview from `graph().impact()`. The Docs are in English and Simplified Chinese ([简体中文](https://injeca.moeru.ai/?lang=zh-Hans)).
 
 <picture>
   <source
@@ -37,7 +37,7 @@ Pure functional dependency injection for TypeScript. Units declare their depende
     srcset="./docs/assets/banners/features-light.webp"
     media="(prefers-color-scheme: light), (prefers-color-scheme: no-preference)"
   />
-  <img width="100%" alt="The seven things that injeca handles, as seven cards. Dependency injection: provide(), dependsOn, and on('start'). Swap at run time: replace(), withdraw(), and on('dependency-change'). Status awareness: setStatus(), watch(), and waitFor(). Isolated containers: createContainer(), isolate, and visibility. Transactions with rollback: transaction() and tx.commit(). Ask why: graph().explain(), graph().impact(), and observe(). Built for testing: manualClock(), drained(), and createHookContext()." src="./docs/assets/banners/features-light.webp" />
+  <img width="100%" alt="The seven things that injeca handles, as seven cards. Dependency injection: provide(), dependsOn, and on('start'). Swap at run time: replace(), withdraw(), and on('dependency-change'). Status awareness: setStatus(), watch(), and waitFor(). Isolated containers: createContainer(), isolate, and visibility. Transactions with rollback: transaction() and tx.commit(). Explain: graph().explain(), graph().impact(), and observe(). Built for testing: manualClock(), drained(), and createHookContext()." src="./docs/assets/banners/features-light.webp" />
 </picture>
 
 ## Getting started
@@ -77,7 +77,7 @@ await injeca.stop()
 - `provide` returns a typed key, and `dependsOn` takes keys. `greeter` gets `config` without an import of its value.
 - `start()` builds `config` first, then `greeter`. `stop()` stops them in reverse.
 
-Next, read [Dependency injection](#dependency-injection) for keys and the lifecycle, or open [the scenario lab](https://injeca.moeru.ai/) to watch each primitive work.
+Next, read [Dependency injection](#dependency-injection) for keys and the lifecycle, or open [the Playground](https://injeca.moeru.ai/) to watch each primitive work.
 
 ### Agent Skills
 
@@ -96,15 +96,11 @@ npx skills add moeru-ai/injeca
 - [Status awareness](#status-awareness)
 - [Isolated containers](#isolated-containers)
 - [Transactions with rollback](#transactions-with-rollback)
-- [Ask why](#ask-why)
+- [Explain](#explain)
 - [Built for testing](#built-for-testing)
 - [API at a glance](#api-at-a-glance)
 - [Packages](#packages)
-- [Migration from 0.2](#migration-from-02)
-- [Migration from 0.3 to 0.4](#migration-from-03-to-04)
-- [Migration from 0.4 to 0.5](#migration-from-04-to-05)
-  - [Service is now unit](#service-is-now-unit)
-  - [An aborted replace() rejects](#an-aborted-replace-rejects)
+- [Migrations](#migrations)
 - [Documentation automation](#documentation-automation)
 - [Development](#development)
 - [License](#license)
@@ -114,6 +110,23 @@ npx skills add moeru-ai/injeca
 ## Dependency injection
 
 Most programs are a set of parts that need each other: a config, a database, and a server that uses both. In injeca, each part is a unit. A unit names what it depends on, builds its value from them, and owns the hooks that start and stop it. injeca works out the order, so you write no wiring code and no teardown list.
+
+The simplest case: two units, one that depends on the other.
+
+```ts
+import { createContainer, provide, resolve, start } from 'injeca'
+
+const container = createContainer()
+
+const config = provide(container, 'config', () => ({ port: 3000 }))
+const server = provide(container, 'server', {
+  dependsOn: { config },
+  build: ({ dependsOn }) => createApp(dependsOn.config.port),
+})
+
+await start(container) // builds config, then server
+const { server: app } = await resolve(container, { server })
+```
 
 <details>
 <summary><strong>How do I wire units together, without classes or decorators?</strong></summary>
@@ -169,7 +182,7 @@ process.once('SIGINT', async () => {
 - `provide(container, name, build)` is the short form for a unit without dependencies. `provide(container, { dependsOn, build })` without a name also works.
 - `resolve()` waits for a missing provider. Before `start()`, it builds the units that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. The callback runs again when a required dependency gets a new instance.
-- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Turn on logging](#ask-why).
+- injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Turn on logging](#explain).
 
 > [!WARNING]
 >
@@ -405,7 +418,7 @@ await start(container)
 - `maxAttempts` limits the runs of one hook for one instance. The decision wins over the unit, and the unit wins over the container. A child container uses the value of its nearest ancestor.
 - When the attempts end, a running unit stops first. Then it goes to `failed` with the last reason. `start()` again, `stop()` and `start()`, or `replace()` moves it out of `failed`.
 
-[Try it in the lab →][lab-retry]
+[Try it in the Playground →][lab-retry]
 
 </details>
 
@@ -518,6 +531,20 @@ An app that loads plugins, or reloads its code, changes its graph while it runs.
   <img width="100%" alt="Swap a provider while it runs, in three ways in turn. withdraw() and provide() leave a gap: speech and app stop and wait in pending. replace() has no gap: tts v1 serves while tts v2 builds, then speech rebuilds against v2 while the old speech serves. replace() with a dependency-change handler: speech takes tts v2 in its own instance, and app does not change." src="./docs/assets/banners/compare-swap-light.webp" />
 </picture>
 
+The simplest case: replace a running unit with a new build.
+
+```ts
+import { createContainer, provide, start } from 'injeca'
+
+const container = createContainer()
+const tts = provide(container, 'tts', () => createTts({ model: 'v1' }))
+
+await start(container)
+
+// v2 builds and starts while v1 serves. Then v2 takes its place, and v1 stops.
+await tts.replace(() => createTts({ model: 'v2' }))
+```
+
 <details>
 <summary><strong>How do I swap a dependency while the app runs?</strong></summary>
 
@@ -599,7 +626,7 @@ catch (error) {
 
 - The message of the `WaitTimeoutError` explains the new instance at the timeout. For a per-container registration, it has one line for each consumer unit that did not complete `start`. The replacement is gone after the abort, so `graph(container).explain()` no longer shows it.
 
-[Try it in the lab →][lab-swap] · [Try the handler →][lab-handler]
+[Try it in the Playground →][lab-swap] · [Try the handler →][lab-handler]
 
 </details>
 
@@ -700,7 +727,7 @@ await started
 - `firstAvailable(...keys)` selects the first candidate that runs and is available. When a candidate earlier in the list starts to run, the dependent moves to it.
 - `optional(firstAvailable(...))` works too. It gives `undefined` when no candidate runs.
 
-[Try it in the lab →][lab-late]
+[Try it in the Playground →][lab-late]
 
 </details>
 
@@ -763,6 +790,26 @@ A dependency is not only present or gone. A model API can be rate limited, and a
   />
   <img width="100%" alt="A provider loses its connection, in three ways in turn. With setStatus('unavailable'), chat and app are unavailable with the same instances, and notes, which uses llm as optional, stays ready. With setStatus('degraded'), chat and app are degraded. With withdraw(), chat and app stop and wait in pending, and notes builds again without llm." src="./docs/assets/banners/compare-status-light.webp" />
 </picture>
+
+The simplest case: a unit reports its status, and a caller waits until it is ready.
+
+```ts
+import { createContainer, provide, start, waitFor } from 'injeca'
+
+const container = createContainer()
+
+const llm = provide(container, 'llm', ({ setStatus }) => {
+  const client = connectLlm()
+  client.on('offline', () => setStatus('unavailable', 'offline'))
+  client.on('online', () => setStatus('ready'))
+  return client
+})
+
+await start(container)
+
+// Resolves when llm runs with the status ready.
+await waitFor(container, llm, { status: 'ready' })
+```
 
 <details>
 <summary><strong>How do I know when a dependency is degraded or down?</strong></summary>
@@ -827,7 +874,7 @@ stopWatching()
 - `waitFor` rejects with a `UnitFailedError` (`unit-failed`) when the unit failed, or waits for a required provider that failed. Its `cause` is the failure.
 - For a per-container key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
 
-[Try it in the lab →][lab-status]
+[Try it in the Playground →][lab-status]
 
 </details>
 
@@ -874,6 +921,24 @@ A plugin uses what the host gives, adds its own units, and must leave cleanly. i
   />
   <img width="100%" alt="A plugin brings its own theme, in three ways in turn. A provider in the child container shadows the host theme only while it runs, so view keeps the host theme while the plugin theme builds. With isolate, view waits for the plugin theme. With an exclusive key, both providers go to conflict, and app and view wait." src="./docs/assets/banners/compare-containers-light.webp" />
 </picture>
+
+The simplest case: a child container uses a unit of the host, and one call removes it.
+
+```ts
+import { createContainer, dispose, provide, start } from 'injeca'
+
+const host = createContainer()
+const llm = provide(host, 'llm', () => createLlmClient())
+await start(host)
+
+const plugin = createContainer({ parent: host })
+// The plugin resolves llm from the host.
+provide(plugin, 'plugin:chat', { dependsOn: { llm }, build: ({ dependsOn }) => createChat(dependsOn.llm) })
+await start(plugin)
+
+// Stops and withdraws all units of the plugin. The host keeps running.
+await dispose(plugin)
+```
 
 <details>
 <summary><strong>How do I give each plugin its own container?</strong></summary>
@@ -929,7 +994,7 @@ await dispose(plugin)
 - Only a root container reads `clock` and `random`. A child container uses those of its root.
 - A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a unit that holds a unit of the container. It warns and resolves at once. See [Call dispose from a cleanup](#dependency-injection).
 
-[Try it in the lab →][lab-containers]
+[Try it in the Playground →][lab-containers]
 
 </details>
 
@@ -1004,7 +1069,7 @@ const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: 
 - A [parent-visible registration](#isolated-containers) counts in the area of the parent container. So two sibling plugins that make one exclusive key visible to the parent conflict, and so do a host registration and a parent-visible plugin registration of that key.
 - An isolated key (`createContainer({ isolate: [key] })`) ends the resolution area of an exclusive key of an ancestor.
 
-[Try it in the lab →][lab-exclusive]
+[Try it in the Playground →][lab-exclusive]
 
 </details>
 
@@ -1025,6 +1090,22 @@ A plugin often brings several units that work only together. If one of them fail
   />
   <img width="100%" alt="Load a plugin with two units, in three ways in turn. With a provide() for each unit, memory runs and agent fails, so half of the plugin is live. With tx.commit(), memory builds while consumers see neither unit, then both publish together. When a build fails in the transaction, nothing is published." src="./docs/assets/banners/compare-plugin-light.webp" />
 </picture>
+
+The simplest case: two units that publish together, or not at all.
+
+```ts
+import { createContainer, start, transaction } from 'injeca'
+
+const container = createContainer()
+await start(container)
+
+const tx = transaction(container)
+const memory = tx.provide('plugin:memory', () => createMemory())
+tx.provide('plugin:agent', { dependsOn: { memory }, build: ({ dependsOn }) => createAgent(dependsOn.memory) })
+
+// Builds both units. Publishes both in one batch, or nothing when a build fails.
+await tx.commit()
+```
 
 <details>
 <summary><strong>How do I load a plugin's units all or nothing?</strong></summary>
@@ -1070,13 +1151,34 @@ catch (error) {
 - `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
 - `tx.commit({ signal })` aborts the transaction when the signal aborts before the publish. See [Stop waiting after a time limit](#dependency-injection).
 
-[Try it in the lab →][lab-plugin]
+[Try it in the Playground →][lab-plugin]
 
 </details>
 
-## Ask why
+## Explain
 
-When a unit does not run, the cause is usually somewhere else in the graph: a missing provider, a failed dependency, or a conflict. injeca keeps the whole graph as data, so you can ask it. You can also preview what a change does before you make it, and follow each event as it occurs.
+When a unit does not run, the cause is usually somewhere else in the graph: a missing provider, a failed dependency, or a conflict. injeca keeps the whole graph as data, so it can explain why a unit is waiting. You can also preview what a change does before you make it, and follow each event as it occurs.
+
+The simplest case: explain why a unit does not run, and preview a change.
+
+```ts
+import { createContainer, defineKey, graph, provide, start } from 'injeca'
+
+const container = createContainer()
+const llm = defineKey<LlmClient>('llm')
+const chat = provide(container, 'chat', { dependsOn: { llm }, build: ({ dependsOn }) => createChat(dependsOn.llm) })
+
+// Why is chat not running?
+// → { phase: 'pending', blockers: [{ kind: 'not-started' }, { kind: 'missing-provider', key: 'llm', ... }] }
+graph(container).explain(chat)
+
+provide(container, llm, () => createLlmClient())
+await start(container)
+
+// What would a withdrawal of llm do? Nothing changes yet.
+// → { stopped: [chat, llm], rebuilt: [], notified: [] }, as graph units
+graph(container).impact({ kind: 'withdraw', key: llm })
+```
 
 <details>
 <summary><strong>How do I find out why a unit is not running, and preview a change?</strong></summary>
@@ -1158,6 +1260,27 @@ const entries = listeners(host, gate) // [{ handler, owner, metadata }]
 
 Retries, backoff, and timeouts are hard to test when they use real time. injeca reads the time from a clock that you can replace. With a manual clock, a test moves the time by hand. A hook handler can also be tested alone, without a container.
 
+The simplest case: a retry after 1 s runs at once, because the test moves the time.
+
+```ts
+import { createContainer, provide, start } from 'injeca'
+import { drained, manualClock } from 'injeca/testing'
+
+const { clock, advance } = manualClock()
+const container = createContainer({ clock })
+
+provide(container, 'device', ({ on }) => {
+  // The first attempt asks for a retry after 1 s.
+  on('start', ({ decide, attempt }) => attempt === 1 ? decide.requeue({ after: 1_000 }) : undefined)
+  return createDevice()
+})
+
+const started = start(container)
+await drained(container) // device waits in `retrying`
+advance(1_000) // the second attempt runs now, without a real wait
+await started
+```
+
 <details>
 <summary><strong>How do I test timeouts and retries without waiting?</strong></summary>
 
@@ -1208,7 +1331,7 @@ const decision = checkDecision(context, await connectOrRetry(context))
 console.info(decision?.kind) // 'requeue'
 ```
 
-The [scenario lab](https://injeca.moeru.ai/) uses the same functions to step through each scenario.
+The [Playground](https://injeca.moeru.ai/) uses the same functions to step through each scenario.
 
 </details>
 
@@ -1233,9 +1356,9 @@ The [scenario lab](https://injeca.moeru.ai/) uses the same functions to step thr
 | `defineKey(name, { exclusive? })` | Makes a typed key without a provider | [Swap at run time](#swap-at-run-time) |
 | `optional(dep)`, `firstAvailable(...deps)`, `where(dep, condition)` | Makes a dependency optional, gives a fallback, or filters providers | [Swap at run time](#swap-at-run-time) |
 | `transaction(container)` | Declares, provides, and publishes units all or nothing | [Transactions with rollback](#transactions-with-rollback) |
-| `graph(container)` | `units`, `dependencies`, `dependents`, `order`, `cycles`, `explain`, `impact` | [Ask why](#ask-why) |
+| `graph(container)` | `units`, `dependencies`, `dependents`, `order`, `cycles`, `explain`, `impact` | [Explain](#explain) |
 | `peek(container, dep)`, `observe(container, listener)` | Reads a value now, or follows each event | [Status awareness](#status-awareness) |
-| `listen(container, key, handler)`, `listeners(container, key)` | Stores listeners that a container owns | [Ask why](#ask-why) |
+| `listen(container, key, handler)`, `listeners(container, key)` | Stores listeners that a container owns | [Explain](#explain) |
 | `injeca.provide`, `injeca.start`, … | The same calls on the global container | [Dependency injection](#dependency-injection) |
 | `manualClock()`, `drained()`, `createHookContext()`, `checkDecision()` from `injeca/testing` | Tests time and hooks without waiting | [Built for testing](#built-for-testing) |
 
@@ -1250,149 +1373,16 @@ Transport packages that open a channel and report it as a unit use the name `@in
 
 More documentation:
 
-- [The injeca 0.3 design](./docs/design-0.3.md): the decisions, the phases, and the convergence rules
 - [The injeca agent skill](./skills/injeca/SKILL.md): `npx skills add moeru-ai/injeca`
-- [The scenario lab](https://injeca.moeru.ai/), from [`apps/docs`](./apps/docs)
+- [The Docs and the Playground](https://injeca.moeru.ai/), from [`apps/docs`](./apps/docs)
 
-## Migration from 0.2
+## Migrations
 
-0.3 keeps the 0.2 call style: `provide`, `invoke`, `resolve`, `start`, `stop`, `createContainer`, and the global `injeca` object. One API changed:
+Each release that breaks the API has a guide with the changes and how to update your code:
 
-```ts
-// 0.2
-const server = injeca.provide({
-  dependsOn: { lifecycle },
-  build({ dependsOn }) {
-    const app = createServer()
-    dependsOn.lifecycle.appHooks.onStart(() => app.listen(3000))
-    dependsOn.lifecycle.appHooks.onStop(() => app.close())
-    return app
-  },
-})
-
-// 0.3
-const server = injeca.provide({
-  build({ on }) {
-    const app = createServer()
-    on('start', () => app.listen(3000))
-    on('stop', () => app.close())
-    return app
-  },
-})
-```
-
-Other differences:
-
-- `start()` waits for a missing provider. 0.2 threw an error. Use `start(container, { signal: timeout(container, ms) })` to fail after a time.
-- `resolve()` waits for a missing provider too. Before `start()`, it builds the units that it needs, with their `start` hooks.
-- `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. Its callback runs again when a required dependency gets a new instance.
-
-## Migration from 0.3 to 0.4
-
-0.4 removes the `timeoutMs` option of `resolve`, `waitFor`, and `start`. Pass a signal from `timeout(container, ms)`:
-
-```ts
-// 0.3
-await resolve(container, { llm: llmKey }, { timeoutMs: 5_000 })
-await waitFor(container, server, { status: 'ready', timeoutMs: 5_000 })
-await start(container, { timeoutMs: 10_000 })
-
-// 0.4
-await resolve(container, { llm: llmKey }, { signal: timeout(container, 5_000) })
-await waitFor(container, server, { status: 'ready', signal: timeout(container, 5_000) })
-await start(container, { signal: timeout(container, 10_000) })
-```
-
-- The errors do not change. A timeout gives `WaitTimeoutError` or `StartTimeoutError`. The error message no longer has the milliseconds. The `cause` is the `TimeoutError` reason.
-- A call with `timeoutMs` and `signal` becomes one signal: `withTimeout(signal, ms, container)`.
-- A `TimeoutError` reason from your own signal, for example `AbortSignal.timeout()`, now also gives `WaitTimeoutError` or `StartTimeoutError`. Another reason rejects as it is, as before.
-- `stop`, `dispose`, `withdraw`, `replace`, and `tx.commit` take `{ signal }` too. See [Cancellation](#dependency-injection).
-- `timeouts: { start, stop }` and `onTimeout` keep their shape. A `stop` handler now sees the `stop` timeout on its `signal`.
-- A `stop` timeout no longer fails `stop()`, `dispose()`, or `withdraw()`. Without `onTimeout`, it counts as `handled`, with a warning. In 0.3, the callers rejected with `HookTimeoutError`. To keep a failure, return `context.decide.fail(error)` from `onTimeout` for the `stop` hook.
-- `observe` has two new record types, `wait-aborted` and `reentrant-call`. A `switch` on `record.type` with an exhaustive check needs a case for each. Their `call` can be `'stop'`, `'dispose'`, or `'withdraw'`.
-- `ReentrantDisposeError` (`reentrant-dispose`) is removed. A `stop()`, `dispose()`, or `withdraw()` from a cleanup that its wait includes resolves at once with a warning. See [Calling dispose from a cleanup](#dependency-injection).
-- A custom `Logger` needs `warn(message)`. `createDefaultLogger`, `createLoggLogger`, and `createNoopLogger` have it. injeca also writes stop timeouts and late failures of abandoned callbacks with it.
-- `injeca/testing` exports `manualClock` and `drained`. See [Testing with a manual clock](#built-for-testing).
-- The `enabled` option of `createContainer` is removed. The lifecycle logs are off by default. `logging: true` turns them on. Warnings always go to the logger. See [Logging](#ask-why).
-
-```ts
-// 0.3
-createContainer({ enabled: false }) // no logs
-createContainer() // lifecycle logs
-
-// 0.4
-createContainer({ logger: createNoopLogger() }) // no logs and no warnings. Or remove the option to keep the warnings.
-createContainer({ logging: true }) // lifecycle logs
-```
-
-## Migration from 0.4 to 0.5
-
-0.5 has two breaking changes. It renames "service" to "unit", and an aborted `replace()` signal rejects.
-
-### Service is now unit
-
-0.5 renames "service" to "unit". A unit is a registration that `provide()` makes, with the instances that it builds. 0.5 also renames the options for sharing and visibility. The rename does not change the behavior.
-
-```ts
-// 0.4
-provide(root, 'host:client', { perConsumer: true, build: ({ consumer }) => createHostClient(consumer) })
-provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
-graph(container).services()
-
-// 0.5
-provide(root, 'host:client', { instances: 'per-container', build: ({ consumer }) => createHostClient(consumer) })
-provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemoryKit() })
-graph(container).units()
-```
-
-| 0.4 | 0.5 |
-| --- | --- |
-| `perConsumer: true` | `instances: 'per-container'`. The default is `'shared'`. |
-| `export: true` | `visibility: 'parent'`. The default is `'local'`. |
-| `graph(container).services()` | `graph(container).units()` |
-| `GraphService` with `perConsumer: boolean` and `exported: boolean` | `GraphUnit` with `instances: 'shared' \| 'per-container'` and `visibility: 'local' \| 'parent'` |
-| `kind: 'service'` in `GraphService` and `ServiceExplanation` | `kind: 'unit'` |
-| `decision.service` | `decision.unit` |
-| `DuplicateServiceError` (`duplicate-service`) | `DuplicateUnitError` (`duplicate-unit`) |
-| `ServiceFailedError` (`service-failed`) | `UnitFailedError` (`unit-failed`) |
-| `ServicePhase`, `ServiceStatus`, `ServiceState` | `UnitPhase`, `UnitStatus`, `UnitState` |
-| `ServiceHook`, `ServiceMetadata` | `UnitHook`, `UnitMetadata` |
-| `ServiceBlocker`, `ServiceExplanation` | `UnitBlocker`, `UnitExplanation` |
-
-- 0.5 has no aliases for the old names. TypeScript shows each old name as an error. Replace each one with its new name.
-- `instances` and `visibility` accept only the values in the table. Another value, for example `true`, throws `InvalidArgumentError`.
-- An old option such as `perConsumer: true` or `export: true` is not read any more, and the type check rejects it in an object literal. Without the type check, the registration is shared and local.
-- Check the error codes in your own `catch` blocks and the `kind` values in your own code that reads graph queries.
-
-### An aborted replace() rejects
-
-0.5 changes the result of `registration.replace(option, { signal })` when the signal aborts before the swap. In 0.4, it resolved `false`, the same result as for a newer `replace()`. Now it rejects:
-
-```ts
-// 0.4
-const replaced = await registration.replace(option, { signal: timeout(container, 5_000) })
-if (!replaced)
-  console.warn('superseded or timed out') // cannot tell which
-
-// 0.5
-try {
-  const replaced = await registration.replace(option, { signal: timeout(container, 5_000) })
-  if (!replaced)
-    console.warn('a newer replace() or a withdrawal superseded it, or the registration is stale')
-}
-catch (error) {
-  if (!(error instanceof WaitTimeoutError))
-    throw error
-  console.warn(error.message) // names the unmet dependencies of the new option
-}
-```
-
-- A timeout reason rejects with `WaitTimeoutError` (`wait-timeout`). Its `cause` is the reason. Its message tells what the new instance waited for.
-- Another reason rejects as it is, as for `resolve`.
-- An aborted signal rejects at once and changes nothing. In 0.4, it resolved `false`.
-- A stale registration, a newer `replace()`, and a withdrawal still resolve `false`. A swap still resolves `true`.
-- Remove a `resolve()` of the new dependencies before `replace()` that only gave a timeout error. The `replace()` error has the same information now.
-- `tx.commit({ signal })` does not change.
+- [From 0.4 to 0.5](./docs/migrations/0.4-to-0.5.md): "service" is now "unit", the options for sharing and visibility, and an aborted `replace()` rejects.
+- [From 0.3 to 0.4](./docs/migrations/0.3-to-0.4.md): `timeoutMs` is now a signal from `timeout(container, ms)`, a `stop` timeout no longer fails, and `enabled` is now `logging`.
+- [From 0.2](./docs/migrations/0.2.md): lifecycle hooks are now `on('start')` and `on('stop')` in `build`, and `start()` and `resolve()` wait for a missing provider.
 
 ## Documentation automation
 
@@ -1404,7 +1394,7 @@ pnpm docs:update
 
 `docs:update` refreshes the table of contents, then copies this README to the package. In the copy, relative links point to GitHub, and images point to raw.githubusercontent.com. Do not edit the copy.
 
-The figures come from the scenario lab in [`apps/docs`](./apps/docs). Render them again after a change of the lab or of the behavior that it shows:
+The figures come from the Playground in [`apps/docs`](./apps/docs). Render them again after a change of the Playground or of the behavior that it shows:
 
 ```sh
 pnpm -F @injeca/docs banners
@@ -1422,7 +1412,7 @@ pnpm typecheck
 pnpm test:run
 pnpm lint
 pnpm build
-pnpm -F @injeca/docs dev # the scenario lab
+pnpm -F @injeca/docs dev # the Docs, with the Playground
 ```
 
 ## License

@@ -4,7 +4,7 @@ Connects an eventa channel to an injeca child container. A plugin in another pro
 
 ## Status
 
-This package is a placeholder. Step 6 of [the injeca 0.3 design](../../docs/design-0.3.md#remote-plugins) implements it, after injeca 0.3.0. The package is private until then.
+This package is a placeholder. Step 6 of [the injeca 0.3 design](../../docs/ai/references/2026-11-05-design-0.3.md#remote-plugins) implements it, after injeca 0.3.0. The package is private until then.
 
 ## Related packages
 
