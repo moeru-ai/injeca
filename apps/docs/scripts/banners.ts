@@ -10,6 +10,7 @@
 
 import process from 'node:process'
 
+import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
