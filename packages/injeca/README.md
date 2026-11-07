@@ -1,6 +1,6 @@
 # Injeca
 
-Pure functional dependency injection for TypeScript, with service lifecycles, run-time changes, and status propagation. No classes, no decorators, and no extra wrappers.
+Pure functional dependency injection for TypeScript, with unit lifecycles, run-time changes, and status propagation. No classes, no decorators, and no extra wrappers.
 
 > Heavily inspired by [uber/fx](https://go.uber.org/fx), [uber/fig](https://go.uber.org/fig), and [uber/dig](https://go.uber.org/dig) in the Go ecosystem.
 
@@ -32,14 +32,14 @@ npx skills add moeru-ai/injeca
 
 ## Basic usage
 
-`injeca` ships with a global container exposed as `injeca`. Register services, declare their dependencies, and start.
+`injeca` ships with a global container exposed as `injeca`. Register units, declare their dependencies, and start.
 
 ```ts
 import { createServer } from 'node:http'
 
 import { injeca } from 'injeca'
 
-// A service returns a value once. The container caches it.
+// A unit returns a value once. The container caches it.
 const config = injeca.provide('config', () => ({ port: 3000 }))
 
 const server = injeca.provide({
@@ -69,7 +69,7 @@ process.once('SIGINT', async () => {
 ```
 
 - `provide` returns a typed key. Use it in `dependsOn`. injeca infers the type of each dependency.
-- `start()` builds each service when its dependencies are running, then runs its `start` hooks. It resolves when everything is running.
+- `start()` builds each unit when its dependencies are running, then runs its `start` hooks. It resolves when everything is running.
 - `stop()` stops dependents before their providers. The registrations stay, so a later `start()` builds them again.
 - injeca writes no lifecycle logs by default. It writes warnings with `console.warn`. See [Logging](#logging).
 
@@ -93,13 +93,13 @@ process.once('SIGINT', async () => {
 
 ## Lifecycle in `build`
 
-The build context gives each service its own lifecycle:
+The build context gives each unit its own lifecycle:
 
 | Field | Meaning |
 | --- | --- |
 | `dependsOn` | The resolved dependencies |
-| `on('start', handler)` | Runs after the service is published and its dependencies run |
-| `on('stop', handler)` | Runs before the service stops. Its dependencies are still available. |
+| `on('start', handler)` | Runs after the unit is published and its dependencies run |
+| `on('stop', handler)` | Runs before the unit stops. Its dependencies are still available. |
 | `effect(setup)` | Runs `setup` at once. The disposer that it returns runs when the instance is disposed, after the `stop` hooks. |
 | `signal` | An `AbortSignal` that aborts when a newer target replaces this build, or when the container is disposed |
 | `setStatus(status, reason?)` | Sets the status of the instance. See [Status](#status). |
@@ -119,7 +119,7 @@ on('start', async ({ decide, attempt }) => {
 
 ### Retries
 
-A `start` hook can return `decide.requeue()` to try again later. The service keeps its instance, so `build` does not run again.
+A `start` hook can return `decide.requeue()` to try again later. The unit keeps its instance, so `build` does not run again.
 
 ```ts
 on('start', async ({ decide }) => {
@@ -136,25 +136,25 @@ on('start', async ({ decide }) => {
 })
 ```
 
-- During the wait, the service is `retrying`. It is not available, so its dependents stay `pending`. It still holds its dependencies.
+- During the wait, the unit is `retrying`. It is not available, so its dependents stay `pending`. It still holds its dependencies.
 - `after: ms` sets a fixed delay. `backoff` doubles `initial` for each attempt, up to `max`. `jitter` is a fraction from 0 to 1 that takes a random part away from each delay.
 - The next attempt runs the `start` handler that requeued, then the handlers after it.
-- Changes during the wait merge into one attempt. A withdrawn required dependency, or `stop()`, cancels the wait and stops the service at once.
-- A dependency hook can requeue too. The service stays `running` with its current dependencies during the wait.
+- Changes during the wait merge into one attempt. A withdrawn required dependency, or `stop()`, cancels the wait and stops the unit at once.
+- A dependency hook can requeue too. The unit stays `running` with its current dependencies during the wait.
 - injeca has no built-in delay or limit. Without `maxAttempts`, the retries continue.
 
-`maxAttempts` limits the runs of one hook for one instance. It can come from the decision, the `provide` options, or the container options. The decision wins over the service, and the service wins over the container. A child container uses the value of its nearest ancestor.
+`maxAttempts` limits the runs of one hook for one instance. It can come from the decision, the `provide` options, or the container options. The decision wins over the unit, and the unit wins over the container. A child container uses the value of its nearest ancestor.
 
 ```ts
 const container = createContainer({ maxAttempts: 10, random: () => 0.5 }) // a fixed random source for deterministic tests
 injeca.provide('modules:device', { maxAttempts: 3, build: () => createDevice() })
 ```
 
-When the attempts end, a running service stops first. Then it goes to `failed` with the last reason. `start()` again, `stop()` and `start()`, or `replace()` moves it out of `failed`.
+When the attempts end, a running unit stops first. Then it goes to `failed` with the last reason. `start()` again, `stop()` and `start()`, or `replace()` moves it out of `failed`.
 
 ### Timeouts
 
-`start` and `stop` hooks wait until they settle. Set `timeouts` to limit them. A service value overrides the container value. injeca has no built-in timeout.
+`start` and `stop` hooks wait until they settle. Set `timeouts` to limit them. A unit value overrides the container value. injeca has no built-in timeout.
 
 ```ts
 const container = createContainer({ timeouts: { stop: 5_000 } })
@@ -171,7 +171,7 @@ provide(container, 'modules:camera', {
 ```
 
 - The `start` timeout is for all `start` handlers of one attempt. The `stop` timeout is for all `stop` handlers and effect disposers of one instance.
-- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the service, or of the container, decides.
+- When a timeout passes, `observe` gets a `timeout` record. Then `onTimeout` of the unit, or of the container, decides.
 - Without `onTimeout`, a `start` timeout gives `fail` with a `HookTimeoutError` (`hook-timeout`).
 - Without `onTimeout`, a `stop` timeout counts as `handled`. injeca writes a warning with `logger.warn`, and `stop()`, `dispose()`, and `withdraw()` resolve as usual. Only `decide.fail()` from `onTimeout` fails them.
 - During a stop or a disposal of the container, the warning tells that a cleanup can be waiting for its own container. Then that cleanup must pass its signal. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
@@ -202,19 +202,19 @@ await stop(container, { signal: timeout(container, 5_000) })
 | --- | --- |
 | `resolve(container, deps, { signal })` | Rejects. A timeout reason gives `WaitTimeoutError` (`wait-timeout`) with the reason as `cause`. Another reason rejects as it is. The hidden resolver goes. |
 | `waitFor(container, key, { status, signal })` | The same as `resolve`. |
-| `start(container, { signal })` | Stops the wait only. The services keep converging. A timeout reason gives `StartTimeoutError` (`start-timeout`) with the explanations. Another reason rejects as it is. |
-| `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The services that did not stop stay in `stopping` until their cleanups settle. |
+| `start(container, { signal })` | Stops the wait only. The units keep converging. A timeout reason gives `StartTimeoutError` (`start-timeout`) with the explanations. Another reason rejects as it is. |
+| `stop(container, { signal })` | Rejects with the reason. The container is stopped, and a later `start()` builds again. The units that did not stop stay in `stopping` until their cleanups settle. |
 | `dispose(container, { signal })` | Rejects with the reason. The disposal continues in the background, and the container stays in `disposing`. A later `dispose(container)` waits for the same disposal and gets its result. |
-| `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The service gets a `wait-aborted` record when it did not finish. `invoke()` handles take the same option. |
+| `registration.withdraw({ signal })` | Rejects with the reason. The withdrawal continues. The unit gets a `wait-aborted` record when it did not finish. `invoke()` handles take the same option. |
 | `registration.replace(option, { signal })` | Cancels a pending replacement, as a newer `replace()` does. The old instance stays, and `replace()` resolves `false`. After the swap, the abort has no effect. |
 | `tx.commit({ signal })` | Before the publish, the transaction aborts and rolls back, and `commit()` rejects at once with the reason. After the publish, the abort has no effect. |
 
-- For `stop`, `dispose`, and `withdraw`, each service that did not stop gets a `wait-aborted` record in `observe`, with the phase at the abort and the reason.
+- For `stop`, `dispose`, and `withdraw`, each unit that did not stop gets a `wait-aborted` record in `observe`, with the phase at the abort and the reason.
 - For `start`, `stop`, `dispose`, and `withdraw`, an aborted signal still starts the action. Only the wait ends.
 
 ### Calling dispose from a cleanup
 
-A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose service it holds. Pass the `signal` of the cleanup, so that injeca knows the caller:
+A cleanup that awaits `stop()` or `dispose()` of its own container, or of an ancestor, waits for itself. A cleanup that awaits `withdraw()` of its own registration, or of a provider that it holds, waits for itself too. So does a cleanup that awaits `stop()` or `dispose()` of a container whose unit it holds. Pass the `signal` of the cleanup, so that injeca knows the caller:
 
 ```ts
 provide(plugin, 'plugin:window', ({ on }) => {
@@ -228,7 +228,7 @@ provide(plugin, 'plugin:window', ({ on }) => {
 
 - injeca knows the instance of each signal that it gives to a build, a hook, and an invocation. A signal from `withTimeout(signal, ms, container)` keeps that origin. A signal from `AbortSignal.any()` does not.
 - A call with such a signal while the teardown of its instance runs does not wait. The check uses the instance, so it also works during a rebuild or a replacement, when the old and the new instance live together. A signal of the new running instance still waits.
-- The cleanup can also be outside the container. A service of the parent that holds an export of a plugin container, directly or through other services, stops before that export. So its `stop` hook can call `dispose(plugin, { signal })` or `stop(plugin, { signal })`, and the call does not wait. A plugin host that stops a plugin from its own cleanup needs this.
+- The cleanup can also be outside the container. A unit of the parent that holds a parent-visible unit of a plugin container, directly or through other units, stops before that unit. So its `stop` hook can call `dispose(plugin, { signal })` or `stop(plugin, { signal })`, and the call does not wait. A plugin host that stops a plugin from its own cleanup needs this.
 - A call from the synchronous part of a cleanup does not wait either.
 - Such a call writes a warning with `logger.warn`, sends a `reentrant-call` record to `observe`, and resolves at once. A re-entrant `withdraw()` resolves `true`. The stop, the disposal, or the withdrawal continues. Other callers get a promise that settles when it ends.
 - A call without a signal after an `await` is not found. It waits for itself until a configured `stop` timeout ends the cleanup. The warning of that timeout tells about this cause.
@@ -236,7 +236,7 @@ provide(plugin, 'plugin:window', ({ on }) => {
 ```ts
 provide(plugin, 'plugin:host', ({ on }) => {
   on('stop', async ({ signal }) => {
-    await exportedTool.withdraw({ signal }) // waits for the export, or resolves at once when it is re-entrant
+    await sharedTool.withdraw({ signal }) // waits for the parent-visible unit, or resolves at once when it is re-entrant
     await dispose(plugin, { signal })
   })
   return createHost()
@@ -271,7 +271,7 @@ await stopped // resolves, with a warning
 
 ## Changes at run time
 
-Services can appear and disappear after `start()`. Dependents converge automatically.
+Units can appear and disappear after `start()`. Dependents converge automatically.
 
 ```ts
 await injeca.start()
@@ -295,13 +295,13 @@ on('dependency-change', ({ dependsOn, decide }) => {
 })
 ```
 
-A rebuild of a running service has no gap. The old instance keeps serving while a new instance builds and starts against the new dependencies. Then one batch swaps them, as for `replace()`. The dependents of the service get `dependency-change` with the new instance. They do not lose it.
+A rebuild of a running unit has no gap. The old instance keeps serving while a new instance builds and starts against the new dependencies. Then one batch swaps them, as for `replace()`. The dependents of the unit get `dependency-change` with the new instance. They do not lose it.
 
 - This applies to a rebuild without a handler and to `decide.rebuild()`.
-- The service stops first and builds again when a dependency that the old instance uses has no provider now. Then there is nothing to build against.
+- The unit stops first and builds again when a dependency that the old instance uses has no provider now. Then there is nothing to build against.
 - An invocation stops first and runs again.
-- If the new instance fails, the old instance stops and the service goes to `failed`.
-- A `replace()` during the rebuild cancels the rebuild and replaces the service.
+- If the new instance fails, the old instance stops and the unit goes to `failed`.
+- A `replace()` during the rebuild cancels the rebuild and replaces the unit.
 
 ### Atomic replacement
 
@@ -315,16 +315,16 @@ await tts.replace(() => createTtsV2())
 ```
 
 - The swap is one batch. It occurs only after the new instance completes `start`. The new instance is `ready`.
-- For a `perConsumer` registration, each running consumer gets a new instance first. The swap of all consumers is one batch, after each new instance completes `start`. If one fails, no consumer changes.
+- For a per-container registration, each running consumer gets a new instance first. The swap of all consumers is one batch, after each new instance completes `start`. If one fails, no consumer changes.
 - If the new `build` or `start` fails, `replace()` rejects and the old instance does not change. This is also the usual fix for an `unavailable` provider.
-- The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the services above it.
+- The old instance stops after each dependent releases it. A dependent with a `dependency-change` handler moves in place. Other dependents rebuild without a gap, so a replacement deep in the graph does not stop the units above it.
 - `graph(container).explain(key)` shows the new instance as `replacement` while the swap waits, with its phase and blockers.
-- A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A service in `stopping` rejects with `ReplaceWhileStoppingError`.
+- A stale registration, or a call that a newer `replace()` or a withdrawal supersedes, resolves `false`. A unit in `stopping` rejects with `ReplaceWhileStoppingError`.
 - `replace(option, { signal })` cancels the pending replacement when the signal aborts, and resolves `false`. See [Cancellation](#cancellation).
 
 ### Transactions
 
-A transaction publishes many services together, for example all exports of one plugin.
+A transaction publishes many units together, for example all parent-visible units of one plugin.
 
 ```ts
 import { transaction } from 'injeca'
@@ -336,13 +336,13 @@ tx.provide(characterKey, () => createCharacter())
 await tx.commit()
 ```
 
-- Nothing is visible to consumers before `commit()`. Graph queries show the declared services.
-- `commit()` builds in dependency order. A service can use another service of the same transaction.
-- If all builds succeed, the services publish in one batch, then their `start` hooks run. If one build fails, nothing publishes and `commit()` rejects.
-- A service whose dependencies are not available goes to `pending`. That is not a failure.
-- A declared service without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
+- Nothing is visible to consumers before `commit()`. Graph queries show the declared units.
+- `commit()` builds in dependency order. A unit can use another unit of the same transaction.
+- If all builds succeed, the units publish in one batch, then their `start` hooks run. If one build fails, nothing publishes and `commit()` rejects.
+- A unit whose dependencies are not available goes to `pending`. That is not a failure.
+- A declared unit without `provide` fails the commit with `TransactionIncompleteError`, unless it is declared with `optional: true`.
 - `tx.replace(key, option)` replaces a registration at the commit. `tx.abort()` and the disposal of the container drop everything.
-- `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateServiceError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
+- `tx.declare` and `tx.provide` reserve the key until the commit or the abort. Another `provide` of the key in the same container fails with `DuplicateUnitError`. For an exclusive key, a provider in another container of the area goes to `conflict` until the abort.
 - `withdraw()` on the result of `tx.provide` before the commit removes that provide and resolves `true`. A declared key without a provide then fails the commit.
 - `tx.commit({ signal })` aborts the transaction when the signal aborts before the publish. See [Cancellation](#cancellation).
 
@@ -377,7 +377,7 @@ const whiteboardKey = defineKey<Whiteboard>('dev.airi.whiteboard', { exclusive: 
 
 If two containers in one area provide it, both go to `conflict`, in any order. They run no code, and their dependents stay `pending`. When one provider is removed, the other converges. `graph(container).explain()` lists the owner of each provider.
 
-An [exported registration](#exported-registrations) counts in the area of the parent container. So two sibling plugins that export one exclusive key conflict, and so do a host registration and a plugin export of that key.
+A [parent-visible registration](#visibility-to-the-parent-container) counts in the area of the parent container. So two sibling plugins that make one exclusive key visible to the parent conflict, and so do a host registration and a parent-visible plugin registration of that key.
 
 ### Resolution conditions
 
@@ -426,11 +426,11 @@ injeca.provide('voice:chat', {
 
 ## Status
 
-A running service is `ready`, `degraded`, or `unavailable`.
+A running unit is `ready`, `degraded`, or `unavailable`.
 
 - `degraded` means that calls still complete, at lower quality.
 - `unavailable` means that the instance exists, but calls fail now.
-- The effective status of a service is the worst of its own status and the effective status of each required dependency. It goes down the graph.
+- The effective status of a unit is the worst of its own status and the effective status of each required dependency. It goes down the graph.
 - A dependency that becomes `unavailable` does not stop or rebuild its dependents. They get a `dependency-status-change` call if they register a handler.
 
 ```ts
@@ -444,7 +444,7 @@ build: ({ setStatus }) => {
 
 ## Containers
 
-Create containers to isolate tests, or to give each plugin its own child container.
+Create containers to keep tests apart, or to give each plugin its own child container.
 
 ```ts
 import { createContainer, dispose, effect, invoke, provide, start, stop } from 'injeca'
@@ -462,7 +462,7 @@ await start(container)
 await stop(container)
 ```
 
-A child container resolves keys from its ancestors. It does not start until `start(child)` runs, so a caller can register all its services first.
+A child container resolves keys from its ancestors. It does not start until `start(child)` runs, so a caller can register all its units first.
 
 ```ts
 const plugin = createContainer({
@@ -478,13 +478,13 @@ await dispose(plugin)
 ```
 
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects. A disposed container cannot be used again.
-- `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the services of the parent stop, and then its effects run.
+- `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the units of the parent stop, and then its effects run.
 - `effect(container, setup)` after the disposal started runs the disposer at once.
-- `start(container, { signal: timeout(container, ms) })` rejects with a `StartTimeoutError` that explains each service that is not running. injeca has no built-in timeout.
-- A service with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
+- `start(container, { signal: timeout(container, ms) })` rejects with a `StartTimeoutError` that explains each unit that is not running. injeca has no built-in timeout.
+- A unit with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.
-- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the exports of the sibling containers. It does not hide the exports of its own child containers.
-- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a service that holds a service of the container. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
+- `createContainer({ isolate: [key] })` stops a key from resolving from the ancestors. It also hides the parent-visible units of the sibling containers. It does not hide the parent-visible units of its own child containers.
+- A `stop` or `dispose` call from a cleanup of the same container, or of a descendant, does not wait for itself. The same is true for a cleanup of a unit that holds a unit of the container. It warns and resolves at once. See [Calling dispose from a cleanup](#calling-dispose-from-a-cleanup).
 
 ### Logging
 
@@ -504,31 +504,31 @@ injeca.setLogger(createLoggLogger(logg)) // a logger from @guiiai/logg
 - `logger.warn` always writes, whatever `logging` is. injeca warns for a re-entrant call, a `stop` timeout, and a late failure of a callback that it stopped waiting for.
 - The logger is `options.logger`, then the logger of the parent container, then `createDefaultLogger()`. It writes with `console`.
 
-### Exported registrations
+### Visibility to the parent container
 
-A registration in a child container is visible only in that container and its descendants. `export: true` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
+A registration in a child container is visible only in that container and its descendants. This is `visibility: 'local'`, the default. `visibility: 'parent'` also makes it a candidate for consumers in the area of the parent container: the parent and each of its descendants. So a plugin can use a Kit that another plugin provides.
 
 ```ts
 const host = createContainer({ owner: { kind: 'host' } })
 const pluginA = createContainer({ parent: host, owner: { kind: 'plugin', id: 'a' } })
 const pluginB = createContainer({ parent: host, owner: { kind: 'plugin', id: 'b' } })
 
-provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
+provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemoryKit() })
 provide(pluginB, 'b:session', { dependsOn: { memory: memoryKitKey }, build: ({ dependsOn }) => startSession(dependsOn.memory) })
 ```
 
-- The registration stays in its container. That container owns it, and `dispose(pluginA)` withdraws it. Its own dependencies resolve from that container. This is also true for a `perConsumer` export.
-- An export goes exactly one level up. A container that wants to reach the area of its grandparent exports from its own level.
-- A consumer looks in its own container, then in each ancestor. At each level, the registration of that container comes first, then the exports of its children in creation order.
-- Shadowing still has no gap. An export takes over from a provider of a farther ancestor only while it runs.
-- `perConsumer` and `export` combine. Each consumer instance lives in the consumer container.
-- `tx.provide(key, { export: true, ... })` reserves an exclusive key in the parent area at once, and the commit publishes the service there in one batch.
-- `replace()` keeps the export. On a root container, `export` has no effect.
-- `graph(parent)`, `peek`, `watch`, `waitFor`, and `observe` see the export. `graph().services()` marks it with `exported: true`, and its `owner` is the owner of the exporting container.
+- The registration stays in its container. That container owns it, and `dispose(pluginA)` withdraws it. Its own dependencies resolve from that container. This is also true for a per-container registration.
+- The registration is visible exactly one level up. A container that wants to reach the area of its grandparent provides the key at its own level.
+- A consumer looks in its own container, then in each ancestor. At each level, the registration of that container comes first, then the parent-visible units of its children in creation order.
+- Shadowing still has no gap. A parent-visible unit takes over from a provider of a farther ancestor only while it runs.
+- `instances: 'per-container'` and `visibility: 'parent'` combine. Each consumer instance lives in the consumer container.
+- `tx.provide(key, { visibility: 'parent', ... })` reserves an exclusive key in the parent area at once, and the commit publishes the unit there in one batch.
+- `replace()` keeps the visibility. On a root container, `visibility: 'parent'` has no effect.
+- `graph(parent)`, `peek`, `watch`, `waitFor`, and `observe` see the unit. `graph().units()` marks it with `visibility: 'parent'`, and its `owner` is the owner of its own container.
 
-### Per-consumer services
+### Per-container instances
 
-`perConsumer: true` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container. The instance disposes with the consumer container.
+A registration has one instance for all consumers by default. This is `instances: 'shared'`. `instances: 'per-container'` runs `build` once for each consumer container. The build context has `consumer`, the owner record of that container. The instance disposes with the consumer container.
 
 The instance lives in the consumer container, but its `dependsOn` resolves from the container of the registration, as for a plain registration. So a key of the consumer container does not change the dependencies of the registration.
 
@@ -538,7 +538,7 @@ A failed consumer instance builds again on the next demand from its container: a
 
 ```ts
 const hostClient = injeca.provide('host:client', {
-  perConsumer: true,
+  instances: 'per-container',
   metadata: { api: 'v1' },
   build: ({ consumer }) => createHostClient(consumer),
 })
@@ -559,8 +559,8 @@ const stopObserving = observe(container, (record) => {})
 ```
 
 - `watch` sends the current state at once, then each change, in order.
-- `waitFor` rejects with a `ServiceFailedError` (`service-failed`) when the service failed, or waits for a required provider that failed. Its `cause` is the failure.
-- For a `perConsumer` key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
+- `waitFor` rejects with a `UnitFailedError` (`unit-failed`) when the unit failed, or waits for a required provider that failed. Its `cause` is the failure.
+- For a per-container key, `watch` and `waitFor` create the consumer instance for their container, as `resolve` does. The demand ends with the subscription.
 - `observe` sends each phase change, status change, decision, hook timeout, aborted wait, and re-entrant call in the container and its children.
 
 `peek` reads a value now, without a wait, and never builds anything. `resolve` takes `signal` to stop a wait:
@@ -586,12 +586,12 @@ import { graph } from 'injeca'
 
 const queries = graph(container)
 
-queries.services() // all services, with the declared services of open transactions
-queries.dependencies(server) // the direct edges of a service
-queries.dependents(config) // the services that use a service now
+queries.units() // all units, with the declared units of open transactions
+queries.dependencies(server) // the direct edges of a unit
+queries.dependents(config) // the units that use a unit now
 queries.order() // providers before their dependents
 queries.cycles() // each dependency cycle
-queries.explain(server) // why a service is not running, also for a key without a provider, with a pending replacement
+queries.explain(server) // why a unit is not running, also for a key without a provider, with a pending replacement
 queries.impact({ kind: 'withdraw', key: llmKey }) // { stopped, rebuilt, notified }
 ```
 
@@ -642,7 +642,7 @@ const server = injeca.provide({
 Other differences:
 
 - `start()` waits for a missing provider. 0.2 threw an error. Use `start(container, { signal: timeout(container, ms) })` to fail after a time.
-- `resolve()` waits for a missing provider too. Before `start()`, it builds the services that it needs, with their `start` hooks.
+- `resolve()` waits for a missing provider too. Before `start()`, it builds the units that it needs, with their `start` hooks.
 - `invoke()` returns a handle with `key` and `withdraw()`. Graph queries accept `key`. Its callback runs again when a required dependency gets a new instance.
 
 ## Migration from 0.3 to 0.4
@@ -682,6 +682,41 @@ createContainer() // lifecycle logs
 createContainer({ logger: createNoopLogger() }) // no logs and no warnings. Or remove the option to keep the warnings.
 createContainer({ logging: true }) // lifecycle logs
 ```
+
+## Migration from 0.4 to 0.5
+
+0.5 renames "service" to "unit". A unit is a registration that `provide()` makes, with the instances that it builds. 0.5 also renames the options for sharing and visibility. The behavior does not change.
+
+```ts
+// 0.4
+provide(root, 'host:client', { perConsumer: true, build: ({ consumer }) => createHostClient(consumer) })
+provide(pluginA, memoryKitKey, { export: true, build: () => createMemoryKit() })
+graph(container).services()
+
+// 0.5
+provide(root, 'host:client', { instances: 'per-container', build: ({ consumer }) => createHostClient(consumer) })
+provide(pluginA, memoryKitKey, { visibility: 'parent', build: () => createMemoryKit() })
+graph(container).units()
+```
+
+| 0.4 | 0.5 |
+| --- | --- |
+| `perConsumer: true` | `instances: 'per-container'`. The default is `'shared'`. |
+| `export: true` | `visibility: 'parent'`. The default is `'local'`. |
+| `graph(container).services()` | `graph(container).units()` |
+| `GraphService` with `perConsumer: boolean` and `exported: boolean` | `GraphUnit` with `instances: 'shared' \| 'per-container'` and `visibility: 'local' \| 'parent'` |
+| `kind: 'service'` in `GraphService` and `ServiceExplanation` | `kind: 'unit'` |
+| `decision.service` | `decision.unit` |
+| `DuplicateServiceError` (`duplicate-service`) | `DuplicateUnitError` (`duplicate-unit`) |
+| `ServiceFailedError` (`service-failed`) | `UnitFailedError` (`unit-failed`) |
+| `ServicePhase`, `ServiceStatus`, `ServiceState` | `UnitPhase`, `UnitStatus`, `UnitState` |
+| `ServiceHook`, `ServiceMetadata` | `UnitHook`, `UnitMetadata` |
+| `ServiceBlocker`, `ServiceExplanation` | `UnitBlocker`, `UnitExplanation` |
+
+- 0.5 has no aliases for the old names. TypeScript shows each old name as an error. Replace each one with its new name.
+- `instances` and `visibility` accept only the values in the table. Another value, for example `true`, throws `InvalidArgumentError`.
+- An old option such as `perConsumer: true` or `export: true` is not read any more, and the type check rejects it in an object literal. Without the type check, the registration is shared and local.
+- Check the error codes in your own `catch` blocks and the `kind` values in your own code that reads graph queries.
 
 ## License
 

@@ -86,10 +86,10 @@ describe('exclusive keys', () => {
     expect(phaseOf(b, whiteboardKey)).toBe('running')
 
     provide(root, whiteboardKey, () => 'root')
-    provide(isolated, whiteboardKey, () => 'isolated')
+    provide(isolated, whiteboardKey, () => 'local')
     await start(isolated)
     await drained(root)
-    // The root declaration shares its area with `a` and `b`, but not with the isolated container.
+    // The root declaration shares its area with `a` and `b`, but not with the container that isolates the key.
     expect(phaseOf(root, whiteboardKey)).toBe('conflict')
     expect(phaseOf(a, whiteboardKey)).toBe('conflict')
     expect(phaseOf(isolated, whiteboardKey)).toBe('running')

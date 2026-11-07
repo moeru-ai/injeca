@@ -20,7 +20,7 @@ function resultOf(resolution: Resolution, fallbackKey: string): PeekResult<unkno
     case 'not-running': {
       const { provider } = resolution
       const phase = provider.signals.phase()
-      // A `perConsumer` registration without a service for the container is `pending`. `peek` does not create one.
+      // A per-container registration without a unit for the container is `pending`. `peek` does not create one.
       const owner = (provider.template ?? provider).container.owner
       return Object.freeze({ kind: 'not-running', key: provider.name, owner, phase, ...(phase === 'failed' ? { error: provider.failure?.error } : {}) })
     }
@@ -37,10 +37,10 @@ function resultOf(resolution: Resolution, fallbackKey: string): PeekResult<unkno
 }
 
 /**
- * Reads the value of a dependency now, without a wait. It is a pure read: it does not demand, build, or start a service.
+ * Reads the value of a dependency now, without a wait. It is a pure read: it does not demand, build, or start a unit.
  *
  * The dependency resolves as for a consumer in `container`: a key, `where(key, condition)`, or `firstAvailable(...)`. An `optional` marker has no effect.
- * The result is the value with its status, or the reason why no value is available now. A `perConsumer` key has a value only after something demanded its service for `container`.
+ * The result is the value with its status, or the reason why no value is available now. A per-container key has a value only after something demanded its unit for `container`.
  */
 export function peek<D extends PeekDependency>(container: Container, dependency: D): PeekResult<PeekValue<D>> {
   const node = nodeOf(container)

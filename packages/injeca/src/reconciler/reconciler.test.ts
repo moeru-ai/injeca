@@ -55,7 +55,7 @@ describe('batches', () => {
       for (const provider of providers)
         provider.setStatus('degraded')
     })
-    const speechNotifications = markDirty.mock.calls.filter(([service]) => service.name === 'voice.speech')
+    const speechNotifications = markDirty.mock.calls.filter(([unit]) => unit.name === 'voice.speech')
     markDirty.mockRestore()
     await drained(app)
 

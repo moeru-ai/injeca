@@ -1,5 +1,5 @@
 import type { ErrorObserveRecord, ObserveRecord, WaitAbortedObserveRecord } from '../types'
-import type { ContainerNode, Observer, ServiceNode } from './graph'
+import type { ContainerNode, Observer, UnitNode } from './graph'
 
 import { messageOf } from '../helpers/error-from'
 
@@ -47,17 +47,17 @@ export function reportCallbackError(container: ContainerNode, key: string, error
   send(container, targetsOf(container, source), record)
 }
 
-/** Sends a `wait-aborted` record for each service of `services`: the `signal` of `call` aborted before the service stopped. */
-export function recordAbortedWait(services: readonly ServiceNode[], call: WaitAbortedObserveRecord['call'], reason: unknown): void {
+/** Sends a `wait-aborted` record for each unit of `units`: the `signal` of `call` aborted before the unit stopped. */
+export function recordAbortedWait(units: readonly UnitNode[], call: WaitAbortedObserveRecord['call'], reason: unknown): void {
   const message = messageOf(reason)
-  for (const service of services) {
-    emitRecord(service.container, {
+  for (const unit of units) {
+    emitRecord(unit.container, {
       type: 'wait-aborted',
-      key: service.name,
-      owner: service.container.owner,
-      instanceId: service.signals.instance()?.id,
+      key: unit.name,
+      owner: unit.container.owner,
+      instanceId: unit.signals.instance()?.id,
       call,
-      phase: service.signals.phase(),
+      phase: unit.signals.phase(),
       reason: message,
       abortReason: reason,
     })

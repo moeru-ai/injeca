@@ -1,5 +1,5 @@
 import type { Decide } from '../primitives/decision'
-import type { DependencyChange, ServiceStatus } from '../types'
+import type { DependencyChange, UnitStatus } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -141,7 +141,7 @@ describe('dependency-change', () => {
     ])
   })
 
-  it('parks the service for decide.stop until the epoch changes, and fails it for decide.fail', async () => {
+  it('parks the unit for decide.stop until the epoch changes, and fails it for decide.fail', async () => {
     const { app, remote, llm } = fallbackPair()
     const error = new Error('cannot move')
     const parked = provide(app, 'voice.parked', {
@@ -165,7 +165,7 @@ describe('dependency-change', () => {
     expect(stateOf(app, parked).phase).toBe('pending')
     expect(stateOf(app, 'voice.failing').phase).toBe('failed')
 
-    // The remote provider returns. The selection is a new epoch for the parked service.
+    // The remote provider returns. The selection is a new epoch for the parked unit.
     remote.setStatus('ready')
     await drained(app)
     expect(stateOf(app, parked).phase).toBe('running')
@@ -176,7 +176,7 @@ describe('dependency-status-change', () => {
   it('calls the handler with the snapshot and the changes, and keeps the instance', async () => {
     const app = createTestContainer()
     const llm = provideWithStatus(app, 'airi.llm')
-    const calls: { status: ServiceStatus, changes: readonly DependencyChange[] }[] = []
+    const calls: { status: UnitStatus, changes: readonly DependencyChange[] }[] = []
     const builds = vi.fn()
     provide(app, 'voice.speech', {
       dependsOn: { llm: llm.registration },
@@ -224,7 +224,7 @@ describe('dependency-status-change', () => {
   })
 
   // Design test 11, run-time part.
-  it('fails the service for a decision from another run, and ignores and records the decision of a superseded run', async () => {
+  it('fails the unit for a decision from another run, and ignores and records the decision of a superseded run', async () => {
     const app = createTestContainer()
     const llm = provideWithStatus(app, 'airi.llm')
     let foreign: Decide['handled'] | undefined
@@ -294,7 +294,7 @@ describe('dependency-status-change', () => {
 
     llm.setStatus('degraded')
     await drained(app)
-    // The default of dependency-status-change is no action. The plain object does not rebuild the service.
+    // The default of dependency-status-change is no action. The plain object does not rebuild the unit.
     expect(stateOf(app, 'voice.speech')).toMatchObject({ phase: 'running', status: 'degraded' })
     expect(builds).toHaveBeenCalledTimes(1)
   })
@@ -328,7 +328,7 @@ describe('firstAvailable', () => {
     await drained(app)
     expect(moves.map(move => move.provider)).toEqual(['airi.llm.local'])
     expect(moves[0]!.changes).toEqual([{ key: 'llm', from: expect.objectContaining({ provider: 'airi.llm.remote', status: 'ready' }), to: expect.objectContaining({ provider: 'airi.llm.local' }) }])
-    // The selection change is an identity change. Without a handler, the service rebuilds.
+    // The selection change is an identity change. Without a handler, the unit rebuilds.
     expect(builds).toEqual(['airi.llm.remote', 'summary:airi.llm.remote', 'summary:airi.llm.local'])
     expect(stateOf(app, 'voice.chat').status).toBe('ready')
 

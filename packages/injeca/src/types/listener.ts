@@ -1,4 +1,4 @@
-import type { OwnerRecord } from './service'
+import type { OwnerRecord } from './unit'
 
 /** The identity of an event. Any object with a string `id` is an event key, for example an eventa definition. */
 export interface EventKey {

@@ -20,7 +20,7 @@ describe('peek (G4)', () => {
       expectTypeOf(result.value).toEqualTypeOf<{ chat: () => string }>()
   })
 
-  it('gives the reason at once, without a wait and without a hidden service', async () => {
+  it('gives the reason at once, without a wait and without a hidden unit', async () => {
     const app = createTestContainer({ owner: { kind: 'host' } })
     expect(peek(app, llmKey)).toEqual({ kind: 'missing', key: 'airi.llm' })
 
@@ -36,7 +36,7 @@ describe('peek (G4)', () => {
     setStatus('unavailable', 'reconnecting')
     await drained(app)
     expect(peek(app, llmKey)).toMatchObject({ kind: 'unavailable', reason: 'reconnecting' })
-    expect(graph(app).services().map(service => service.key)).toEqual(['airi.llm'])
+    expect(graph(app).units().map(unit => unit.key)).toEqual(['airi.llm'])
   })
 
   it('reports a failed provider, a conflict, and the first available fallback', async () => {
@@ -58,14 +58,14 @@ describe('peek (G4)', () => {
     expect(peek(root, firstAvailable('remote', 'local'))).toMatchObject({ kind: 'resolved', key: 'local', value: 'local' })
   })
 
-  it('does not create the service of a perConsumer key', async () => {
+  it('does not create the unit of a per-container key', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => consumer })
+    provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => consumer })
     await start(root)
     const extension = createTestContainer({ parent: root, owner: { kind: 'extension' } })
     await start(extension)
 
     expect(peek(extension, 'host.client')).toMatchObject({ kind: 'not-running', phase: 'pending' })
-    expect(graph(extension).services()).toEqual([])
+    expect(graph(extension).units()).toEqual([])
   })
 })

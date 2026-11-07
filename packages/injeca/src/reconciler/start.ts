@@ -1,4 +1,4 @@
-import type { InstanceNode, ServiceNode } from '../graph/graph'
+import type { InstanceNode, UnitNode } from '../graph/graph'
 import type { Decision } from '../primitives/decision'
 
 import { HookTimeoutError } from '../diagnostics/errors'
@@ -21,18 +21,18 @@ interface AttemptResult {
  * Runs the `start` handlers of one attempt, from `instance.startFrom`, within the configured `start` timeout.
  *
  * The run signal includes a timeout signal on the container clock. At the timeout, the run signal aborts with `hook-timeout`, later handlers do not run, and the `onTimeout` decision replaces the result.
- * When a newer target aborts the run, for example `stop()` or `dispose()`, injeca does not wait for the handler in progress. The service stops at once.
+ * When a newer target aborts the run, for example `stop()` or `dispose()`, injeca does not wait for the handler in progress. The unit stops at once.
  * Late decisions are recorded as ignored.
  */
-async function runAttempt(service: ServiceNode, instance: InstanceNode): Promise<AttemptResult> {
-  const timeoutMs = timeoutOf(service, 'start')
+async function runAttempt(unit: UnitNode, instance: InstanceNode): Promise<AttemptResult> {
+  const timeoutMs = timeoutOf(unit, 'start')
   const timer = timeoutMs === undefined
     ? undefined
-    : timeoutSignal(service.container.runtime.clock, timeoutMs, () => new HookTimeoutError(`The 'start' hook of '${service.name}' timed out.`, 'start', timeoutMs))
+    : timeoutSignal(unit.container.runtime.clock, timeoutMs, () => new HookTimeoutError(`The 'start' hook of '${unit.name}' timed out.`, 'start', timeoutMs))
   const run = beginHookRun(instance, timer?.signal)
   const progress = { index: instance.startFrom }
   let abandoned = false
-  const running = runHandlers(service, instance, 'start', run.signal, {}, { from: instance.startFrom, progress, stopped: () => abandoned })
+  const running = runHandlers(unit, instance, 'start', run.signal, {}, { from: instance.startFrom, progress, stopped: () => abandoned })
   // Without a timeout, `start` waits until it settles or a newer target aborts it.
   const result = await raceAbort(running, run.signal)
   timer?.cancel()
@@ -47,58 +47,58 @@ async function runAttempt(service: ServiceNode, instance: InstanceNode): Promise
   // The handler in progress can still return. Its decision is ignored. A late failure is reported, unless it is the abort of the run.
   void running.then((late) => {
     for (const decision of late)
-      recordLateDecision(service, instance, decision, [run.signal])
+      recordLateDecision(unit, instance, decision, [run.signal])
   })
   if (!timedOut)
     return { decisions: [], superseded: true }
 
-  return { decisions: [decideTimeout(service, instance, 'start', timeoutMs!)], superseded: false }
+  return { decisions: [decideTimeout(unit, instance, 'start', timeoutMs!)], superseded: false }
 }
 
 /**
- * Runs the `start` hooks of a built instance. The service moves to `running`, waits in `retrying` for a requeue, or stops.
+ * Runs the `start` hooks of a built instance. The unit moves to `running`, waits in `retrying` for a requeue, or stops.
  *
  * A requeue keeps the instance and its bindings. The next attempt runs the requeued handler again, then the later ones. `build` does not run again.
  */
-export async function runStart(service: ServiceNode, instance: InstanceNode): Promise<void> {
-  service.busy = true
+export async function runStart(unit: UnitNode, instance: InstanceNode): Promise<void> {
+  unit.busy = true
   const handlers = instance.hooks.start
-  const logger = handlers.length > 0 ? loggerOf(service) : undefined
+  const logger = handlers.length > 0 ? loggerOf(unit) : undefined
   if (instance.startFrom === 0)
-    logger?.hookOnStart(service.name)
+    logger?.hookOnStart(unit.name)
   const startTime = performance.now()
 
-  const attempt = handlers.length > instance.startFrom ? await runAttempt(service, instance) : { decisions: [], superseded: false }
+  const attempt = handlers.length > instance.startFrom ? await runAttempt(unit, instance) : { decisions: [], superseded: false }
   const { decisions } = attempt
-  service.busy = false
+  unit.busy = false
 
-  const ignored = attempt.superseded || service.signals.targetLost()
+  const ignored = attempt.superseded || unit.signals.targetLost()
   for (const decision of decisions)
-    recordDecision(service, instance, decision, ignored)
+    recordDecision(unit, instance, decision, ignored)
   if (ignored) {
-    enterStopping(service, { reason: 'A newer target superseded the start.' })
+    enterStopping(unit, { reason: 'A newer target superseded the start.' })
     return
   }
 
   const decision = decisions.at(-1)
   if (!decision || decision.kind === 'handled') {
-    // A later failure of a consumer service builds again for each demander.
-    service.demanders.clear()
+    // A later failure of a consumer unit builds again for each demander.
+    unit.demanders.clear()
     if (decision)
       finishRun(instance, 'start', decision)
-    logger?.hookOnStartComplete(service.name, performance.now() - startTime)
-    // A dependency that changed during the start is a change for the running service.
-    // A new service of a replacement swaps in only now, so the old instance serves until here.
-    if (service.swap?.ready) {
-      // A consumer service of a `perConsumer` replacement waits until each consumer service completes `start`.
-      service.swap.held = true
-      service.swap.ready(service)
+    logger?.hookOnStartComplete(unit.name, performance.now() - startTime)
+    // A dependency that changed during the start is a change for the running unit.
+    // A new unit of a replacement swaps in only now, so the old instance serves until here.
+    if (unit.swap?.ready) {
+      // A consumer unit of a per-container replacement waits until each consumer unit completes `start`.
+      unit.swap.held = true
+      unit.swap.ready(unit)
     }
-    else if (service.swap) {
-      completeSwap(service)
+    else if (unit.swap) {
+      completeSwap(unit)
     }
     else {
-      setPhase(service, 'running')
+      setPhase(unit, 'running')
     }
     return
   }
@@ -106,20 +106,20 @@ export async function runStart(service: ServiceNode, instance: InstanceNode): Pr
   finishRun(instance, 'start', decision)
   switch (decision.kind) {
     case 'stop':
-      enterStopping(service, { parkEpoch: epochOf(service, edge => instance.bindings.get(edge.name)), reason: decision.reason, decision: 'stop' })
+      enterStopping(unit, { parkEpoch: epochOf(unit, edge => instance.bindings.get(edge.name)), reason: decision.reason, decision: 'stop' })
       return
     case 'fail':
-      enterStopping(service, { failure: { error: decision.error }, reason: decision.reason, decision: 'fail' })
+      enterStopping(unit, { failure: { error: decision.error }, reason: decision.reason, decision: 'fail' })
       return
     case 'requeue': {
-      const exhausted = exhaustedIntent(service, decision)
+      const exhausted = exhaustedIntent(unit, decision)
       if (exhausted) {
-        enterStopping(service, exhausted)
+        enterStopping(unit, exhausted)
         return
       }
-      // The service keeps its instance and holds its dependencies. It is not available until a later attempt completes.
-      setPhase(service, 'retrying', { reason: decision.reason, decision: 'requeue' })
-      scheduleRequeue(service, instance, decision)
+      // The unit keeps its instance and holds its dependencies. It is not available until a later attempt completes.
+      setPhase(unit, 'retrying', { reason: decision.reason, decision: 'requeue' })
+      scheduleRequeue(unit, instance, decision)
     }
   }
 }

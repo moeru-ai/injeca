@@ -33,7 +33,7 @@ describe('shadowing', () => {
     })
     await drained(root)
     // The child provider is starting. The dependent keeps the root provider and does not stop.
-    expect(graph(child).services().find(service => service.key === 'airi.tts')?.phase).toBe('starting')
+    expect(graph(child).units().find(unit => unit.key === 'airi.tts')?.phase).toBe('starting')
     expect(phaseOf(child, 'voice.speech')).toBe('running')
     // A consumer in the child sees the root provider until the child provider runs.
     expect(stateOf(child, ttsKey).instanceId).toBe(stateOf(root, ttsKey).instanceId)

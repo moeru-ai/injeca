@@ -1,12 +1,12 @@
 import type { Container } from '../../types'
-import type { ContainerNode, ServiceNode } from '../graph'
+import type { ContainerNode, UnitNode } from '../graph'
 
 import { BuildAfterDisposeError, InvalidArgumentError } from '../../diagnostics/errors'
 import { errorFrom } from '../../helpers/error-from'
 import { batch, untracked } from '../../helpers/signals'
 import { addDeclaration } from '../resolvers/exclusive'
-import { exportsOf } from '../resolvers/exports'
 import { slotOf } from '../resolvers/resolvers'
+import { childUnitsOf } from '../resolvers/visibility'
 
 const nodes = new WeakMap<Container, ContainerNode>()
 
@@ -46,84 +46,84 @@ export function subtreeOf(container: ContainerNode): ContainerNode[] {
 }
 
 /**
- * Adds an exported service to the exports of its parent container, in container creation order.
- * It takes the place of an earlier service of the same container, for example at the swap of a replacement.
+ * Adds a parent-visible unit to the child units of its parent container, in container creation order.
+ * It takes the place of an earlier unit of the same container, for example at the swap of a replacement.
  */
-function addExport(service: ServiceNode): void {
-  const parent = service.container.parent
-  if (!service.exported || !parent)
+function addToParent(unit: UnitNode): void {
+  const parent = unit.container.parent
+  if (unit.visibility === 'local' || !parent)
     return
 
-  const exports = exportsOf(parent, service.name)
-  const current = exports()
-  if (current.includes(service))
+  const units = childUnitsOf(parent, unit.name)
+  const current = units()
+  if (current.includes(unit))
     return
 
-  exports(Object.freeze([...current.filter(other => other.container !== service.container), service].sort((a, b) => a.container.seq - b.container.seq)))
+  units(Object.freeze([...current.filter(other => other.container !== unit.container), unit].sort((a, b) => a.container.seq - b.container.seq)))
 }
 
-function removeExport(service: ServiceNode): void {
-  const parent = service.container.parent
-  if (!service.exported || !parent)
+function removeFromParent(unit: UnitNode): void {
+  const parent = unit.container.parent
+  if (unit.visibility === 'local' || !parent)
     return
 
-  const exports = exportsOf(parent, service.name)
-  if (exports().includes(service))
-    exports(Object.freeze(exports().filter(other => other !== service)))
+  const units = childUnitsOf(parent, unit.name)
+  if (units().includes(unit))
+    units(Object.freeze(units().filter(other => other !== unit)))
 }
 
 /**
- * Makes `service` visible to consumers: the slot of its key, or the consumer map of its `perConsumer` registration.
- * An exported service is also visible in the resolution area of the parent container.
- * An exclusive conflict counts each published service with a key.
+ * Makes `unit` visible to consumers: the slot of its key, or the consumer map of its per-container registration.
+ * A parent-visible unit is also visible in the resolution area of the parent container.
+ * An exclusive conflict counts each published unit with a key.
  */
-export function publishService(service: ServiceNode): void {
-  const { template } = service
+export function publishUnit(unit: UnitNode): void {
+  const { template } = unit
   if (template) {
     const consumers = template.signals.consumers()
-    if (consumers.get(service.container) !== service)
-      template.signals.consumers(new Map([...consumers, [service.container, service]]))
+    if (consumers.get(unit.container) !== unit)
+      template.signals.consumers(new Map([...consumers, [unit.container, unit]]))
     return
   }
 
-  slotOf(service.container, service.name)(service)
-  addExport(service)
-  addDeclaration(service)
+  slotOf(unit.container, unit.name)(unit)
+  addToParent(unit)
+  addDeclaration(unit)
 }
 
 /**
- * Clears the slot and marks the service absent. The reconciler stops it after its holders release it.
- * A `perConsumer` registration also releases the service of each consumer container.
+ * Clears the slot and marks the unit absent. The reconciler stops it after its holders release it.
+ * A per-container registration also releases the unit of each consumer container.
  */
-export function releaseService(service: ServiceNode): void {
-  service.signals.present(false)
-  if (service.kind !== 'service' || service.template)
+export function releaseUnit(unit: UnitNode): void {
+  unit.signals.present(false)
+  if (unit.kind !== 'unit' || unit.template)
     return
 
-  for (const consumer of service.signals.consumers().values())
+  for (const consumer of unit.signals.consumers().values())
     consumer.signals.present(false)
 
-  const slot = slotOf(service.container, service.name)
-  if (slot() === service)
+  const slot = slotOf(unit.container, unit.name)
+  if (slot() === unit)
     slot(undefined)
-  removeExport(service)
+  removeFromParent(unit)
 }
 
-/** Waits until `service` is `withdrawn`. Rejects with its teardown errors. */
-export async function awaitWithdrawal(service: ServiceNode): Promise<void> {
-  const errors = await service.withdrawal.promise
+/** Waits until `unit` is `withdrawn`. Rejects with its teardown errors. */
+export async function awaitWithdrawal(unit: UnitNode): Promise<void> {
+  const errors = await unit.withdrawal.promise
   if (errors.length > 0)
-    throw errorFrom(errors, `Withdrawal of '${service.name}' failed.`)
+    throw errorFrom(errors, `Withdrawal of '${unit.name}' failed.`)
 }
 
-/** Releases a service or an invocation. Returns `false` when it is already withdrawn. */
-export function releasePresent(service: ServiceNode): boolean {
+/** Releases a unit or an invocation. Returns `false` when it is already withdrawn. */
+export function releasePresent(unit: UnitNode): boolean {
   return untracked(() => {
-    // A stale registration cannot change the service or a newer service in the same slot.
-    if (!service.signals.present())
+    // A stale registration cannot change the unit or a newer unit in the same slot.
+    if (!unit.signals.present())
       return false
 
-    batch(() => releaseService(service))
+    batch(() => releaseUnit(unit))
     return true
   })
 }

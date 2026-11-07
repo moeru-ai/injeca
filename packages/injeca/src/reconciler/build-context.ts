@@ -1,6 +1,6 @@
-import type { InstanceNode, RawBuildContext, RawHookHandler, ServiceNode, StatusValue } from '../graph/graph'
-import type { ServiceHook } from '../primitives/decision'
-import type { EffectSetup, OwnerRecord, ServiceStatus, StatusCause } from '../types'
+import type { InstanceNode, RawBuildContext, RawHookHandler, StatusValue, UnitNode } from '../graph/graph'
+import type { UnitHook } from '../primitives/decision'
+import type { EffectSetup, OwnerRecord, StatusCause, UnitStatus } from '../types'
 
 import { BuildAfterDisposeError, HookOutsideBuildError, InvalidArgumentError } from '../diagnostics/errors'
 import { emitRecord } from '../graph/observers'
@@ -8,8 +8,8 @@ import { sameStatus } from '../graph/status'
 import { untracked } from '../helpers/signals'
 import { withoutUndefined } from '../helpers/without-undefined'
 
-const serviceHooks: ReadonlySet<string> = new Set<ServiceHook>(['start', 'stop', 'dependency-change', 'dependency-status-change'])
-const statuses: ReadonlySet<string> = new Set<ServiceStatus>(['ready', 'degraded', 'unavailable'])
+const unitHooks: ReadonlySet<string> = new Set<UnitHook>(['start', 'stop', 'dependency-change', 'dependency-status-change'])
+const statuses: ReadonlySet<string> = new Set<UnitStatus>(['ready', 'degraded', 'unavailable'])
 
 /** A cause chain longer than this is cut. It protects against a cyclic cause object. */
 const maxCauseDepth = 32
@@ -27,11 +27,11 @@ function readOwner(value: unknown): OwnerRecord {
   throw new InvalidArgumentError('The owner of a status cause must be a serializable record.')
 }
 
-function readStatusValue(value: unknown, what: string): ServiceStatus {
+function readStatusValue(value: unknown, what: string): UnitStatus {
   if (typeof value !== 'string' || !statuses.has(value))
     throw new InvalidArgumentError(`${what} must be 'ready', 'degraded', or 'unavailable'. Got ${String(value)}.`)
 
-  return value as ServiceStatus
+  return value as UnitStatus
 }
 
 function readReason(value: unknown, what: string): string | undefined {
@@ -71,12 +71,12 @@ function readCause(value: unknown, depth = 0): StatusCause | undefined {
 }
 
 /** Reads the arguments of `setStatus` once. */
-function readOwnStatus(service: ServiceNode, status: unknown, reasonOrOptions: unknown): StatusValue {
-  const checked = readStatusValue(status, `The status of '${service.name}'`)
+function readOwnStatus(unit: UnitNode, status: unknown, reasonOrOptions: unknown): StatusValue {
+  const checked = readStatusValue(status, `The status of '${unit.name}'`)
   if (reasonOrOptions === undefined || typeof reasonOrOptions === 'string')
     return Object.freeze({ status: checked, ...withoutUndefined({ reason: reasonOrOptions }) })
   if (typeof reasonOrOptions !== 'object' || reasonOrOptions === null)
-    throw new InvalidArgumentError(`The second argument of setStatus for '${service.name}' must be a string or an object.`)
+    throw new InvalidArgumentError(`The second argument of setStatus for '${unit.name}' must be a string or an object.`)
 
   let fields: { reason: unknown, cause: unknown }
   try {
@@ -84,10 +84,10 @@ function readOwnStatus(service: ServiceNode, status: unknown, reasonOrOptions: u
     fields = { reason: options.reason, cause: options.cause }
   }
   catch (error) {
-    throw new InvalidArgumentError(`Cannot read the setStatus options of '${service.name}'.`, { cause: error })
+    throw new InvalidArgumentError(`Cannot read the setStatus options of '${unit.name}'.`, { cause: error })
   }
 
-  const reason = readReason(fields.reason, `The setStatus reason of '${service.name}'`)
+  const reason = readReason(fields.reason, `The setStatus reason of '${unit.name}'`)
   const cause = readCause(fields.cause)
 
   return Object.freeze({
@@ -97,9 +97,9 @@ function readOwnStatus(service: ServiceNode, status: unknown, reasonOrOptions: u
 }
 
 /** Creates the context that `build` gets. `on` is valid only while the build runs. `setStatus` stays valid after it. */
-export function createBuildContext(service: ServiceNode, instance: InstanceNode): RawBuildContext {
+export function createBuildContext(unit: UnitNode, instance: InstanceNode): RawBuildContext {
   const dependsOn: Record<string, unknown> = {}
-  for (const edge of service.edges) {
+  for (const edge of unit.edges) {
     const binding = instance.bindings.get(edge.name)
     const state = instance.handled.get(edge.name)
     dependsOn[edge.name] = edge.optional
@@ -108,26 +108,26 @@ export function createBuildContext(service: ServiceNode, instance: InstanceNode)
   }
 
   return Object.freeze({
-    container: service.container.api,
-    name: service.name,
+    container: unit.container.api,
+    name: unit.name,
     instanceId: instance.id,
-    ...withoutUndefined({ consumer: service.consumer }),
+    ...withoutUndefined({ consumer: unit.consumer }),
     dependsOn: Object.freeze(dependsOn),
     on: (hook: unknown, handler: RawHookHandler) => {
       if (!instance.building)
-        throw new HookOutsideBuildError(`'on' was called for '${service.name}' after its build settled.`)
-      if (typeof hook !== 'string' || !serviceHooks.has(hook))
-        throw new InvalidArgumentError(`'${String(hook)}' is not a service hook.`)
+        throw new HookOutsideBuildError(`'on' was called for '${unit.name}' after its build settled.`)
+      if (typeof hook !== 'string' || !unitHooks.has(hook))
+        throw new InvalidArgumentError(`'${String(hook)}' is not a unit hook.`)
       if (typeof handler !== 'function')
-        throw new InvalidArgumentError(`The '${hook}' handler of '${service.name}' is not a function.`)
+        throw new InvalidArgumentError(`The '${hook}' handler of '${unit.name}' is not a function.`)
 
-      instance.hooks[hook as ServiceHook].push(handler)
+      instance.hooks[hook as UnitHook].push(handler)
     },
     effect: (setup: EffectSetup) => {
       if (instance.disposed)
-        throw new BuildAfterDisposeError(`'effect' was called for '${service.name}' after its instance was disposed.`)
+        throw new BuildAfterDisposeError(`'effect' was called for '${unit.name}' after its instance was disposed.`)
       if (typeof setup !== 'function')
-        throw new InvalidArgumentError(`The effect setup of '${service.name}' is not a function.`)
+        throw new InvalidArgumentError(`The effect setup of '${unit.name}' is not a function.`)
 
       // The setup is a user callback.
       const disposer = untracked(setup)
@@ -137,13 +137,13 @@ export function createBuildContext(service: ServiceNode, instance: InstanceNode)
     signal: instance.controller.signal,
     // `setStatus` stays valid after `build`, so it is an entry point.
     setStatus: (status: unknown, reasonOrOptions?: unknown) => untracked(() => {
-      const next = readOwnStatus(service, status, reasonOrOptions)
+      const next = readOwnStatus(unit, status, reasonOrOptions)
       if (instance.disposed) {
-        emitRecord(service.container, {
+        emitRecord(unit.container, {
           type: 'ignored',
           call: 'setStatus',
-          key: service.name,
-          owner: service.container.owner,
+          key: unit.name,
+          owner: unit.container.owner,
           instanceId: instance.id,
           reason: `setStatus('${next.status}') was called after the instance was disposed.`,
         })

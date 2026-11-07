@@ -1,6 +1,6 @@
 # @injeca/bridge
 
-Connects an eventa channel to an injeca child container. A plugin in another process or language uses it to export services to injeca and to depend on injeca services.
+Connects an eventa channel to an injeca child container. A plugin in another process or language uses it to provide units to injeca and to depend on injeca units.
 
 ## Status
 
@@ -8,4 +8,4 @@ This package is a placeholder. Step 6 of [the injeca 0.3 design](../../docs/desi
 
 ## Related packages
 
-Transport packages that open a channel and report its state as an injeca service use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.
+Transport packages that open a channel and report its state as an injeca unit use the name `@injeca/channel-<transport>`, for example `@injeca/channel-websocket`.

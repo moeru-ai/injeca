@@ -1,28 +1,28 @@
-import type { ContainerNode, ServiceNode } from '../graph/graph'
+import type { ContainerNode, UnitNode } from '../graph/graph'
 
 import { subtreeOf } from '../graph/nodes'
-import { candidatesOf, resolutionOf, serviceFor } from '../graph/resolvers/resolvers'
+import { candidatesOf, resolutionOf, unitFor } from '../graph/resolvers/resolvers'
 
 /** The plain result of an impact run, before it becomes graph entries. */
 export interface ImpactSets {
-  readonly stopped: ReadonlySet<ServiceNode>
-  readonly rebuilt: ReadonlySet<ServiceNode>
-  readonly notified: ReadonlySet<ServiceNode>
+  readonly stopped: ReadonlySet<UnitNode>
+  readonly rebuilt: ReadonlySet<UnitNode>
+  readonly notified: ReadonlySet<UnitNode>
 }
 
-/** The proposed change as sets of services. */
+/** The proposed change as sets of units. */
 export interface ProposedChange {
-  /** The services that leave: a withdrawal or a disposal. */
-  readonly removed: ReadonlySet<ServiceNode>
-  /** The services that get a new instance: a replacement. */
-  readonly renewed: ReadonlySet<ServiceNode>
+  /** The units that leave: a withdrawal or a disposal. */
+  readonly removed: ReadonlySet<UnitNode>
+  /** The units that get a new instance: a replacement. */
+  readonly renewed: ReadonlySet<UnitNode>
 }
 
 const livePhases: ReadonlySet<string> = new Set(['building', 'starting', 'retrying', 'running'])
 
-/** A service with an instance that a change can stop or rebuild. A new service that waits for its swap does not count. */
-function isLive(service: ServiceNode): boolean {
-  return service.kind !== 'resolver' && !service.swap && service.signals.instance() !== undefined && livePhases.has(service.signals.phase())
+/** A unit with an instance that a change can stop or rebuild. A new unit that waits for its swap does not count. */
+function isLive(unit: UnitNode): boolean {
+  return unit.kind !== 'resolver' && !unit.swap && unit.signals.instance() !== undefined && livePhases.has(unit.signals.phase())
 }
 
 function rootOf(container: ContainerNode): ContainerNode {
@@ -33,19 +33,19 @@ function rootOf(container: ContainerNode): ContainerNode {
   return root
 }
 
-/** The services of a `perConsumer` registration, with the registration. */
-function withConsumers(service: ServiceNode): ServiceNode[] {
-  return [service, ...service.signals.consumers().values()]
+/** The units of a per-container registration, with the registration. */
+function withConsumers(unit: UnitNode): UnitNode[] {
+  return [unit, ...unit.signals.consumers().values()]
 }
 
-/** Lists the services that leave when `container` and its descendants are disposed. */
-export function disposedServices(container: ContainerNode): Set<ServiceNode> {
-  return new Set(subtreeOf(container).flatMap(current => [...current.services]).flatMap(withConsumers))
+/** Lists the units that leave when `container` and its descendants are disposed. */
+export function disposedUnits(container: ContainerNode): Set<UnitNode> {
+  return new Set(subtreeOf(container).flatMap(current => [...current.units]).flatMap(withConsumers))
 }
 
-/** Lists the services that leave when `service` is withdrawn. */
-export function withdrawnServices(service: ServiceNode): Set<ServiceNode> {
-  return new Set(withConsumers(service))
+/** Lists the units that leave when `unit` is withdrawn. */
+export function withdrawnUnits(unit: UnitNode): Set<UnitNode> {
+  return new Set(withConsumers(unit))
 }
 
 /**
@@ -56,37 +56,37 @@ export function withdrawnServices(service: ServiceNode): Set<ServiceNode> {
  * - An alternative provider is an ancestor registration that serves, or another `firstAvailable` candidate.
  */
 export function computeImpact(scope: ContainerNode, change: ProposedChange): ImpactSets {
-  const services = subtreeOf(rootOf(scope)).flatMap(container => [...container.services]).filter(isLive)
-  const stopped = new Set<ServiceNode>([...change.removed].filter(isLive))
-  const rebuilt = new Set<ServiceNode>()
-  const notified = new Set<ServiceNode>()
-  const gone = (service: ServiceNode): boolean => change.removed.has(service) || stopped.has(service)
-  const renewed = (service: ServiceNode): boolean => change.renewed.has(service) || rebuilt.has(service)
+  const units = subtreeOf(rootOf(scope)).flatMap(container => [...container.units]).filter(isLive)
+  const stopped = new Set<UnitNode>([...change.removed].filter(isLive))
+  const rebuilt = new Set<UnitNode>()
+  const notified = new Set<UnitNode>()
+  const gone = (unit: UnitNode): boolean => change.removed.has(unit) || stopped.has(unit)
+  const renewed = (unit: UnitNode): boolean => change.renewed.has(unit) || rebuilt.has(unit)
 
   /** Tells whether another candidate of the edge serves after the change. */
-  const alternative = (consumer: ServiceNode, keyNames: readonly string[]): boolean => keyNames.some(keyName =>
+  const alternative = (consumer: UnitNode, keyNames: readonly string[]): boolean => keyNames.some(keyName =>
     candidatesOf(consumer.scope, keyName, consumer).some((registration) => {
-      const provider = serviceFor(registration, consumer.scope)
+      const provider = unitFor(registration, consumer.scope)
       return provider !== undefined && !gone(provider) && !gone(registration) && provider.signals.serving()
     }))
 
   let changed = true
   while (changed) {
     changed = false
-    for (const service of services) {
-      if (stopped.has(service) || change.removed.has(service))
+    for (const unit of units) {
+      if (stopped.has(unit) || change.removed.has(unit))
         continue
 
       let lost = false
       let identity = false
-      for (const edge of service.edges) {
-        const resolution = resolutionOf(service, edge)
+      for (const edge of unit.edges) {
+        const resolution = resolutionOf(unit, edge)
         if (resolution.kind !== 'resolved')
           continue
 
         const provider = resolution.provider
         if (gone(provider)) {
-          if (alternative(service, edge.candidates))
+          if (alternative(unit, edge.candidates))
             identity = true
           else if (edge.optional)
             identity = true
@@ -99,18 +99,18 @@ export function computeImpact(scope: ContainerNode, change: ProposedChange): Imp
       }
 
       if (lost) {
-        rebuilt.delete(service)
-        notified.delete(service)
-        stopped.add(service)
+        rebuilt.delete(unit)
+        notified.delete(unit)
+        stopped.add(unit)
         changed = true
       }
-      else if (identity && !rebuilt.has(service) && !notified.has(service)) {
-        const instance = service.signals.instance()
+      else if (identity && !rebuilt.has(unit) && !notified.has(unit)) {
+        const instance = unit.signals.instance()
         if (instance && instance.hooks['dependency-change'].length > 0) {
-          notified.add(service)
+          notified.add(unit)
         }
         else {
-          rebuilt.add(service)
+          rebuilt.add(unit)
           changed = true
         }
       }

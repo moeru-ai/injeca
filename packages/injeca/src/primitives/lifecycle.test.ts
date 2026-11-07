@@ -5,7 +5,7 @@ import { provide, start, stop, timeout } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, phaseOf, trackedController } from '../testing/helpers'
 
 describe('start with a signal', () => {
-  it('rejects with start-timeout for a timeout reason, and the services keep converging', async () => {
+  it('rejects with start-timeout for a timeout reason, and the units keep converging', async () => {
     const { clock, advance, pending } = manualClock()
     const app = createTestContainer({ clock })
     provide(app, 'voice.speech', { dependsOn: { tts: 'airi.tts' }, build: () => 'speech' })
@@ -19,7 +19,7 @@ describe('start with a signal', () => {
     expect((error as StartTimeoutError).explanations).toEqual([expect.objectContaining({ name: 'voice.speech', phase: 'pending' })])
     expect(pending()).toBe(0)
 
-    // The abort ended only the wait. The container is started, so a later provider makes the service run.
+    // The abort ended only the wait. The container is started, so a later provider makes the unit run.
     provide(app, 'airi.tts', () => 'tts')
     await drained(app)
     expect(phaseOf(app, 'voice.speech')).toBe('running')
@@ -48,7 +48,7 @@ describe('start with a signal', () => {
     expect(phaseOf(app, 'airi.llm')).toBe('running')
   })
 
-  it('removes its listener when every service runs', async () => {
+  it('removes its listener when every unit runs', async () => {
     const app = createTestContainer()
     provide(app, 'airi.llm', () => 'llm')
     const { signal, listeners } = trackedController()
@@ -102,7 +102,7 @@ describe('stop with a signal', () => {
     expect(phaseOf(app, 'airi.llm')).toBe('pending')
   })
 
-  it('removes its listener when every service stopped', async () => {
+  it('removes its listener when every unit stopped', async () => {
     const app = createTestContainer()
     provide(app, 'airi.llm', () => 'llm')
     await start(app)

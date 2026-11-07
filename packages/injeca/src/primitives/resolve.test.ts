@@ -7,9 +7,9 @@ import { nodeOf } from '../graph/nodes'
 import { graph, provide, resolve, start, timeout } from '../scoped'
 import { createTestContainer, drained, manualClock, trackedController } from '../testing/helpers'
 
-/** The internal services of a container, with the hidden resolvers of `resolve` calls. */
-function nodeServices(container: Container) {
-  return nodeOf(container).services
+/** The internal units of a container, with the hidden resolvers of `resolve` calls. */
+function nodeUnits(container: Container) {
+  return nodeOf(container).units
 }
 
 describe('resolve bounds (G4)', () => {
@@ -27,8 +27,8 @@ describe('resolve bounds (G4)', () => {
     expect((error as WaitTimeoutError).cause).toMatchObject({ name: 'TimeoutError' })
     await drained(app)
     expect(pending()).toBe(0)
-    expect(graph(app).services()).toEqual([])
-    expect([...nodeServices(app)]).toEqual([])
+    expect(graph(app).units()).toEqual([])
+    expect([...nodeUnits(app)]).toEqual([])
   })
 
   it('rejects with the abort reason, also when the signal aborted before the call', async () => {
@@ -41,7 +41,7 @@ describe('resolve bounds (G4)', () => {
     await expect(waiting).rejects.toBe(reason)
     await expect(resolve(app, { llm: 'airi.llm' }, { signal })).rejects.toBe(reason)
     await drained(app)
-    expect([...nodeServices(app)]).toEqual([])
+    expect([...nodeUnits(app)]).toEqual([])
   })
 
   it('rejects with wait-timeout at once for a signal that already timed out', async () => {
@@ -50,7 +50,7 @@ describe('resolve bounds (G4)', () => {
     const signal = timeout(app, 0)
     advance(0)
     await expect(resolve(app, { llm: 'airi.llm' }, { signal })).rejects.toBeInstanceOf(WaitTimeoutError)
-    expect([...nodeServices(app)]).toEqual([])
+    expect([...nodeUnits(app)]).toEqual([])
   })
 
   it('removes its abort listener when it resolves', async () => {

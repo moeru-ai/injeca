@@ -1,8 +1,8 @@
-import type { BuildFunction, ServiceNode } from '../graph/graph'
+import type { BuildFunction, UnitNode } from '../graph/graph'
 import type { Container, DependencyDeclarations, DependencyMap, InvocationHandle, InvokeOption, InvokeOptionWithKeys, WithdrawOptions } from '../types'
 
 import { InvalidArgumentError } from '../diagnostics/errors'
-import { assertActive, createService, nodeOf, readEdges } from '../graph/nodes'
+import { assertActive, createUnit, nodeOf, readEdges } from '../graph/nodes'
 import { batch, untracked } from '../helpers/signals'
 import { traceLoggerOf } from '../reconciler/calls'
 import { withdrawInvocation } from './withdraw'
@@ -11,7 +11,7 @@ import { withdrawInvocation } from './withdraw'
 export type InvokeAnyOption = ((dependencies: never, context: never) => unknown) | { callback: (dependencies: never, context: never) => unknown, dependsOn?: unknown }
 
 /**
- * Registers an invocation: a service without a value. The callback runs when the required dependencies are available.
+ * Registers an invocation: a unit without a value. The callback runs when the required dependencies are available.
  * Before `start()`, it waits for `start()`.
  */
 export function invoke<Deps extends DependencyDeclarations>(container: Container, option: InvokeOptionWithKeys<Deps>): InvocationHandle
@@ -44,13 +44,13 @@ export function invokeIn(container: Container, option: InvokeAnyOption): Invocat
   const build: BuildFunction = context => userCallback(context.dependsOn, Object.freeze({ on: context.on, effect: context.effect, signal: context.signal }))
 
   const registered = untracked(() => {
-    let service: ServiceNode | undefined
+    let unit: UnitNode | undefined
     batch(() => {
-      service = createService({ container: node, kind: 'invocation', name, edges, build })
-      node.services.add(service)
+      unit = createUnit({ container: node, kind: 'invocation', name, edges, build })
+      node.units.add(unit)
     })
 
-    return service!
+    return unit!
   })
 
   traceLoggerOf(container)?.invoke(edges.map(edge => edge.keyName))

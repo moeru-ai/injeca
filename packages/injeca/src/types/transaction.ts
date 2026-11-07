@@ -34,16 +34,16 @@ export interface TransactionCommitOptions {
  * Nothing is visible to consumers before `commit()`. A failed build publishes nothing.
  */
 export interface Transaction {
-  /** Reserves a service. Graph queries see it as `declared`. Consumers cannot resolve it. */
+  /** Reserves a unit. Graph queries see it as `declared`. Consumers cannot resolve it. */
   readonly declare: (key: KeyReference, options?: DeclareOptions) => void
-  /** Fills a declared service, or adds a new service. The registration becomes current at the commit. */
+  /** Fills a declared unit, or adds a new unit. The registration becomes current at the commit. */
   readonly provide: TransactionProvide
   /** Replaces the current registration of `key` in the container at the commit, as `replace()` does. */
   readonly replace: TransactionReplace
   /**
-   * Builds the services in dependency order, then publishes them in one batch. Then the `start` hooks run.
+   * Builds the units in dependency order, then publishes them in one batch. Then the `start` hooks run.
    *
-   * A service whose required dependencies are not available goes to `pending`. That is not a failure.
+   * A unit whose required dependencies are not available goes to `pending`. That is not a failure.
    * If one build fails, nothing publishes, no `start` hook runs, and the promise rejects with the build error.
    * Resolves after the publish. It does not wait for the `start` hooks.
    *
@@ -51,6 +51,6 @@ export interface Transaction {
    * An aborted signal rejects at once and builds nothing. After the publish, the signal has no effect.
    */
   readonly commit: (options?: TransactionCommitOptions) => Promise<void>
-  /** Removes all declared and built services of the transaction. A build that settles later cannot publish. */
+  /** Removes all declared and built units of the transaction. A build that settles later cannot publish. */
   readonly abort: () => Promise<void>
 }

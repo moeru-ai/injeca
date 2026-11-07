@@ -76,15 +76,15 @@ describe('resolve', () => {
       return { createdAt: Date.now() }
     })
 
-    const service = provide(app, 'service', buildSpy)
+    const unit = provide(app, 'unit', buildSpy)
 
     const [first, second] = await Promise.all([
-      resolve(app, { service }),
-      resolve(app, { service }),
+      resolve(app, { unit }),
+      resolve(app, { unit }),
     ])
 
     expect(buildSpy).toHaveBeenCalledTimes(1)
-    expect(first.service).toBe(second.service)
+    expect(first.unit).toBe(second.unit)
   })
 
   it('should reuse resolved results', async () => {

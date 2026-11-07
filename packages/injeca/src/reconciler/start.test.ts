@@ -12,7 +12,7 @@ async function tick(manual: { advance: (ms: number) => void }, app: Container, m
 }
 
 /** Provides `airi.server` with a `start` hook that waits for `gate`, and a second hook that records its call. */
-function setup(options: { container?: Omit<ContainerOptions, 'clock'>, service?: PolicyOptions } = {}) {
+function setup(options: { container?: Omit<ContainerOptions, 'clock'>, unit?: PolicyOptions } = {}) {
   const manual = manualClock()
   const app = createContainer({ logger: createNoopLogger(), ...options.container, clock: manual.clock })
   const gate = deferred()
@@ -20,7 +20,7 @@ function setup(options: { container?: Omit<ContainerOptions, 'clock'>, service?:
   const later = vi.fn()
   const stopHook = vi.fn()
   provide(app, 'airi.server', {
-    ...options.service,
+    ...options.unit,
     build: ({ on }) => {
       on('start', ({ signal }) => {
         signals.push(signal)
@@ -42,13 +42,13 @@ function timeoutRecords(records: readonly ObserveRecord[]) {
 
 describe('start timeouts', () => {
   it('aborts the run signal with hook-timeout at the timeout, and cancels the timer when the start settles first', async () => {
-    const timedOut = setup({ service: { timeouts: { start: 100 } } })
+    const timedOut = setup({ unit: { timeouts: { start: 100 } } })
     void start(timedOut.app).catch(() => {})
     await drained(timedOut.app)
     await tick(timedOut, timedOut.app, 100)
     expect(timedOut.signals[0]?.reason).toMatchObject({ code: 'hook-timeout', hook: 'start', timeoutMs: 100 })
 
-    const settled = setup({ service: { timeouts: { start: 100 } } })
+    const settled = setup({ unit: { timeouts: { start: 100 } } })
     const started = start(settled.app)
     await drained(settled.app)
     expect(settled.pending()).toBe(1)
@@ -74,7 +74,7 @@ describe('start timeouts', () => {
   })
 
   it('records the timeout, aborts the run, and fails with hook-timeout without onTimeout', async () => {
-    const ctx = setup({ service: { timeouts: { start: 100 } } })
+    const ctx = setup({ unit: { timeouts: { start: 100 } } })
     const started = start(ctx.app)
     const rejection = expect(started).rejects.toMatchObject({ code: 'hook-timeout', hook: 'start', timeoutMs: 100 })
     await drained(ctx.app)
@@ -97,7 +97,7 @@ describe('start timeouts', () => {
 
   it('applies the onTimeout decision: a requeue retries the start', async () => {
     const onTimeout = vi.fn(context => context.hook === 'start' ? context.decide.requeue({ after: 50, reason: 'slow device' }) : undefined)
-    const ctx = setup({ service: { timeouts: { start: 100 }, onTimeout } })
+    const ctx = setup({ unit: { timeouts: { start: 100 }, onTimeout } })
     void start(ctx.app)
     await drained(ctx.app)
     await tick(ctx, ctx.app, 100)
@@ -110,16 +110,16 @@ describe('start timeouts', () => {
   })
 
   it('gives fail when onTimeout returns a value that is not a decision', async () => {
-    const ctx = setup({ service: { timeouts: { start: 10 }, onTimeout: () => 'later' } })
+    const ctx = setup({ unit: { timeouts: { start: 10 }, onTimeout: () => 'later' } })
     const rejection = expect(start(ctx.app)).rejects.toMatchObject({ code: 'hook-timeout' })
     await drained(ctx.app)
     await tick(ctx, ctx.app, 10)
     await rejection
   })
 
-  it('uses the service timeout over the container timeout, and the container onTimeout without a service one', async () => {
+  it('uses the unit timeout over the container timeout, and the container onTimeout without a unit one', async () => {
     const onTimeout = vi.fn(context => context.decide.fail(new Error('container policy')))
-    const ctx = setup({ container: { timeouts: { start: 50 }, onTimeout }, service: { timeouts: { start: 200 } } })
+    const ctx = setup({ container: { timeouts: { start: 50 }, onTimeout }, unit: { timeouts: { start: 200 } } })
     const rejection = expect(start(ctx.app)).rejects.toThrow('container policy')
     await drained(ctx.app)
     await tick(ctx, ctx.app, 50)
@@ -130,10 +130,10 @@ describe('start timeouts', () => {
     expect(onTimeout).toHaveBeenCalledTimes(1)
   })
 
-  it('uses the container timeout when the service has none, and the service onTimeout over the container one', async () => {
+  it('uses the container timeout when the unit has none, and the unit onTimeout over the container one', async () => {
     const containerHandler = vi.fn()
-    const ctx = setup({ container: { timeouts: { start: 50 }, onTimeout: containerHandler }, service: { onTimeout: context => context.decide.fail(new Error('service policy')) } })
-    const rejection = expect(start(ctx.app)).rejects.toThrow('service policy')
+    const ctx = setup({ container: { timeouts: { start: 50 }, onTimeout: containerHandler }, unit: { onTimeout: context => context.decide.fail(new Error('unit policy')) } })
+    const rejection = expect(start(ctx.app)).rejects.toThrow('unit policy')
     await drained(ctx.app)
     await tick(ctx, ctx.app, 50)
     await rejection

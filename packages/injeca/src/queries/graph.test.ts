@@ -24,25 +24,25 @@ function voiceGraph() {
 }
 
 describe('graph queries', () => {
-  it('lists services, direct edges, and dependents', async () => {
+  it('lists units, direct edges, and dependents', async () => {
     const { app, plugin } = voiceGraph()
     await start(app)
     await start(plugin)
     const queries = graph(app)
 
-    expect(queries.services().map(service => [service.key, service.owner])).toEqual([
+    expect(queries.units().map(unit => [unit.key, unit.owner])).toEqual([
       ['airi.llm', {}],
       ['voice.speech', {}],
       ['voice.summary', {}],
       ['voice.optional', {}],
       ['reaction', { kind: 'plugin', id: 'reaction' }],
     ])
-    expect(queries.services()[0]).toMatchObject({ phase: 'running', status: 'ready', metadata: { version: '1.0.0' }, exclusive: false, perConsumer: false })
+    expect(queries.units()[0]).toMatchObject({ phase: 'running', status: 'ready', metadata: { version: '1.0.0' }, exclusive: false, instances: 'shared', visibility: 'local' })
     expect(queries.dependencies('voice.speech')).toEqual([
       expect.objectContaining({ name: 'llm', keys: ['airi.llm'], optional: false, resolution: 'resolved', provider: expect.objectContaining({ key: 'airi.llm' }) }),
     ])
-    expect(queries.dependents('voice.speech').map(service => service.key)).toEqual(['voice.summary', 'reaction'])
-    expect(graph(plugin).services().map(service => service.key)).toEqual(['reaction'])
+    expect(queries.dependents('voice.speech').map(unit => unit.key)).toEqual(['voice.summary', 'reaction'])
+    expect(graph(plugin).units().map(unit => unit.key)).toEqual(['reaction'])
     expect(() => queries.dependencies('')).toThrow(InvalidArgumentError)
   })
 
@@ -54,31 +54,31 @@ describe('graph queries', () => {
     provide(app, 'x', { dependsOn: { y: 'y' }, build: () => 'x' })
     provide(app, 'y', { dependsOn: { x: 'x' }, build: () => 'y' })
 
-    expect(graph(app).order().map(service => service.key)).toEqual(['a', 'b', 'c', 'x', 'y'])
-    expect(graph(app).order(['b']).map(service => service.key)).toEqual(['a', 'b'])
-    expect(graph(app).cycles().map(cycle => cycle.map(service => service.key))).toEqual([['x', 'y']])
+    expect(graph(app).order().map(unit => unit.key)).toEqual(['a', 'b', 'c', 'x', 'y'])
+    expect(graph(app).order(['b']).map(unit => unit.key)).toEqual(['a', 'b'])
+    expect(graph(app).cycles().map(cycle => cycle.map(unit => unit.key))).toEqual([['x', 'y']])
   })
 
-  it('reports the services that a proposed change stops, and does not change the real graph (design test 17)', async () => {
+  it('reports the units that a proposed change stops, and does not change the real graph (design test 17)', async () => {
     const { app, plugin } = voiceGraph()
     await start(app)
     await start(plugin)
-    const before = graph(app).services()
+    const before = graph(app).units()
 
     const withdraw = graph(app).impact({ kind: 'withdraw', key: llmKey })
-    expect(withdraw.stopped.map(service => service.key)).toEqual(['airi.llm', 'voice.speech', 'voice.summary', 'reaction'])
+    expect(withdraw.stopped.map(unit => unit.key)).toEqual(['airi.llm', 'voice.speech', 'voice.summary', 'reaction'])
     // An optional dependency disappears. The dependent has no handler, so it rebuilds.
-    expect(withdraw.rebuilt.map(service => service.key)).toEqual(['voice.optional'])
+    expect(withdraw.rebuilt.map(unit => unit.key)).toEqual(['voice.optional'])
 
     const replace = graph(app).impact({ kind: 'replace', key: llmKey })
     expect(replace.stopped).toEqual([])
-    expect(replace.rebuilt.map(service => service.key)).toEqual(['voice.speech', 'voice.optional', 'reaction'])
-    expect(replace.notified.map(service => service.key)).toEqual(['voice.summary'])
+    expect(replace.rebuilt.map(unit => unit.key)).toEqual(['voice.speech', 'voice.optional', 'reaction'])
+    expect(replace.notified.map(unit => unit.key)).toEqual(['voice.summary'])
 
-    expect(graph(app).impact({ kind: 'dispose', container: plugin }).stopped.map(service => service.key)).toEqual(['reaction'])
+    expect(graph(app).impact({ kind: 'dispose', container: plugin }).stopped.map(unit => unit.key)).toEqual(['reaction'])
 
     await drained(app)
-    expect(graph(app).services()).toEqual(before)
+    expect(graph(app).units()).toEqual(before)
     expect(stateOf(app, llmKey).phase).toBe('running')
     await dispose(app)
   })
@@ -93,18 +93,18 @@ describe('graph queries', () => {
     await start(child)
 
     const impact = graph(child).impact({ kind: 'withdraw', key: llmKey })
-    expect(impact.stopped.map(service => service.owner)).toEqual([{}])
-    expect(impact.rebuilt.map(service => service.key)).toEqual(['voice.speech'])
+    expect(impact.stopped.map(unit => unit.owner)).toEqual([{}])
+    expect(impact.rebuilt.map(unit => unit.key)).toEqual(['voice.speech'])
   })
 
-  it('explains a service that waits for a missing provider', async () => {
+  it('explains a unit that waits for a missing provider', async () => {
     const app = createTestContainer()
     provide(app, 'voice.speech', { dependsOn: { llm: llmKey }, build: () => 'speech' })
     void start(app)
     await drained(app)
 
     expect(graph(app).explain('voice.speech')).toMatchObject({ phase: 'pending', blockers: [{ kind: 'missing-provider', dependency: 'llm', key: 'airi.llm' }] })
-    // G4: a key without a service explains the missing provider.
-    expect(graph(app).explain('nothing')).toEqual({ name: 'nothing', kind: 'service', owner: {}, phase: undefined, blockers: [{ kind: 'missing-provider', dependency: 'nothing', key: 'nothing' }] })
+    // G4: a key without a unit explains the missing provider.
+    expect(graph(app).explain('nothing')).toEqual({ name: 'nothing', kind: 'unit', owner: {}, phase: undefined, blockers: [{ kind: 'missing-provider', dependency: 'nothing', key: 'nothing' }] })
   })
 })

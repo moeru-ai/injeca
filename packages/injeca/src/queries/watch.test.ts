@@ -1,15 +1,15 @@
-import type { BuildContext, ObserveRecord, ServiceState } from '../types'
+import type { BuildContext, ObserveRecord, UnitState } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { BuildAfterDisposeError, InvalidArgumentError, ServiceFailedError, WaitTimeoutError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, InvalidArgumentError, UnitFailedError, WaitTimeoutError } from '../diagnostics/errors'
 import { injeca } from '../index'
 import { dispose, firstAvailable, graph, provide, start, timeout } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, trackedController } from '../testing/helpers'
 import { observe } from './observe'
 import { waitFor, watch } from './watch'
 
-const brief = (state: ServiceState) => `${state.phase ?? '-'}/${state.status ?? '-'}`
+const brief = (state: UnitState) => `${state.phase ?? '-'}/${state.status ?? '-'}`
 
 describe('watch', () => {
   // Design test 7.
@@ -92,7 +92,7 @@ describe('watch', () => {
   })
 
   it('works with the root container of the global functions', () => {
-    const seen: ServiceState[] = []
+    const seen: UnitState[] = []
     watch(injeca.getContainer(), 'not-provided', state => seen.push(state))()
     expect(seen).toEqual([{ phase: undefined, status: undefined, instanceId: undefined }])
   })
@@ -180,11 +180,11 @@ describe('waitFor', () => {
   })
 })
 
-describe('watch and waitFor of a perConsumer key (B2)', () => {
-  it('demands the consumer service of the container, so they report its real state', async () => {
+describe('watch and waitFor of a per-container key (B2)', () => {
+  it('demands the consumer unit of the container, so they report its real state', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const builds: unknown[] = []
-    provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => builds.push(consumer) })
+    provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => builds.push(consumer) })
     await start(root)
     const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
     await start(extension)
@@ -204,7 +204,7 @@ describe('watch and waitFor of a perConsumer key (B2)', () => {
 
   it('ends the demand with the subscription in a container that is not started', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
-    provide(root, 'host.client', { perConsumer: true, build: ({ consumer }) => consumer })
+    provide(root, 'host.client', { instances: 'per-container', build: ({ consumer }) => consumer })
     await start(root)
     const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
 
@@ -215,13 +215,13 @@ describe('watch and waitFor of a perConsumer key (B2)', () => {
 
     stop()
     await drained(root)
-    // Nothing else demands the consumer service, and its container is not started. So it stops.
-    expect(graph(extension).services().map(service => `${service.key}:${service.phase}`)).toEqual(['host.client:pending'])
+    // Nothing else demands the consumer unit, and its container is not started. So it stops.
+    expect(graph(extension).units().map(unit => `${unit.key}:${unit.phase}`)).toEqual(['host.client:pending'])
   })
 })
 
-describe('waitFor of a failed service (B3)', () => {
-  it('rejects with service-failed and the failure as its cause', async () => {
+describe('waitFor of a failed unit (B3)', () => {
+  it('rejects with unit-failed and the failure as its cause', async () => {
     const app = createTestContainer()
     const error = new Error('build failed')
     provide(app, 'broken', () => {
@@ -231,11 +231,11 @@ describe('waitFor of a failed service (B3)', () => {
     await drained(app)
 
     const failed = await waitFor(app, 'broken').catch((reason: unknown) => reason)
-    expect(failed).toBeInstanceOf(ServiceFailedError)
-    expect(failed).toMatchObject({ code: 'service-failed', key: 'broken', cause: error })
+    expect(failed).toBeInstanceOf(UnitFailedError)
+    expect(failed).toMatchObject({ code: 'unit-failed', key: 'broken', cause: error })
   })
 
-  it('rejects when the service waits for a required provider that failed', async () => {
+  it('rejects when the unit waits for a required provider that failed', async () => {
     const app = createTestContainer()
     const error = new Error('llm failed')
     const llm = provide(app, 'airi.llm', () => {
@@ -245,12 +245,12 @@ describe('waitFor of a failed service (B3)', () => {
     const waiting = waitFor(app, 'voice.speech').catch((reason: unknown) => reason)
     void start(app).catch(() => {})
 
-    expect(await waiting).toMatchObject({ code: 'service-failed', key: 'voice.speech', cause: error })
+    expect(await waiting).toMatchObject({ code: 'unit-failed', key: 'voice.speech', cause: error })
   })
 })
 
 describe('observe', () => {
-  it('replays the current state of all services, with child containers, then records each transition', async () => {
+  it('replays the current state of all units, with child containers, then records each transition', async () => {
     const root = createTestContainer({ owner: { kind: 'host' } })
     const child = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'voice' } })
     const llm = provide(root, 'airi.llm', () => 'llm')
@@ -287,7 +287,7 @@ describe('observe', () => {
       'voice.speech: stopping -> pending',
       'airi.llm: stopping -> withdrawn',
     ])
-    expect(records[0]).toMatchObject({ reason: 'The service was withdrawn.' })
+    expect(records[0]).toMatchObject({ reason: 'The unit was withdrawn.' })
     expect(records[1]).toMatchObject({ reason: 'A required dependency was withdrawn.' })
 
     stop()

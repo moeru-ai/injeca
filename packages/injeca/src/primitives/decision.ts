@@ -1,7 +1,7 @@
 import { InvalidDecisionError } from '../diagnostics/errors'
 
 /** The hooks that `on` registers in `build` and in an invocation callback. */
-export type ServiceHook = 'start' | 'stop' | 'dependency-change' | 'dependency-status-change'
+export type UnitHook = 'start' | 'stop' | 'dependency-change' | 'dependency-status-change'
 
 /** The hooks that run when a dependency changes. Their context has `dependsOn` and `changes`. */
 export type DependencyHook = 'dependency-change' | 'dependency-status-change'
@@ -26,10 +26,10 @@ export interface RequeueOptions extends DecisionOptions {
 
 /** The fields that injeca fills from the hook context. */
 export interface DecisionSource {
-  /** The name of the service, or of the invocation. */
-  readonly service: string
+  /** The name of the unit, or of the invocation. */
+  readonly unit: string
   readonly instanceId: string
-  readonly hook: ServiceHook
+  readonly hook: UnitHook
   readonly attempt: number
   /** The time of the container clock when `decide` created the decision. */
   readonly issuedAt: number
@@ -64,7 +64,7 @@ export type Decision = HandledDecision | RebuildDecision | RequeueDecision | Sto
 export type DecisionKind = Decision['kind']
 
 /** The decision kinds that a hook accepts. */
-export type HookDecisionKind<H extends ServiceHook>
+export type HookDecisionKind<H extends UnitHook>
   = H extends 'start'
     ? 'handled' | 'requeue' | 'stop' | 'fail'
     : H extends 'stop'
@@ -72,7 +72,7 @@ export type HookDecisionKind<H extends ServiceHook>
       : DecisionKind
 
 /** The decisions that a hook accepts. */
-export type DecisionFor<H extends ServiceHook> = Extract<Decision, { readonly kind: HookDecisionKind<H> }>
+export type DecisionFor<H extends UnitHook> = Extract<Decision, { readonly kind: HookDecisionKind<H> }>
 
 /**
  * The value that a hook handler can return.
@@ -81,7 +81,7 @@ export type DecisionFor<H extends ServiceHook> = Extract<Decision, { readonly ki
  * So the shorthand `on('start', () => app.listen(port))` type-checks.
  * The `decide` of each hook has only the methods that the hook accepts. A decision from another run fails at run time with `invalid-decision`.
  */
-export type HookResult<_H extends ServiceHook = ServiceHook> = unknown
+export type HookResult<_H extends UnitHook = UnitHook> = unknown
 
 /** All decision constructors. A hook context has only the constructors that its hook accepts. */
 export interface Decide {
@@ -93,7 +93,7 @@ export interface Decide {
 }
 
 /** The `decide` object of a hook context. A method that the hook does not accept is a type error. */
-export type DecideFor<H extends ServiceHook> = Pick<Decide, HookDecisionKind<H>>
+export type DecideFor<H extends UnitHook> = Pick<Decide, HookDecisionKind<H>>
 
 /**
  * One run of one hook handler. Each decision is bound to the run that created it.
@@ -101,9 +101,9 @@ export type DecideFor<H extends ServiceHook> = Pick<Decide, HookDecisionKind<H>>
  * @internal
  */
 export interface HookRun {
-  readonly service: string
+  readonly unit: string
   readonly instanceId: string
-  readonly hook: ServiceHook
+  readonly hook: UnitHook
   readonly attempt: number
   readonly now: () => number
 }
@@ -119,7 +119,7 @@ export function createDecide(run: HookRun): Decide {
   function issue<T extends Decision>(fields: Omit<T, keyof DecisionSource>): T {
     const decision = Object.freeze({
       ...fields,
-      service: run.service,
+      unit: run.unit,
       instanceId: run.instanceId,
       hook: run.hook,
       attempt: run.attempt,
@@ -144,7 +144,7 @@ export function createDecide(run: HookRun): Decide {
   })
 }
 
-const validKinds: Readonly<Record<ServiceHook, ReadonlySet<DecisionKind>>> = {
+const validKinds: Readonly<Record<UnitHook, ReadonlySet<DecisionKind>>> = {
   'start': new Set(['handled', 'requeue', 'stop', 'fail']),
   'stop': new Set(['handled', 'fail']),
   'dependency-change': new Set(['handled', 'rebuild', 'requeue', 'stop', 'fail']),
@@ -168,7 +168,7 @@ export function validateDecision(run: HookRun, value: unknown): Decision | undef
   if (!owner)
     return undefined
   if (owner !== run)
-    throw new InvalidDecisionError(`The '${run.hook}' hook of '${run.service}' returned a decision from another run: the '${owner.hook}' hook of '${owner.service}', instance '${owner.instanceId}', attempt ${owner.attempt}.`)
+    throw new InvalidDecisionError(`The '${run.hook}' hook of '${run.unit}' returned a decision from another run: the '${owner.hook}' hook of '${owner.unit}', instance '${owner.instanceId}', attempt ${owner.attempt}.`)
 
   const decision = value as Decision
   if (!validKinds[run.hook].has(decision.kind))

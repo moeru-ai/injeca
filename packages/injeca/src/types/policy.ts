@@ -31,9 +31,9 @@ export interface HookTimeouts {
 }
 
 /**
- * The retry and timeout options of a service or a container. injeca has no built-in values.
+ * The retry and timeout options of a unit or a container. injeca has no built-in values.
  *
- * A service value overrides a container value. A container without a value uses the value of its nearest ancestor that has one.
+ * A unit value overrides a container value. A container without a value uses the value of its nearest ancestor that has one.
  */
 export interface PolicyOptions {
   /**

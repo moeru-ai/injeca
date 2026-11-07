@@ -1,4 +1,4 @@
-import type { Decision, HookRun, ServiceHook } from '../primitives/decision'
+import type { Decision, HookRun, UnitHook } from '../primitives/decision'
 import type { DependencyChange, HookContextFor, HookDependencies } from '../types'
 
 import { InvalidArgumentError } from '../diagnostics/errors'
@@ -9,8 +9,8 @@ export { manualClock } from './manual-clock'
 export type { ManualClock } from './manual-clock'
 
 export interface HookContextOptions<D = undefined> {
-  /** The service name that the decisions carry. It defaults to `'test'`. */
-  service?: string
+  /** The unit name that the decisions carry. It defaults to `'test'`. */
+  unit?: string
   /** The instance id that the decisions carry. It defaults to `'test-instance'`. */
   instanceId?: string
   /** It defaults to `1`. */
@@ -33,13 +33,13 @@ const runs = new WeakMap<object, HookRun>()
  *
  * Its decisions are bound to this context, as in a real run. Use `checkDecision` to check a result as injeca does.
  */
-export function createHookContext<H extends ServiceHook, D = undefined>(hook: H, options: HookContextOptions<D> = {}): HookContextFor<H, D> {
+export function createHookContext<H extends UnitHook, D = undefined>(hook: H, options: HookContextOptions<D> = {}): HookContextFor<H, D> {
   const attempt = options.attempt ?? 1
   if (!Number.isInteger(attempt) || attempt < 1)
     throw new InvalidArgumentError(`The attempt of a hook context must be an integer of 1 or more. Got ${String(attempt)}.`)
 
   const run: HookRun = {
-    service: options.service ?? 'test',
+    unit: options.unit ?? 'test',
     instanceId: options.instanceId ?? 'test-instance',
     hook,
     attempt,
