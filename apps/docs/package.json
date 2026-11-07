@@ -30,7 +30,7 @@
     "@iconify-json/mingcute": "^1.2.9",
     "@intlify/unplugin-vue-i18n": "^11.2.8",
     "@pierre/highlights": "^0.2.0",
-    "@proj-airi/chromatic": "^1.1.5",
+    "@proj-airi/chromatic": "^2.0.1",
     "@types/node": "^25.6.0",
     "@types/three": "^0.187.0",
     "@vitejs/plugin-vue": "^6.0.10",
