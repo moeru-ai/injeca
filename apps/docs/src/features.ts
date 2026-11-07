@@ -51,7 +51,7 @@ export const FEATURES: readonly Feature[] = [
   },
   {
     icon: 'search-2-fill',
-    title: 'Ask why',
+    title: 'Explain',
     text: 'Every change records its cause. Ask why a unit is waiting, preview what a change will stop or rebuild before you run it, and follow every state change as it happens.',
     primitives: ['graph().explain()', 'graph().impact()', 'observe()'],
     target: 'cheat-sheet',
