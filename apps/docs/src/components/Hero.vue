@@ -7,15 +7,15 @@ import { toggleLocale } from '../i18n'
 import { theme, toggleTheme } from '../theme'
 
 /** The hero: what injeca is, beside a scene where a target comes apart into what it needs, and is built back. */
-const props = defineProps<{ capture?: boolean }>()
+const props = defineProps<{ capture?: boolean, og?: boolean }>()
 
 const repo = 'https://github.com/moeru-ai/injeca'
-// `&at=<ms>` picks the moment of a capture. By default it is app, whole, with the units that it does not need left on the conveyor.
-const at = Number(new URLSearchParams(location.search).get('at') ?? TIMES.app)
+// `&at=<ms>` picks the moment of a capture. By default the second batch is in flight: the units come together into app.
+const at = Number(new URLSearchParams(location.search).get('at') ?? TIMES.built + 1950)
 </script>
 
 <template>
-  <header id="top" class="hero" :class="{ capture: props.capture }">
+  <header id="top" class="hero" :class="{ capture: props.capture, og: props.og }">
     <div class="scene">
       <HeroScene :at="props.capture ? at : undefined" :left="0.36" />
     </div>
@@ -127,6 +127,28 @@ const at = Number(new URLSearchParams(location.search).get('at') ?? TIMES.app)
   margin: 0 auto;
   padding: 0 40px 80px;
   pointer-events: none;
+}
+
+.hero.og {
+  width: 1200px;
+  height: 630px;
+}
+
+/* The Open Graph image: the name and the tagline over the scene, larger, as a link preview shows it small. */
+.og .text {
+  padding: 0 56px;
+}
+
+.og h1 {
+  font-size: 120px;
+}
+
+.og .tagline {
+  font-size: 36px;
+}
+
+.og .sub {
+  display: none;
 }
 
 .capture .text {

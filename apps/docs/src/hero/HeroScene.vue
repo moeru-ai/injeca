@@ -33,6 +33,8 @@ const props = withDefaults(defineProps<{
 }>(), { left: 0 })
 
 const still = props.at !== undefined
+/** In a still: an arrow for each piece in flight, from where it left the conveyor to its place in the cube, on screen. */
+const arrows = ref<{ id: string, d: string }[]>([])
 
 /** What the page shows around the scene. The timeline sets it. */
 const ui = reactive({
@@ -383,14 +385,59 @@ onMounted(() => {
     inside = false
   })
 
-  if (still || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  // A still draws one moment of the loop: the real timeline at `at`, with an arrow for each piece in flight.
+  if (still) {
+    const line = buildTimeline()
+    line.pause()
+    // Step to the moment, so each callback of the timeline runs on the way, as in a live loop.
+    for (let ms = 0; ms <= props.at!; ms += 50)
+      line.seek(Math.min(ms, props.at!))
+    line.seek(props.at!)
+    scroll = props.at! / 1000 * 0.45
+    let frames = 0
+    const settle = () => {
+      render(props.at!)
+      if (++frames < 6)
+        return requestAnimationFrame(settle)
+      arrows.value = flights()
+    }
+    requestAnimationFrame(settle)
+    timeline = line
+    return
+  }
+
+  /** The arrows of the pieces in flight: an arc from each piece to its place in the cube, on screen. */
+  function flights(): { id: string, d: string }[] {
+    const screen = (point: Vector3) => {
+      projected.copy(point).applyMatrix4(group.matrixWorld).project(camera)
+      return { x: (projected.x + 1) / 2 * width, y: (1 - projected.y) / 2 * height }
+    }
+    return UNITS.flatMap((unit) => {
+      const state = pieces.get(unit.id)!
+      if (unit.unused || state.t <= 0.02 || state.t >= 0.98)
+        return []
+      const now = screen(meshes.get(unit.id)!.position)
+      const to = screen(packed.get(unit.id)!)
+      const dx = to.x - now.x
+      const dy = to.y - now.y
+      const length = Math.hypot(dx, dy)
+      // Leave room around the piece and around its place, so the arrow sits in the gap between them.
+      const start = { x: now.x + dx / length * 46, y: now.y + dy / length * 46 }
+      const end = { x: to.x - dx / length * 40, y: to.y - dy / length * 40 }
+      // An arc that bows up, as a piece rises and falls into its place.
+      const bow = Math.min(60, length * 0.22)
+      const control = { x: (start.x + end.x) / 2 + dy / length * bow * Math.sign(-dx || 1), y: (start.y + end.y) / 2 - Math.abs(dx / length) * bow }
+      return [{ id: unit.id, d: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}` }]
+    })
+  }
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     finalState()
     for (const [id, state] of pieces) {
       const needed = BATCH_OF.has(id)
       Object.assign(state, { t: needed ? 1 : 0, color: needed ? 1 : 0, dim: needed ? 0 : 1 })
     }
     scroll = 1.2
-    // A few frames, so the size, the palette, and the page settle before a screenshot.
     let frames = 0
     const settle = (time: number) => {
       render(time)
@@ -402,6 +449,7 @@ onMounted(() => {
   }
 
   timeline = buildTimeline()
+
   const loop = (time: number) => {
     render(time)
     frame = requestAnimationFrame(loop)
@@ -583,6 +631,15 @@ const durations = STEPS.map((_, i) => STARTS[i + 1]! - STARTS[i]!)
     </div>
 
     <div class="region">
+      <!-- A still: the motion of the pieces in flight, as arrows from the conveyor into the cube. -->
+      <svg v-if="arrows.length" class="arrows" aria-hidden="true">
+        <defs>
+          <marker id="hero-arrow-head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="context-stroke" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </marker>
+        </defs>
+        <path v-for="arrow in arrows" :key="arrow.id" :d="arrow.d" class="arrow" marker-end="url(#hero-arrow-head)" />
+      </svg>
       <span
         v-for="unit in UNITS"
         :key="unit.id"
@@ -690,6 +747,23 @@ canvas {
 .map,
 .caption {
   pointer-events: auto;
+}
+
+.arrows {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  width: 100%;
+  height: 100%;
+}
+
+.arrow {
+  fill: none;
+  stroke: var(--new);
+  stroke-dasharray: 2 7;
+  stroke-linecap: round;
+  stroke-opacity: 0.85;
+  stroke-width: 2.5;
 }
 
 .label {

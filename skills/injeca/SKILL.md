@@ -276,4 +276,4 @@ const { llm } = await resolve(container, { llm: llmKey }, { signal: timeout(cont
 
 ## Documentation
 
-See the README and `docs/design-0.3.md` in `moeru-ai/injeca`.
+See the README of `moeru-ai/injeca`. The design notes of 0.3 are in `docs/ai/references/2026-11-05-design-0.3.md`; later releases renamed some of their terms, for example a service is now a unit.
