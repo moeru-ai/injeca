@@ -10,7 +10,10 @@
     "lint": "eslint --cache .",
     "lint:fix": "eslint --cache --fix .",
     "typecheck": "tsc --noEmit && pnpm -F @injeca/docs typecheck",
-    "up": "taze -w -r -I -f && pnpm prune && pnpm dedupe"
+    "up": "taze -w -r -I -f && pnpm prune && pnpm dedupe",
+    "docs:sync-readme": "node scripts/sync-readme.ts",
+    "docs:toc": "doctoc --github --title \"## Table of Contents\" --maxlevel=3 README.md",
+    "docs:update": "pnpm docs:toc && pnpm docs:sync-readme"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^8.3.0",
@@ -19,6 +22,7 @@
     "@moeru/tsconfig": "^0.1.0-beta.20",
     "@types/node": "^25.6.0",
     "bumpp": "^12.3.0",
+    "doctoc": "^2.5.0",
     "eslint": "^10.13.0",
     "eslint-plugin-oxlint": "^1.89.0",
     "eslint-plugin-perfectionist": "^5.13.0",
