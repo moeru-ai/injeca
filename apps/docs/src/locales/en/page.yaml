@@ -1,0 +1,45 @@
+# The frame of the page: the hero, the bars, the sections that are not chapters, and the footer.
+hero:
+  what: Dependency injection for TypeScript
+  tagline: Declare what you need. injeca resolves the dependencies and builds the graph.
+  sub: Functional dependency injection for TypeScript. Each unit manages its own lifecycle, and you can add, replace, or remove units while the app is running without stopping the graph.
+  get-started: Get started
+  play: Play with a graph
+  github: injeca on GitHub
+  to-light: Use the light theme
+  to-dark: Use the dark theme
+  language: 中文
+  to-language: 切换到中文
+nav:
+  sections: Sections
+  getting-started: Getting started
+  features: What it handles
+  sandbox: Play with a graph
+  cheat-sheet: Every primitive
+  open: Open the menu
+  close: Close the menu
+  light: Light
+  dark: Dark
+  github: GitHub
+start:
+  title: Getting started
+  managers: Package manager
+  copy-command: Copy the command
+  copy-code: Copy the code
+  copied: Copied
+  where: injeca works in Node.js, Electron, browsers, and workers, with no Node-only code.
+  lead: Register two units, start, and resolve one.
+  keys: '{provide} returns a typed key, and {dependsOn} takes keys. {greeter} gets {config} without importing its value.'
+  order: '{start} builds {config} first, then {greeter}. {stop} stops them in reverse order.'
+  read: Read chapter 1
+features:
+  title: What injeca handles
+  chapter: Chapter {n} · {name}
+  cheat-sheet: In the cheat sheet
+cheat:
+  title: Every primitive, in one line
+  chapter: Chapter {n}
+footer:
+  made: Made with {heart} by {who}
+  license: Released under the {license}
+  mit: MIT License

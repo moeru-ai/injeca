@@ -1,0 +1,41 @@
+#0 t=0 start(): one provider of the exclusive key theme. Everything runs.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v1 running ready
+  app->theme: serving
+  plugin/view->theme: serving
+
+#1 t=0 The plugin provides theme too. Both providers enter conflict, and app and view wait.
+  theme: - conflict
+  app: - pending
+  plugin/view: - pending
+  plugin/theme: - conflict
+  app->theme: waiting
+  plugin/view->plugin/theme: waiting
+  > plugin/theme: pending → conflict
+  > plugin/view v1: running → stopping
+  > theme v1: running → stopping
+  > app v1: running → stopping
+  > plugin/view v1: stopping → pending
+  > app v1: stopping → pending
+  > theme v1: stopping → pending
+  > theme: pending → conflict
+
+#2 t=0 The plugin provider is withdrawn. The host theme runs again, and app and view follow.
+  theme: v2 running ready
+  app: v2 running ready
+  plugin/view: v2 running ready
+  app->theme: serving
+  plugin/view->theme: serving
+  call withdraw(): resolved true
+  > plugin/theme: conflict → withdrawn
+  > theme: conflict → pending
+  > theme v2: pending → building
+  > theme v2: building → starting
+  > theme v2: starting → running
+  > app v2: pending → building
+  > plugin/view v2: pending → building
+  > app v2: building → starting
+  > app v2: starting → running
+  > plugin/view v2: building → starting
+  > plugin/view v2: starting → running

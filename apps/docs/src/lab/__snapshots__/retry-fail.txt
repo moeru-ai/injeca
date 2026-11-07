@@ -1,0 +1,31 @@
+#0 t=0 start(): the start hook of device fails. monitor and app wait.
+  device: - failed
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+
+#1 t=2000 2 s later: nothing retries.
+  device: - failed
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+
+#2 t=2000 replace() with a fixed build. device starts, followed by monitor and app.
+  monitor: v1 running ready
+  app: v1 running ready
+  device: v2 running ready
+  monitor->device: serving
+  app->monitor: serving
+  call replace(): resolved true
+  > device v2: pending → building
+  > device: failed → withdrawn
+  > device v2: building → starting
+  > device v2: starting → running
+  > monitor v1: pending → building
+  > monitor v1: building → starting
+  > monitor v1: starting → running
+  > app v1: pending → building
+  > app v1: building → starting
+  > app v1: starting → running

@@ -1,0 +1,27 @@
+#0 t=0 start(): all units are running and ready.
+  llm: v1 running ready
+  chat: v1 running ready
+  notes: v1 running ready
+  app: v1 running ready
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+
+#1 t=0 withdraw(): chat and app stop and wait. notes rebuilds without llm.
+  chat: - pending
+  notes: v2 running ready
+  app: - pending
+  chat->llm: waiting
+  app->chat: waiting
+  call withdraw(): resolved true
+  > llm v1: running → stopping
+  > chat v1: running → stopping
+  > notes v1: running → stopping (rebuild)
+  > app v1: running → stopping
+  > notes v1: stopping → pending (rebuild)
+  > app v1: stopping → pending
+  > notes v2: pending → building
+  > chat v1: stopping → pending
+  > notes v2: building → starting
+  > notes v2: starting → running
+  > llm v1: stopping → withdrawn

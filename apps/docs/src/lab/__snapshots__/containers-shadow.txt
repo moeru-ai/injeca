@@ -1,0 +1,45 @@
+#0 t=0 start(): view uses the theme from the host.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v1 running ready
+  app->theme: serving
+  plugin/view->theme: serving
+
+#1 t=0 The plugin provides its own theme. While it builds, view keeps the host theme.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v1 running ready
+  plugin/theme: v1 building
+  app->theme: serving
+  plugin/view->theme: serving
+  > plugin/theme v1: pending → building
+
+#2 t=0 The plugin theme is running, so view switches to it. app stays on the host theme.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v2 running ready
+  plugin/theme: v1 running ready
+  app->theme: serving
+  plugin/view->plugin/theme: serving
+  > plugin/theme v1: building → starting
+  > plugin/theme v1: starting → running
+  > plugin/view v2: pending → building
+  > plugin/view v2: building → starting
+  > plugin/view v2: starting → running
+  > plugin/view v1: running → stopping (rebuild)
+  > plugin/view v1: stopping → withdrawn
+
+#3 t=0 The plugin theme is withdrawn. view switches back to the host theme without stopping.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v3 running ready
+  app->theme: serving
+  plugin/view->theme: serving
+  call withdraw(): resolved true
+  > plugin/theme v1: running → stopping
+  > plugin/view v3: pending → building
+  > plugin/view v3: building → starting
+  > plugin/view v3: starting → running
+  > plugin/view v2: running → stopping (rebuild)
+  > plugin/view v2: stopping → withdrawn
+  > plugin/theme v1: stopping → withdrawn

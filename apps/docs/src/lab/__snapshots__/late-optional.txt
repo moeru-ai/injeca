@@ -1,0 +1,26 @@
+#0 t=0 start(): speech builds right away without a TTS, and app starts next.
+  local-tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  app->speech: serving
+
+#1 t=0 remote-tts is provided. speech and app switch to new instances without stopping.
+  local-tts: v1 running ready
+  speech: v2 running ready
+  app: v2 running ready
+  remote-tts: v1 running ready
+  speech->remote-tts: serving
+  app->speech: serving
+  > remote-tts v1: pending → building
+  > remote-tts v1: building → starting
+  > remote-tts v1: starting → running
+  > speech v2: pending → building
+  > speech v2: building → starting
+  > speech v2: starting → running
+  > speech v1: running → stopping (rebuild)
+  > app v2: pending → building
+  > app v2: building → starting
+  > app v2: starting → running
+  > app v1: running → stopping (rebuild)
+  > app v1: stopping → withdrawn
+  > speech v1: stopping → withdrawn

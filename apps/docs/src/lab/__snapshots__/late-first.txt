@@ -1,0 +1,47 @@
+#0 t=0 start(): remote-tts has no provider, so speech uses local-tts.
+  local-tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  speech->local-tts: serving
+  app->speech: serving
+
+#1 t=0 remote-tts is running. It comes first in the list, so speech switches to it.
+  local-tts: v1 running ready
+  speech: v2 running ready
+  app: v2 running ready
+  remote-tts: v1 running ready
+  speech->remote-tts: serving
+  app->speech: serving
+  > remote-tts v1: pending → building
+  > remote-tts v1: building → starting
+  > remote-tts v1: starting → running
+  > speech v2: pending → building
+  > speech v2: building → starting
+  > speech v2: starting → running
+  > speech v1: running → stopping (rebuild)
+  > app v2: pending → building
+  > app v2: building → starting
+  > app v2: starting → running
+  > app v1: running → stopping (rebuild)
+  > app v1: stopping → withdrawn
+  > speech v1: stopping → withdrawn
+
+#2 t=0 remote-tts is withdrawn. speech switches back to local-tts.
+  local-tts: v1 running ready
+  speech: v3 running ready
+  app: v3 running ready
+  speech->local-tts: serving
+  app->speech: serving
+  call withdraw(): resolved true
+  > remote-tts v1: running → stopping
+  > speech v3: pending → building
+  > speech v3: building → starting
+  > speech v3: starting → running
+  > speech v2: running → stopping (rebuild)
+  > app v3: pending → building
+  > app v3: building → starting
+  > app v3: starting → running
+  > app v2: running → stopping (rebuild)
+  > app v2: stopping → withdrawn
+  > speech v2: stopping → withdrawn
+  > remote-tts v1: stopping → withdrawn

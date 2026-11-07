@@ -1,0 +1,24 @@
+#0 t=0 start(): llm is running. app waits for agent.
+  llm: v1 running ready
+  app: - pending
+  app->agent: waiting
+
+#1 t=0 commit(): memory builds before publishing. app cannot see it yet.
+  llm: v1 running ready
+  app: - pending
+  memory: v1 building
+  agent: - declared
+  agent->memory: waiting
+  agent->llm: serving
+  app->agent: waiting
+  call commit(): waiting
+  > memory v1: declared → building
+
+#2 t=0 agent fails to build. commit() rejects and disposes memory. Nothing was published.
+  llm: v1 running ready
+  app: - pending
+  app->agent: waiting
+  call commit(): rejected Error
+  > agent v1: declared → building
+  > memory v1: building → withdrawn
+  > agent v1: building → withdrawn

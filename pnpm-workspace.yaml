@@ -1,3 +1,5 @@
+minimumReleaseAgeExclude:
+  - '@proj-airi/font-lxgw-975yuan@0.17.0'
 shellEmulator: true
 trustPolicy: no-downgrade
 trustPolicyExclude:
@@ -6,6 +8,7 @@ trustPolicyExclude:
 
 packages:
   - packages/*
+  - apps/*
 
 allowBuilds:
   esbuild: true

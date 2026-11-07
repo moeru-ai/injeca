@@ -1,0 +1,32 @@
+#0 t=0 start(): all units are running and ready.
+  llm: v1 running ready
+  chat: v1 running ready
+  notes: v1 running ready
+  app: v1 running ready
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+
+#1 t=0 llm is degraded. chat and app become degraded too, while notes stays ready.
+  llm: v1 running degraded
+  chat: v1 running degraded
+  notes: v1 running ready
+  app: v1 running degraded
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+  > llm v1: ready → degraded
+  > chat v1: ready → degraded
+  > app v1: ready → degraded
+
+#2 t=0 llm is ready again, and its dependents recover with it.
+  llm: v1 running ready
+  chat: v1 running ready
+  notes: v1 running ready
+  app: v1 running ready
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+  > llm v1: degraded → ready
+  > chat v1: degraded → ready
+  > app v1: degraded → ready

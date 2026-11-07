@@ -1,0 +1,28 @@
+#0 t=0 start(): tts, speech, and app are running.
+  tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+
+#1 t=0 replace(): tts v2 builds alongside v1.
+  tts: v1 running ready | v2 building
+  speech: v1 running ready
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+  call replace(): waiting
+  > tts v2: pending → building
+
+#2 t=0 tts swaps to v2. The handler of speech takes v2 in place: speech stays v1, and app does not change.
+  speech: v1 running ready
+  app: v1 running ready
+  tts: v2 running ready
+  speech->tts: serving
+  app->speech: serving
+  call replace(): resolved true
+  > tts v2: building → starting
+  > tts v2: starting → running
+  > tts v1: running → stopping
+  > speech v1: dependency-change returned handled
+  > tts v1: stopping → withdrawn

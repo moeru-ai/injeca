@@ -1,0 +1,47 @@
+#0 t=0 start(): config starts first, then server, then routes.
+  config: v1 running ready
+  server: v1 running ready
+  routes: v1 running ready
+  server->config: serving
+  routes->server: serving
+
+#1 t=0 stop(): all three enter stopping. Nothing depends on routes, so its stop hook runs first while server and config wait.
+  config: v1 stopping
+  server: v1 stopping
+  routes: v1 stopping
+  server->config: waiting
+  routes->server: waiting
+  call stop(): waiting
+  > config v1: running → stopping
+  > server v1: running → stopping
+  > routes v1: running → stopping
+
+#2 t=0 routes has stopped. Now server closes while config still waits.
+  config: v1 stopping
+  server: v1 stopping
+  routes: - pending
+  server->config: waiting
+  routes->server: waiting
+  call stop(): waiting
+  > routes v1: stop returned handled
+  > routes v1: stopping → pending
+
+#3 t=0 server has stopped. config stops last.
+  config: v1 stopping
+  server: - pending
+  routes: - pending
+  server->config: waiting
+  routes->server: waiting
+  call stop(): waiting
+  > server v1: stop returned handled
+  > server v1: stopping → pending
+
+#4 t=0 All stopped. The registrations stay, so start() can build them again.
+  config: - pending
+  server: - pending
+  routes: - pending
+  server->config: waiting
+  routes->server: waiting
+  call stop(): resolved
+  > config v1: stop returned handled
+  > config v1: stopping → pending

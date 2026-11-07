@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "paths": {
+      "injeca": ["../../packages/injeca/src/index.ts"],
+      "injeca/testing": ["../../packages/injeca/src/testing/testing.ts"]
+    },
+    "types": [
+      "vite/client",
+      "node"
+    ],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "scripts/*.ts",
+    "scripts/*.d.ts"
+  ]
+}

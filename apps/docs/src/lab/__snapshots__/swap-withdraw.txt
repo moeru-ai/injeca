@@ -1,0 +1,44 @@
+#0 t=0 start(): tts, speech, and app are running.
+  tts: v1 running ready
+  speech: v1 running ready
+  app: v1 running ready
+  speech->tts: serving
+  app->speech: serving
+
+#1 t=0 withdraw(): app and speech stop first, then tts is withdrawn. app cannot serve now.
+  speech: - pending
+  app: - pending
+  speech->tts: waiting
+  app->speech: waiting
+  call withdraw(): resolved true
+  > tts v1: running → stopping
+  > speech v1: running → stopping
+  > app v1: running → stopping
+  > app v1: stopping → pending
+  > speech v1: stopping → pending
+  > tts v1: stopping → withdrawn
+
+#2 t=0 provide(): the new tts builds while speech and app wait.
+  speech: - pending
+  app: - pending
+  tts: v2 building
+  speech->tts: waiting
+  app->speech: waiting
+  call withdraw(): resolved true
+  > tts v2: pending → building
+
+#3 t=0 tts v2 is running. speech and app build again from the start.
+  speech: v2 running ready
+  app: v2 running ready
+  tts: v2 running ready
+  speech->tts: serving
+  app->speech: serving
+  call withdraw(): resolved true
+  > tts v2: building → starting
+  > tts v2: starting → running
+  > speech v2: pending → building
+  > speech v2: building → starting
+  > speech v2: starting → running
+  > app v2: pending → building
+  > app v2: building → starting
+  > app v2: starting → running

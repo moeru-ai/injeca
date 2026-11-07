@@ -1,0 +1,32 @@
+#0 t=0 start(): try 1 fails. device waits in retrying with its instance.
+  device: v1 retrying
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+
+#1 t=1000 1 s later: try 2 fails too.
+  device: v1 retrying
+  monitor: - pending
+  app: - pending
+  monitor->device: waiting
+  app->monitor: waiting
+  > device v1: retrying → starting
+  > device v1: start returned requeue, attempt 2
+  > device v1: starting → retrying (requeue)
+
+#2 t=2000 2 s later: try 3 succeeds. device is running, and monitor and app start.
+  device: v1 running ready
+  monitor: v1 running ready
+  app: v1 running ready
+  monitor->device: serving
+  app->monitor: serving
+  > device v1: retrying → starting
+  > device v1: start returned handled
+  > device v1: starting → running
+  > monitor v1: pending → building
+  > monitor v1: building → starting
+  > monitor v1: starting → running
+  > app v1: pending → building
+  > app v1: building → starting
+  > app v1: starting → running

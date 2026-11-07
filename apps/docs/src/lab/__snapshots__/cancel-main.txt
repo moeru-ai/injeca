@@ -1,0 +1,21 @@
+#0 t=0 start(): app waits for llm, which has no provider yet.
+  app: - pending
+  app->llm: waiting
+  call start(): waiting
+
+#1 t=5000 5 s later: start() rejects with StartTimeoutError. app still waits.
+  app: - pending
+  app->llm: waiting
+  call start(): rejected StartTimeoutError
+
+#2 t=5000 llm is provided later. app builds as usual.
+  app: v1 running ready
+  llm: v1 running ready
+  app->llm: serving
+  call start(): rejected StartTimeoutError
+  > llm v1: pending → building
+  > llm v1: building → starting
+  > llm v1: starting → running
+  > app v1: pending → building
+  > app v1: building → starting
+  > app v1: starting → running

@@ -1,0 +1,51 @@
+title: 搭一张图，再亲手改改看
+intro: 你可以添加新单元、修改依赖关系，或者点选一个单元来操作它。把鼠标移到操作按钮上，就能在点击前预览它会带来什么影响。
+legend:
+  serves: 正常工作
+  builds: 构建或启动中
+  degraded: 降级
+  bad: 不可用或失败
+  waits: 等待中
+selected: 当前选中
+preview: 把鼠标移到按钮上，预览它会带来的影响。
+pick: 在图里点选一个单元。
+groups:
+  swap: 替换实例
+  registration: 注册与注销
+  status: 健康状态
+  needs: 依赖关系
+  handler: 变更处理函数
+failing: 会失败的 {call}
+again: 重新 {call}
+cycle: '{other} 已经依赖了 {key}，不能再反过来依赖它（会形成循环依赖）。'
+needs-hint: 点击可在“无、必需、可选”之间切换。对正在运行的单元，修改依赖会通过 {replace} 生效。
+handler-hint: 开启后，当依赖更新时，{key} 会在原实例里直接接管新依赖，而不必重新构建自己。切换此开关会用新定义替换 {key}。
+add:
+  title: 添加单元
+  name: 新单元的名称
+  placeholder: 名称，例如 cache
+  needs: 依赖
+  bad-name: 只能使用小写字母、数字和连字符。
+  taken: '{name} 已经存在。'
+reset: 重置
+need:
+  required: 必需
+  optional: 可选
+log:
+  failing: 会失败的构建函数
+  with-handler: '{call}（开启 dependency-change 处理函数）'
+  without-handler: '{call}（关闭 dependency-change 处理函数）'
+  with-need: '{call}（改为{kind}依赖 {dep}）'
+  without-need: '{call}（移除对 {dep} 的依赖）'
+  not-registered-need: '已将 {key} 设为{kind}依赖 {dep}。因为 {key} 已被注销，暂不触发构建。'
+  not-registered-none: '已移除 {key} 对 {dep} 的依赖。因为 {key} 已被注销，暂不触发构建。'
+  superseded: '{label} 返回 false：已被更新的调用取代。'
+  rejected: '{label} 失败：{error}'
+impact:
+  stops: '{names} 会停止 | {names} 会停止'
+  rebuilds: '{names} 会无缝重建 | {names} 会无缝重建'
+  notified: '{names} 会通过处理函数直接接管 | {names} 会通过处理函数直接接管'
+  sentence: '{call}：{parts}。'
+  nothing: '{call}：其他单元不受影响。'
+  and: '{list} 和 {last}'
+  separator: '；'

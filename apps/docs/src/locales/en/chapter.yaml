@@ -1,0 +1,14 @@
+# The player of each chapter.
+play: Play
+pause: Pause
+replay: Replay
+step: 'Step {n}: {caption}'
+calls:
+  waiting: waiting
+  resolved: resolved
+  rejected: rejected
+coverage: Whether each unit is available at each step
+observe: What {observe} reports in this step
+first-step: The first step shows the state after {start}.
+no-records: No records in this step.
+no-provider: no provider

@@ -1,0 +1,32 @@
+#0 t=0 start(): all units are running and ready.
+  llm: v1 running ready
+  chat: v1 running ready
+  notes: v1 running ready
+  app: v1 running ready
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+
+#1 t=0 llm is unavailable. chat and app become unavailable with the same instances, while notes stays ready.
+  llm: v1 running unavailable
+  chat: v1 running unavailable
+  notes: v1 running ready
+  app: v1 running unavailable
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+  > llm v1: ready → unavailable
+  > chat v1: ready → unavailable
+  > app v1: ready → unavailable
+
+#2 t=0 llm reconnects. ready status flows back down without a rebuild.
+  llm: v1 running ready
+  chat: v1 running ready
+  notes: v1 running ready
+  app: v1 running ready
+  chat->llm: serving
+  notes->llm: serving
+  app->chat: serving
+  > llm v1: unavailable → ready
+  > chat v1: unavailable → ready
+  > app v1: unavailable → ready

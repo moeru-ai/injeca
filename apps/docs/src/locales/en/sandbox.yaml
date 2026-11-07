@@ -1,0 +1,52 @@
+# The sandbox: a graph that the reader changes.
+title: Build a graph, then change it live
+intro: Add units and wire their dependencies, or select a unit to act on it. Hover over any action to preview its downstream impact before clicking.
+legend:
+  serves: serving
+  builds: building or starting
+  degraded: degraded
+  bad: unavailable or failed
+  waits: waiting
+selected: Selected
+preview: Hover over an action to preview its impact.
+pick: Select a unit in the graph.
+groups:
+  swap: Swap
+  registration: Registration
+  status: Status
+  needs: Dependencies
+  handler: Handler
+failing: Failing {call}
+again: '{call} again'
+cycle: '{other} depends on {key}, so this would create a cycle.'
+needs-hint: Click to cycle through none, required, and optional. A running unit applies the change via {replace}.
+handler-hint: With a handler, {key} adopts an updated dependency in place without rebuilding. Toggling replaces {key} with the updated definition.
+add:
+  title: Add a unit
+  name: Name of the new unit
+  placeholder: name, e.g. cache
+  needs: Depends on
+  bad-name: Use lowercase letters, digits, and hyphens.
+  taken: '{name} is already registered.'
+reset: Reset
+need:
+  required: required
+  optional: optional
+log:
+  failing: a failing build
+  with-handler: '{call} with a dependency-change handler'
+  without-handler: '{call} without a dependency-change handler'
+  with-need: '{call} with {kind} {dep}'
+  without-need: '{call} without {dep}'
+  not-registered-need: '{key} now depends on {kind} {dep}. It is withdrawn, so nothing builds yet.'
+  not-registered-none: '{key} no longer depends on {dep}. It is withdrawn, so nothing builds yet.'
+  superseded: '{label} resolved false: superseded by a newer call.'
+  rejected: '{label} rejected: {error}'
+impact:
+  stops: '{names} stops | {names} stop'
+  rebuilds: '{names} rebuilds seamlessly | {names} rebuild seamlessly'
+  notified: '{names} handles dependency-change in place | {names} handle dependency-change in place'
+  sentence: '{call}: {parts}.'
+  nothing: '{call}: no other units affected.'
+  and: '{list} and {last}'
+  separator: '; '

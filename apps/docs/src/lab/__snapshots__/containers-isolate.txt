@@ -1,0 +1,20 @@
+#0 t=0 start(): the plugin isolates theme. view does not see the host theme, so it waits.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: - pending
+  app->theme: serving
+  plugin/view->plugin/theme: waiting
+
+#1 t=0 The plugin provides its own theme, and view builds with it.
+  theme: v1 running ready
+  app: v1 running ready
+  plugin/view: v1 running ready
+  plugin/theme: v1 running ready
+  app->theme: serving
+  plugin/view->plugin/theme: serving
+  > plugin/theme v1: pending → building
+  > plugin/theme v1: building → starting
+  > plugin/theme v1: starting → running
+  > plugin/view v1: pending → building
+  > plugin/view v1: building → starting
+  > plugin/view v1: starting → running

@@ -1,0 +1,221 @@
+/*
+ * The page is an ink diagram on neutral paper. Depth comes from fills and space, never from borders.
+ * Color marks state: blue is a new instance at work, violet is degraded, red is a failure, and ink serves.
+ * Each chapter also has its own accent, from src/palette.ts.
+ */
+
+:root {
+  /* Latin from Varela Round and DM Sans. Chinese falls through to LXGW 975 Yuan, which is round like Varela Round. */
+  --font-display: 'Varela Round', 'LXGW 975 Yuan SC', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif;
+  --font-sans: 'DM Sans Variable', 'LXGW 975 Yuan SC', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Maple Mono', 'LXGW 975 Yuan SC', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* The neutrals (paper, surface, control, knob, and the text from ink to faint) come from src/palette.ts. */
+  --line: rgb(23 23 23 / 14%);
+  --line-strong: rgb(23 23 23 / 55%);
+  --shade: rgb(23 23 23 / 4.5%);
+
+  --shadow-strong: rgb(0 0 0 / 12%);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 4%), 0 10px 28px rgb(0 0 0 / 7%);
+
+  /* Accents (new, degraded, bad, good, and the accent of a chapter) come from src/palette.ts. */
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --line: rgb(237 237 237 / 14%);
+  --line-strong: rgb(237 237 237 / 55%);
+  --shade: rgb(255 255 255 / 3%);
+
+  --shadow-strong: rgb(0 0 0 / 45%);
+  --shadow-card: 0 0 0 1px rgb(255 255 255 / 6%), 0 10px 28px rgb(0 0 0 / 40%);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A narrow screen has a bar at the top: a jump to a section stops under it. While its menu is open, the page holds still. */
+@media (max-width: 1000px) {
+  html {
+    scroll-padding-top: 64px;
+  }
+}
+
+/* While the theme switches, no element runs its own transition. The view transition crossfades the page instead. */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.22s;
+}
+
+html.menu-open,
+html.menu-open body {
+  overflow: hidden;
+}
+
+/* iOS Safari enlarges the text of some blocks on its own. The page sets its own sizes for a phone. */
+html {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Banners: the page around the rounded frame stays transparent. */
+html.capture,
+html.capture body {
+  background: transparent;
+  transition: none;
+}
+
+html.capture {
+  color-scheme: light;
+}
+
+h1,
+h2,
+h3,
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  /* Code shows what you type: no ligatures that turn => into an arrow. */
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0;
+  font-variant-ligatures: none;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-color: var(--line-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--ink);
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--new);
+  outline-offset: 3px;
+}
+
+/* A pill button: a fill, and no border. */
+.pill {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--ink);
+  font-size: 15px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pill:hover {
+  background: var(--control-2);
+}
+
+.pill.ink {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.pill.ink:hover {
+  background: var(--ink-2);
+}
+
+.pill:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.pill.ink:disabled {
+  background: var(--control);
+  color: var(--faint);
+}
+
+.pill:disabled:hover {
+  background: var(--control);
+}
+
+/* A small label above a block, like a figure caption in a book. */
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* The target of an in-page link lights up, then fades. */
+@keyframes flash {
+  0% {
+    background-color: transparent;
+    box-shadow: 0 0 0 14px transparent;
+  }
+
+  12%,
+  40% {
+    background-color: var(--accent-soft, var(--new-soft));
+    box-shadow: 0 0 0 14px var(--accent-soft, var(--new-soft));
+  }
+
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+
+.flash {
+  border-radius: 14px;
+  animation: flash 1.6s ease-in-out;
+}
