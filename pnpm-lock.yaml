@@ -273,8 +273,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@proj-airi/chromatic':
-        specifier: ^1.1.5
-        version: 1.1.5
+        specifier: ^2.0.1
+        version: 2.0.1
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -1169,8 +1169,8 @@ packages:
     resolution: {integrity: sha512-QNqXyfVS2wm9hweSYD2O7F0G06uurj9kZ96TRQE5Y9hU7+tgdZwIkbAKc5Ocy1HxEY2kuDQa6cQ1WRs/O5LFKA==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
 
-  '@proj-airi/chromatic@1.1.5':
-    resolution: {integrity: sha512-Ho+Za7Na8glOAe6OPOtbm376c/Y2gswCy1YyP13fGD5f5gI7WYq+/AJnDAFOQoE0NGhdTCoqFFsRpagq5W7S4w==}
+  '@proj-airi/chromatic@2.0.1':
+    resolution: {integrity: sha512-CTZMkkqYEpUdWM1eFqQcJE2FdFKWY7NyrNYfzD4908GYcSVQaJAliVTEGVajxUfOJP0aD13BSyN7vo1PmsuW/g==}
 
   '@proj-airi/font-lxgw-975yuan@0.17.0':
     resolution: {integrity: sha512-fxvzPu167gFYBDUVWW9IOU5kM5PTsi9YwVi0PLg3yw6Q4dMH8URDu+XZTxZQRUYLGxYCHsCWV7/TABfoloGHhw==}
@@ -4193,7 +4193,7 @@ snapshots:
 
   '@pkgr/core@0.2.9': {}
 
-  '@proj-airi/chromatic@1.1.5':
+  '@proj-airi/chromatic@2.0.1':
     dependencies:
       culori: 4.0.2
 
