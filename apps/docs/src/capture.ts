@@ -7,5 +7,9 @@ export const COMPARED = ['swap', 'status', 'late', 'retry', 'plugin', 'container
 
 export const CAPTURE_SIZES: Readonly<Record<string, { readonly width: number, readonly height: number }>> = {
   hero: { width: 1440, height: 600 },
-  ...Object.fromEntries(COMPARED.map(id => [`compare-${id}`, { width: 1440, height: 520 }])),
+  // The Open Graph image of the page: the hero at the size that link previews use.
+  og: { width: 1200, height: 630 },
+  features: { width: 1440, height: 700 },
+  phases: { width: 1440, height: 480 },
+  ...Object.fromEntries(COMPARED.map(id => [`compare-${id}`, { width: 1440, height: 480 }])),
 }

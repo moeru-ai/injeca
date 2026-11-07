@@ -1,151 +1,224 @@
 <script setup lang="ts">
 import type { Scenario } from '../lab/scenarios'
 
-import Coverage from './Coverage.vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { framesOf } from '../lab/store'
+import Stage from '../stage/Stage.vue'
+
+import { edgesOf } from '../lab/scenarios'
+import { framesOf, ready } from '../lab/store'
 
 /**
- * The README figure of one chapter, at about 3:1: the question on the left, and on the right one row for each
- * primitive, with a bar for each unit that shows whether it could serve at each step.
+ * The README figure of one chapter, as an animated banner at about 3:1. It plays each primitive in turn, the way the
+ * chapter of the lab does: the real graph at each step that the lab recorded, with its transitions, the note of the
+ * step, and a caption of what happens now. The tabs on top show which primitive plays, and what it leads to.
+ *
+ * The banner script drives it: `__captureFrames` holds how long each step shows, `__captureAt(i)` moves to step `i`,
+ * and the script records the transitions in between on virtual time, at `__captureFps` frames a second. Opened in a
+ * browser, it plays on its own.
  */
 const props = defineProps<{ scenario: Scenario, number: number }>()
 
-const nodes = props.scenario.nodes.map(node => node.id)
+/** How long a step shows, and the last step of a primitive, so its outcome can sink in. */
+const STEP_MS = 1800
+const LAST_MS = 3000
+
+const sequence = computed(() => props.scenario.variants.flatMap((variant, v) => {
+  const frames = framesOf(props.scenario, variant)
+  return frames.map((frame, s) => ({ v, s, frame, last: s === frames.length - 1 }))
+}))
+
+const index = ref(0)
+const current = computed(() => sequence.value[index.value % Math.max(1, sequence.value.length)])
+const variant = computed(() => props.scenario.variants[current.value?.v ?? 0]!)
+const steps = computed(() => framesOf(props.scenario, variant.value).length)
+
+let driven = false
+let timer: ReturnType<typeof setTimeout> | undefined
+function play(): void {
+  if (driven || !current.value)
+    return
+  timer = setTimeout(() => {
+    index.value = (index.value + 1) % sequence.value.length
+    play()
+  }, current.value.last ? LAST_MS : STEP_MS)
+}
+
+type Target = Window & { __captureFrames?: number[], __captureAt?: (i: number) => void }
+onMounted(() => {
+  const target = window as Target
+  ;(target as Target & { __captureFps?: number }).__captureFps = 15
+  target.__captureAt = (i: number) => {
+    driven = true
+    clearTimeout(timer)
+    index.value = i
+  }
+  void ready.then(() => {
+    target.__captureFrames = sequence.value.map(step => (step.last ? LAST_MS : STEP_MS))
+    play()
+  })
+})
+onBeforeUnmount(() => clearTimeout(timer))
+watch(() => props.scenario, () => (index.value = 0))
 </script>
 
 <template>
   <div class="compare" role="img" :aria-label="`${scenario.question} ${scenario.variants.map(v => `${v.primitive}: ${v.outcome}.`).join(' ')}`">
-    <div class="left">
-      <span class="n mono">{{ String(number).padStart(2, '0') }}</span>
-      <p class="title">
-        {{ scenario.title }}
-      </p>
-      <p class="question">
-        {{ scenario.question }}
-      </p>
-      <p class="legend">
-        <span><i class="key serving" />serves</span>
-        <span><i class="key degraded" />degraded</span>
-        <span><i class="key unavailable" />unavailable</span>
-        <span><i class="key down" />cannot serve</span>
-      </p>
+    <ol class="variants">
+      <li v-for="(v, i) in scenario.variants" :key="v.id" class="variant" :class="{ on: i === current?.v }">
+        <code>{{ v.primitive }}</code>
+        <span class="outcome"><i class="dot" :class="v.tone" />{{ v.outcome }}</span>
+      </li>
+    </ol>
+    <div class="stage">
+      <Stage
+        v-if="current"
+        :nodes="scenario.nodes"
+        :boxes="scenario.boxes"
+        :edges="edgesOf(scenario, variant)"
+        :frame="current.frame"
+        :focus="current.frame.focus"
+        :note="current.frame.note"
+        :width="1000"
+        :height="250"
+      />
     </div>
-    <div class="rows">
-      <section v-for="variant in scenario.variants" :key="variant.id" class="row">
-        <p class="head">
-          <code>{{ variant.primitive }}</code>
-          <span class="outcome" :class="variant.tone">{{ variant.outcome }}</span>
-        </p>
-        <Coverage :nodes="nodes" :frames="framesOf(scenario, variant)" />
-      </section>
-    </div>
+    <p v-if="current" class="caption">
+      <span class="dots" aria-hidden="true">
+        <i v-for="s in steps" :key="s" :class="{ done: s - 1 < current.s, on: s - 1 === current.s }" />
+      </span>
+      <Transition name="caption" mode="out-in">
+        <span :key="index" class="text">{{ current.frame.caption }}</span>
+      </Transition>
+    </p>
   </div>
 </template>
 
 <style scoped>
 .compare {
-  display: grid;
+  display: flex;
   overflow: hidden;
   width: 1440px;
-  height: 520px;
+  height: 480px;
+  flex-direction: column;
   align-items: center;
-  gap: 56px;
-  padding: 0 56px;
+  justify-content: space-between;
+  padding: 36px 56px 34px;
   border-radius: 32px;
   background: var(--paper);
-  grid-template-columns: 400px minmax(0, 1fr);
 }
 
-.n {
-  color: var(--new);
-  font-size: 13px;
-}
-
-.title {
-  margin: 8px 0 0;
-  font-size: 32px;
-  line-height: 1.15;
-}
-
-.question {
-  margin: 14px 0 0;
-  color: var(--ink-2);
-  font-size: 18px;
-  line-height: 1.45;
-}
-
-.legend {
+/* The primitives, as tabs. The one that plays has a fill, and the others step back. */
+.variants {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin: 24px 0 0;
-  color: var(--muted);
-  font-size: 13px;
+  gap: 6px;
+  margin: 0;
+  padding: 5px;
+  border-radius: 18px;
+  background: var(--control);
+  list-style: none;
 }
 
-.legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.key {
-  display: inline-block;
-  width: 18px;
-  height: 8px;
-  border-radius: 3px;
-}
-
-.key.serving {
-  background: var(--ink);
-}
-
-.key.degraded {
-  background: var(--degraded-fill);
-}
-
-.key.unavailable {
-  background: var(--bad-fill);
-}
-
-.key.down {
-  background: repeating-linear-gradient(90deg, var(--control-3) 0 3px, transparent 3px 6px) 0 50% / 100% 2px repeat-x;
-}
-
-.rows {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 24px 28px;
-  border-radius: 24px;
-  background: var(--surface);
-}
-
-.head {
+.variant {
   display: flex;
   align-items: baseline;
-  gap: 14px;
-  margin: 0 0 8px;
+  gap: 12px;
+  padding: 9px 16px;
+  border-radius: 13px;
+  opacity: 0.5;
+  transition:
+    background 0.3s,
+    opacity 0.3s;
 }
 
-.head code {
-  font-size: 14.5px;
+.variant.on {
+  background: var(--knob);
+  opacity: 1;
+}
+
+.variant code {
+  font-size: 15px;
 }
 
 .outcome {
-  font-size: 14.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: 14px;
 }
 
-.outcome.good {
-  color: var(--good);
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
 }
 
-.outcome.warn {
-  color: var(--muted);
+.dot.good {
+  background: var(--good);
 }
 
-.outcome.bad {
-  color: var(--bad);
+.dot.bad {
+  background: var(--bad);
+}
+
+.stage {
+  display: grid;
+  width: 100%;
+  flex: 1;
+  place-items: center;
+}
+
+.caption {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.4;
+}
+
+.dots {
+  display: flex;
+  flex: none;
+  gap: 5px;
+}
+
+.dots i {
+  width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--control-2);
+  transition: background 0.3s;
+}
+
+.dots i.done {
+  background: var(--ink-2);
+}
+
+.dots i.on {
+  background: var(--new);
+}
+
+.text {
+  color: var(--ink);
+}
+
+.caption-enter-active,
+.caption-leave-active {
+  transition:
+    opacity 0.25s,
+    transform 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.caption-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.caption-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 </style>

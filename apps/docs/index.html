@@ -3,9 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="See what each injeca primitive does to a dependency graph, with the real container running step by step." />
+    <title>injeca · Functional dependency injection for TypeScript</title>
+    <meta name="description" content="Declare what each unit needs. injeca resolves the dependencies, builds the graph in order, and keeps it running while units come, go, and change. Watch every primitive at work in the scenario lab." />
     <meta name="color-scheme" content="dark light" />
-    <title>injeca scenario lab</title>
+    <meta name="theme-color" content="#f6f6f6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)" />
+    <link rel="canonical" href="https://injeca.moeru.ai/" />
+
+    <!-- Link previews. The image comes from the hero of the page: pnpm -F @injeca/docs banners writes public/og.png. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="injeca" />
+    <meta property="og:url" content="https://injeca.moeru.ai/" />
+    <meta property="og:title" content="injeca · Functional dependency injection for TypeScript" />
+    <meta property="og:description" content="Declare what each unit needs. injeca resolves the dependencies, builds the graph in order, and keeps it running while units come, go, and change." />
+    <meta property="og:image" content="https://injeca.moeru.ai/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="injeca: units on a conveyor come together into app, while a map of the graph walks back from resolve()." />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="injeca · Functional dependency injection for TypeScript" />
+    <meta name="twitter:description" content="Declare what each unit needs. injeca resolves the dependencies, builds the graph in order, and keeps it running while units come, go, and change." />
+    <meta name="twitter:image" content="https://injeca.moeru.ai/og.png" />
     <script>
       // Set the theme before the first paint, as src/theme.ts decides it, so the page does not flash.
       (function () {
