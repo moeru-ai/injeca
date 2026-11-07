@@ -5,6 +5,7 @@ import type { Registration, WithdrawOptions } from '../types'
 import { ReplaceWhileStoppingError, WaitTimeoutError } from '../diagnostics/errors'
 import { describeExplanations, explainUnit } from '../diagnostics/explain'
 import { cancelPending, cancelSuccessor, createUnit, currentUnit, publishUnit, readDefinition, releaseUnit } from '../graph/nodes'
+import { blockingFailure } from '../graph/resolvers/resolvers'
 import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
@@ -201,26 +202,40 @@ function waitingUnits(target: UnitNode, pending: UnitNode): readonly UnitNode[] 
 /**
  * Waits for the outcome of the pending replacement `pending` of `target`. When `signal` aborts first, it cancels the replacement, as a newer `replace` does.
  * Then it rejects with the reason, or with `wait-timeout` for a timeout reason. Its message explains the new units, read before the cancel.
- * A newer `replace` or a withdrawal still resolves `false`. The listener goes when the outcome settles.
+ *
+ * A required dependency of a new unit that failed, directly or through a pending provider, also cancels the replacement.
+ * Then it rejects with the error of that failure, as `resolve` does. The check runs after each drain, also for a failure before the call.
+ * A newer `replace` or a withdrawal still resolves `false`. The listeners go when the outcome settles.
  */
 async function awaitOutcome(registration: RegistrationNode, target: UnitNode, pending: UnitNode, outcome: Promise<SwapOutcome>, signal: AbortSignal | undefined): Promise<boolean> {
-  let abortError: { readonly error: unknown } | undefined
-  const removeAbort = onAbort(signal, (reason) => {
-    if (registration.pending !== pending)
+  let rejection: { readonly error: unknown } | undefined
+  const cancel = (error: () => unknown): void => {
+    if (registration.pending !== pending || rejection)
       return
 
-    abortError = { error: replaceAbortError(registration.name, reason, () => waitingUnits(target, pending)) }
+    rejection = { error: error() }
     batch(() => cancelPending(registration))
+  }
+  const removeAbort = onAbort(signal, reason => cancel(() => replaceAbortError(registration.name, reason, () => waitingUnits(target, pending))))
+  const { reconciler } = target.container.runtime
+  const removeDrained = reconciler.onDrained(() => {
+    for (const unit of waitingUnits(target, pending)) {
+      const failure = blockingFailure(unit)
+      if (failure)
+        return cancel(() => failure.error)
+    }
   })
+  reconciler.requestDrain()
   try {
     const result = await outcome
-    if (result.kind === 'cancelled' && abortError)
-      throw abortError.error
+    if (result.kind === 'cancelled' && rejection)
+      throw rejection.error
 
     return outcomeResult(result, registration.name)
   }
   finally {
     removeAbort()
+    removeDrained()
   }
 }
 

@@ -155,6 +155,7 @@ await dispose(container, { signal: timeout(container, 5_000) })
 
 - A timeout reason has `name === 'TimeoutError'`. `resolve`, `waitFor`, and `replace` turn it into `WaitTimeoutError` (`wait-timeout`). `start` turns it into `StartTimeoutError` (`start-timeout`). Another reason rejects as it is.
 - For `replace`, the `WaitTimeoutError` message tells what the new instance waited for, for example a missing provider. Do not `resolve()` the new dependencies first only to get a timeout error.
+- A required dependency of the new instance that fails before the swap cancels the replacement. `replace()` rejects at once with that failure, the same error as `resolve()`. Do not `resolve()` the new dependencies first only to get this error.
 - An aborted `replace` and `tx.commit` cancel their work and send no `wait-aborted` record.
 - `start`, `stop`, `dispose`, and `withdraw` stop only the wait. The units keep converging, and the cleanups keep running. `stop`, `dispose`, and `withdraw` send a `wait-aborted` record for each unit that did not stop.
 - After an aborted `dispose`, the container stays in `disposing`. Call `dispose(container)` again to wait for the result.
@@ -190,7 +191,7 @@ tx.provide(characterKey, () => createCharacter())
 await tx.commit() // builds in dependency order, publishes in one batch, then runs the start hooks
 ```
 
-- `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. A signal abort before the swap rejects, so a caller can tell a timeout from a supersede. A failed new instance keeps the old one. A unit in `stopping` rejects with `replace-while-stopping`.
+- `replace()` resolves `true` after the swap. It resolves `false` for a stale registration, and when a newer `replace()` or a withdrawal supersedes it. A signal abort before the swap rejects, so a caller can tell a timeout from a supersede. A failed new instance, or a failed required dependency of it, rejects and keeps the old one. A unit in `stopping` rejects with `replace-while-stopping`.
 - While the swap waits, `explain(key).replacement` shows the new instance with its phase and blockers.
 - A failed transaction build publishes nothing and runs no `start` hook. `tx.abort()` and a container disposal drop the transaction.
 

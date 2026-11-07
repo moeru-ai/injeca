@@ -1,10 +1,10 @@
-import type { BuildContext } from '../types'
+import type { BuildContext, Container } from '../types'
 
 import { describe, expect, it, vi } from 'vitest'
 
 import { ReplaceWhileStoppingError, WaitTimeoutError } from '../diagnostics/errors'
 import { describeExplanations } from '../diagnostics/explain'
-import { graph, provide, resolve, start, stop, timeout } from '../scoped'
+import { firstAvailable, graph, optional, provide, resolve, start, stop, timeout, transaction } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, trackedController } from '../testing/helpers'
 
 describe('replace', () => {
@@ -443,5 +443,172 @@ describe('replace with a signal', () => {
     await drained(root)
     await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
     await expect(resolve(other, { client })).resolves.toEqual({ client: 'v1' })
+  })
+})
+
+/** Provides `name` with a build that throws `error`, and starts `container`. The unit is in `failed` after it. */
+async function provideFailed(container: Container, name: string, error: Error): Promise<void> {
+  provide(container, name, () => {
+    throw error
+  })
+  await start(container).catch(() => {})
+  await drained(container)
+}
+
+/** Tells whether `promise` settled. It reads the state after each drain of `container`, without a timer. */
+function settledFlag(promise: Promise<unknown>): () => boolean {
+  let settled = false
+  promise.then(() => {
+    settled = true
+  }, () => {
+    settled = true
+  })
+  return () => settled
+}
+
+describe('replace with a failed dependency', () => {
+  it('rejects at once with the failure of a dependency that failed before the call, as resolve() does. The old instance stays, and no timer runs', async () => {
+    const { clock, pending } = manualClock()
+    const app = createTestContainer({ clock })
+    const llm = provide(app, 'airi.llm', () => 'old')
+    const error = new Error('gateway down')
+    await provideFailed(app, 'airi.gateway', error)
+    const oldId = stateOf(app, llm).instanceId
+    const signal = timeout(app, 50)
+
+    const replaced = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' }, { signal })
+    const settled = settledFlag(replaced)
+    await drained(app)
+    expect(settled()).toBe(true)
+    await expect(resolve(app, { gateway: 'airi.gateway' })).rejects.toBe(error)
+    await expect(replaced).rejects.toBe(error)
+    // Only the timer of the caller signal waits. The clock did not move.
+    expect(signal.aborted).toBe(false)
+    expect(pending()).toBe(1)
+
+    await drained(app)
+    expect(stateOf(app, llm)).toMatchObject({ phase: 'running', instanceId: oldId })
+    expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
+  })
+
+  it('rejects when a dependency fails during the wait, also without a signal, and removes the abort listener', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    const speechBuild = vi.fn(({ dependsOn }: { dependsOn: { llm: string } }) => `speech(${dependsOn.llm})`)
+    provide(app, 'voice.speech', { dependsOn: { llm }, build: speechBuild })
+    await start(app)
+    const { signal, listeners } = trackedController()
+
+    const replaced = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' }, { signal })
+    const unbounded = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'newer' })
+    const settled = settledFlag(unbounded)
+    // The newer replace supersedes the first one, so the first one resolves `false`.
+    await expect(replaced).resolves.toBe(false)
+    expect(listeners()).toBe(0)
+    await drained(app)
+    expect(graph(app).explain('airi.llm').replacement).toMatchObject({ phase: 'pending' })
+
+    const error = new Error('gateway down')
+    provide(app, 'airi.gateway', () => {
+      throw error
+    })
+    await drained(app)
+    expect(settled()).toBe(true)
+    await expect(unbounded).rejects.toBe(error)
+
+    await drained(app)
+    expect(graph(app).explain('airi.llm')).not.toHaveProperty('replacement')
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
+    expect(speechBuild).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects with a failure through a pending dependency, and removes the abort listener', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    const error = new Error('no credentials')
+    await provideFailed(app, 'airi.auth', error)
+    provide(app, 'airi.gateway', { dependsOn: { auth: 'airi.auth' }, build: () => 'gateway' })
+    await drained(app)
+    const { signal, listeners } = trackedController()
+
+    const replaced = llm.replace({ dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' }, { signal })
+    const settled = settledFlag(replaced)
+    await drained(app)
+    expect(settled()).toBe(true)
+    await expect(replaced).rejects.toBe(error)
+    expect(listeners()).toBe(0)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
+  })
+
+  it('does not reject for a failed optional dependency', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await provideFailed(app, 'airi.gateway', new Error('gateway down'))
+
+    await expect(llm.replace({ dependsOn: { gateway: optional('airi.gateway') }, build: ({ dependsOn }) => `new(${String(dependsOn.gateway)})` })).resolves.toBe(true)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'new(undefined)' })
+  })
+
+  it('does not reject for a failed firstAvailable alternative when another one is available', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await provideFailed(app, 'airi.gateway.remote', new Error('gateway down'))
+    provide(app, 'airi.gateway.local', () => 'local')
+    await drained(app)
+
+    await expect(llm.replace({ dependsOn: { gateway: firstAvailable('airi.gateway.remote', 'airi.gateway.local') }, build: ({ dependsOn }) => `new(${dependsOn.gateway})` })).resolves.toBe(true)
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'new(local)' })
+  })
+
+  it('rejects a per-container replacement when a dependency of a consumer unit failed. The old consumer units stay', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
+    const error = new Error('gateway down')
+    await provideFailed(root, 'host.gateway', error)
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    await start(extension)
+    await resolve(extension, { client })
+    const { signal, listeners } = trackedController()
+
+    const replaced = client.replace({ dependsOn: { gateway: 'host.gateway' }, build: () => 'v2' }, { signal })
+    const settled = settledFlag(replaced)
+    await drained(root)
+    expect(settled()).toBe(true)
+    await expect(replaced).rejects.toBe(error)
+    expect(listeners()).toBe(0)
+    await drained(root)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+    await expect(client.replace(() => 'v3')).resolves.toBe(true)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v3' })
+  })
+
+  it('rejects a per-container replacement with the error of a consumer unit build that fails. The old consumer units stay', async () => {
+    const root = createTestContainer({ owner: { kind: 'host' } })
+    const client = provide(root, 'host.client', { instances: 'per-container', build: () => 'v1' })
+    const extension = createTestContainer({ parent: root, owner: { kind: 'extension', id: 'e' } })
+    await start(root)
+    await start(extension)
+    await resolve(extension, { client })
+
+    const error = new Error('bad module')
+    await expect(client.replace(() => {
+      throw error
+    })).rejects.toBe(error)
+    await drained(root)
+    await expect(resolve(extension, { client })).resolves.toEqual({ client: 'v1' })
+  })
+
+  it('does not change tx.replace: the commit does not wait for the swap, and the replacement waits. The old instance stays', async () => {
+    const app = createTestContainer()
+    const llm = provide(app, 'airi.llm', () => 'old')
+    await provideFailed(app, 'airi.gateway', new Error('gateway down'))
+
+    const tx = transaction(app)
+    tx.replace(llm, { dependsOn: { gateway: 'airi.gateway' }, build: () => 'new' })
+    await expect(tx.commit()).resolves.toBeUndefined()
+    await drained(app)
+    expect(graph(app).explain('airi.llm').replacement).toMatchObject({ phase: 'pending' })
+    await expect(resolve(app, { llm })).resolves.toEqual({ llm: 'old' })
   })
 })
