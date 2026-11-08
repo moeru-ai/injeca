@@ -1,4 +1,4 @@
-import type { ErrorObserveRecord, ObserveRecord, WaitAbortedObserveRecord } from '../types'
+import type { ErrorObserveRecord, ObserveRecord, TimeoutObserveRecord, WaitAbortedObserveRecord } from '../types'
 import type { ContainerNode, Observer, UnitNode } from './graph'
 
 import { messageOf } from '../helpers/error-from'
@@ -47,8 +47,8 @@ export function reportCallbackError(container: ContainerNode, key: string, error
   send(container, targetsOf(container, source), record)
 }
 
-/** Sends a `wait-aborted` record for each unit of `units`: the `signal` of `call` aborted before the unit stopped. */
-export function recordAbortedWait(units: readonly UnitNode[], call: WaitAbortedObserveRecord['call'], reason: unknown): void {
+/** Sends a `wait-aborted` record for each unit of `units`: the `signal` of `call` aborted before the unit stopped. Returns `reason`, the rejection of the wait. */
+export function recordAbortedWait(units: readonly UnitNode[], call: WaitAbortedObserveRecord['call'], reason: unknown): unknown {
   const message = messageOf(reason)
   for (const unit of units) {
     emitRecord(unit.container, {
@@ -62,4 +62,11 @@ export function recordAbortedWait(units: readonly UnitNode[], call: WaitAbortedO
       abortReason: reason,
     })
   }
+
+  return reason
+}
+
+/** Sends a `timeout` record. A timeout of container effects has `key: ''`, no instance, and attempt 1. */
+export function recordTimeout(container: ContainerNode, record: Omit<TimeoutObserveRecord, 'type' | 'owner'>): void {
+  emitRecord(container, { type: 'timeout', key: record.key, owner: container.owner, instanceId: record.instanceId, hook: record.hook, timeoutMs: record.timeoutMs, attempt: record.attempt, reason: record.reason })
 }

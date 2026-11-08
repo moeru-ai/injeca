@@ -5,9 +5,10 @@ import { StartTimeoutError } from '../diagnostics/errors'
 import { describeExplanations, explainUnit } from '../diagnostics/explain'
 import { affectedContainers, assertActive, nodeOf, setPhase } from '../graph/nodes'
 import { recordAbortedWait } from '../graph/observers'
-import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
+import { isTimeoutReason, readSignal } from '../helpers/abort'
 import { errorFrom } from '../helpers/error-from'
 import { batch, untracked } from '../helpers/signals'
+import { createWaiter } from '../helpers/waiter'
 import { traceLoggerOf } from '../reconciler/calls'
 import { findReentry, reportReentry } from '../reconciler/reentry'
 
@@ -29,32 +30,22 @@ function presentUnits(containers: readonly ContainerNode[]): UnitNode[] {
  */
 function waitUntilSettled(containers: readonly ContainerNode[], check: (units: readonly UnitNode[]) => SettleCheck, signal: AbortSignal | undefined, onAborted: (reason: unknown) => unknown): Promise<void> {
   const { reconciler } = containers[0]!.runtime
+  const waiter = createWaiter<void>(signal, onAborted)
+  if (waiter.settled())
+    return waiter.promise
 
-  return new Promise((done, fail) => {
-    if (signal?.aborted) {
-      fail(onAborted(signal.reason))
+  waiter.defer(reconciler.onDrained(() => {
+    const result = check(presentUnits(containers))
+    if (result === 'waiting')
       return
-    }
 
-    let removeAbort = () => {}
-    const stopListening = reconciler.onDrained(() => {
-      const result = check(presentUnits(containers))
-      if (result === 'waiting')
-        return
-
-      stopListening()
-      removeAbort()
-      if (result.kind === 'done')
-        done()
-      else
-        fail(errorFrom(result.errors, 'Start failed.'))
-    })
-    removeAbort = onAbort(signal, (reason) => {
-      stopListening()
-      fail(onAborted(reason))
-    })
-    reconciler.requestDrain()
-  })
+    if (result.kind === 'done')
+      waiter.resolve()
+    else
+      waiter.reject(errorFrom(result.errors, 'Start failed.'))
+  }))
+  reconciler.requestDrain()
+  return waiter.promise
 }
 
 export interface StartOptions {
@@ -175,10 +166,7 @@ async function stopAndWait(node: ContainerNode, signal: AbortSignal | undefined)
     })
 
     const stopped = (unit: UnitNode): boolean => unit.signals.instance() === undefined && !transitionalPhases.has(unit.signals.phase())
-    return waitUntilSettled(containers, units => units.every(stopped) ? { kind: 'done' } : 'waiting', signal, (reason) => {
-      recordAbortedWait(presentUnits(containers).filter(unit => !stopped(unit)), 'stop', reason)
-      return reason
-    })
+    return waitUntilSettled(containers, units => units.every(stopped) ? { kind: 'done' } : 'waiting', signal, reason => recordAbortedWait(presentUnits(containers).filter(unit => !stopped(unit)), 'stop', reason))
   })
 
   try {

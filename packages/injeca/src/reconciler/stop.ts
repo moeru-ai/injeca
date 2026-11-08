@@ -1,10 +1,11 @@
 import type { InstanceNode, StopIntent, UnitNode } from '../graph/graph'
 import type { CleanupFrame } from '../helpers/cleanup-context'
+import type { Decision } from '../primitives/decision'
 
 import { HookTimeoutError } from '../diagnostics/errors'
 import { setPhase, timeoutOf } from '../graph/nodes'
 import { removeDeclaration } from '../graph/resolvers/exclusive'
-import { anySignal, raceAbort, timeoutSignal } from '../helpers/abort'
+import { openDeadline, stopTimeoutWarning } from '../helpers/deadline'
 import { batch } from '../helpers/signals'
 import { invokeUser, loggerOf } from './calls'
 import { syncHolds } from './holds'
@@ -45,15 +46,11 @@ export function reconcileStopping(unit: UnitNode): void {
   void teardown(unit, instance, true)
 }
 
-/** The warning of a `stop` timeout. During a stop or a disposal of the container, it tells the most common cause. */
-function stopTimeoutWarning(unit: UnitNode, timeoutMs: number): string {
-  const warning = `The cleanups of '${unit.name}' did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the stop continues.`
+/** The warning of a `stop` timeout of a unit. During a stop or a disposal of the container, it tells the most common cause. */
+function cleanupTimeoutWarning(unit: UnitNode, timeoutMs: number): string {
   const { container } = unit
   const action = container.state === 'disposing' ? 'disposing' : container.signals.started() ? undefined : 'stopping'
-  if (!action)
-    return warning
-
-  return `${warning} The container is ${action}. A cleanup can be waiting for its own container. It must pass its signal to stop() or dispose().`
+  return stopTimeoutWarning(`The cleanups of '${unit.name}'`, timeoutMs, 'stop', action && { action, advice: 'It must pass its signal to stop() or dispose().' })
 }
 
 /**
@@ -65,76 +62,54 @@ function stopTimeoutWarning(unit: UnitNode, timeoutMs: number): string {
  * The late decisions of the abandoned `stop` handlers are recorded as ignored. A late failure of an abandoned callback goes to `logger.warn`, unless it is the abort reason of its signal.
  */
 async function runTeardownCallbacks(unit: UnitNode, instance: InstanceNode, stopHooks: boolean, frame: CleanupFrame | undefined): Promise<unknown[]> {
-  const errors: unknown[] = []
   const { clock, context } = unit.container.runtime
   // Each callback runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
   const call = <T>(fn: () => T | Promise<T>): Promise<T> => context.run(frame, () => invokeUser(fn))
-
-  const timeoutMs = timeoutOf(unit, 'stop')
-  const deadline = timeoutMs === undefined
-    ? undefined
-    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The 'stop' hook of '${unit.name}' timed out.`, 'stop', timeoutMs))
-  // A `stop` handler sees the timeout on its signal, and the disposal of the instance.
-  const hookSignal = anySignal(instance.controller.signal, deadline?.signal)
-  let timedOut = false
-  /**
-   * Waits for one callback until the deadline. `undefined` means that the deadline passed.
-   * After the deadline, `late` gets the value of the callback, and a rejection is reported with `logger.warn`.
-   */
-  const settle = async <T>(promise: Promise<T>, source: 'stop' | 'effect', late?: (value: T) => void): Promise<{ readonly value: T } | undefined> => {
-    const abandon = (): undefined => {
-      promise.then(value => late?.(value), (error: unknown) => reportLateFailure(unit, source, error, [hookSignal, instance.controller.signal]))
-      return undefined
-    }
-    if (!deadline)
-      return { value: await promise }
-    if (timedOut)
-      return abandon()
-
-    const result = await raceAbort(promise, deadline.signal)
-    if (result.kind === 'settled')
-      return { value: result.value }
-
-    abandon()
-    timedOut = true
-    unit.container.api.logger.warn(stopTimeoutWarning(unit, timeoutMs!))
-    const decision = decideTimeout(unit, instance, 'stop', timeoutMs!)
+  const errors: unknown[] = []
+  const finishStop = (decision: Decision): void => {
     recordDecision(unit, instance, decision, false)
     finishRun(instance, 'stop', decision)
     if (decision.kind === 'fail')
       errors.push(decision.error)
-    return undefined
   }
+
+  const timeoutMs = timeoutOf(unit, 'stop')
+  // A `stop` handler sees the timeout on its signal, and the disposal of the instance.
+  const deadline = openDeadline({
+    clock,
+    ms: timeoutMs,
+    reason: () => new HookTimeoutError(`The 'stop' hook of '${unit.name}' timed out.`, 'stop', timeoutMs!),
+    sources: [instance.controller.signal],
+    onTimeout: () => {
+      unit.container.api.logger.warn(cleanupTimeoutWarning(unit, timeoutMs!))
+      finishStop(decideTimeout(unit, instance, 'stop', timeoutMs!))
+    },
+    onLateFailure: error => reportLateFailure(unit, 'effect', error),
+  })
+  const hookSignal = deadline.signal!
 
   if (stopHooks && instance.hooks.stop.length > 0) {
     const logger = loggerOf(unit)
     logger?.hookOnStop(unit.name)
     const startTime = performance.now()
     for (const handler of [...instance.hooks.stop].reverse()) {
-      const settled = await settle(callHandler(unit, instance, 'stop', handler, hookSignal, {}, call), 'stop', late => recordLateDecision(unit, instance, late, [hookSignal, instance.controller.signal]))
-      if (!settled)
-        continue
-
-      const decision = settled.value
-      recordDecision(unit, instance, decision, false)
-      finishRun(instance, 'stop', decision)
-      if (decision.kind === 'fail')
-        errors.push(decision.error)
+      const settled = await deadline.run(callHandler(unit, instance, 'stop', handler, hookSignal, {}, call), late => recordLateDecision(unit, instance, late, [hookSignal, instance.controller.signal]))
+      if (settled)
+        finishStop(settled.value)
     }
     logger?.hookOnStopComplete(unit.name, performance.now() - startTime)
   }
 
-  const effects = instance.effects.splice(0).reverse()
-  for (const disposer of effects) {
+  for (const disposer of instance.effects.splice(0).reverse()) {
     try {
-      await settle(call(disposer), 'effect')
+      await deadline.run(call(disposer))
     }
     catch (error) {
       errors.push(error)
     }
   }
 
-  deadline?.cancel()
+  deadline.end()
   return errors
 }
 

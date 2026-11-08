@@ -4,7 +4,7 @@ import type { TimeoutContext } from '../types'
 
 import { HookTimeoutError } from '../diagnostics/errors'
 import { timeoutHandlerOf } from '../graph/nodes'
-import { emitRecord } from '../graph/observers'
+import { emitRecord, recordTimeout } from '../graph/observers'
 import { forwardAbort } from '../helpers/abort'
 import { messageOf } from '../helpers/error-from'
 import { untracked } from '../helpers/signals'
@@ -49,7 +49,7 @@ export function recordDecision(unit: UnitNode, instance: InstanceNode, decision:
  *
  * A failure with the reason of one of `signals` is not reported, because the callback only followed its abort.
  */
-export function reportLateFailure(unit: UnitNode, source: UnitHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
+export function reportLateFailure(unit: UnitNode, source: UnitHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined> = []): void {
   if (signals.some(signal => signal?.aborted && signal.reason === error))
     return
 
@@ -154,16 +154,7 @@ export function decideTimeout(unit: UnitNode, instance: InstanceNode, hook: 'sta
   const run: HookRun = { unit: unit.name, instanceId: instance.id, hook, attempt: state.attempt, now: () => unit.container.runtime.clock.now() }
   const decide = createDecide(run)
   const error = new HookTimeoutError(`The '${hook}' hook of '${unit.name}' did not settle within ${timeoutMs}ms.`, hook, timeoutMs)
-  emitRecord(unit.container, {
-    type: 'timeout',
-    key: unit.name,
-    owner: unit.container.owner,
-    instanceId: instance.id,
-    hook,
-    timeoutMs,
-    attempt: state.attempt,
-    reason: error.message,
-  })
+  recordTimeout(unit.container, { key: unit.name, instanceId: instance.id, hook, timeoutMs, attempt: state.attempt, reason: error.message })
 
   const fallback = (): Decision => hook === 'stop' ? decide.handled({ reason: error.message }) : decide.fail(error, { reason: error.message })
   const handler = timeoutHandlerOf(unit)

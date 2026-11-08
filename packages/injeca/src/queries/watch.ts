@@ -7,8 +7,9 @@ import { BuildAfterDisposeError, InvalidArgumentError, UnitFailedError } from '.
 import { assertActive, demandConsumerUnit, nodeOf, releaseConsumerDemand } from '../graph/nodes'
 import { reportCallbackError } from '../graph/observers'
 import { blockingFailure, findProvider, selectProvider } from '../graph/resolvers/resolvers'
-import { onAbort, readSignal, waitAbortError } from '../helpers/abort'
+import { readSignal, waitAbortError } from '../helpers/abort'
 import { batch, untracked, withOwner } from '../helpers/signals'
+import { createWaiter } from '../helpers/waiter'
 import { withoutUndefined } from '../helpers/without-undefined'
 import { normalizeName } from '../primitives/keys'
 
@@ -181,53 +182,35 @@ export function waitFor(container: Container, key: WatchKey, options?: WaitForOp
   assertActive(node, 'waitFor')
   const name = readKey(key, 'waitFor')
   const { status, signal } = readWaitOptions(options)
-  const abortError = (reason: unknown): unknown => waitAbortError(reason, `waitFor('${name}') timed out.`)
-  if (signal?.aborted)
-    return Promise.reject(abortError(signal.reason))
+  const waiter = createWaiter<UnitState>(signal, reason => waitAbortError(reason, `waitFor('${name}') timed out.`))
+  if (waiter.settled())
+    return waiter.promise
 
   const matches = (state: UnitState): boolean => state.phase === 'running'
     && (status === undefined ? state.status !== undefined && state.status !== 'unavailable' : state.status === status)
 
-  return new Promise((resolve, reject) => untracked(() => {
-    let done = false
-    let stopWatch: (() => void) | undefined
-    let disarm = () => {}
-    let stopListening = () => {}
-
-    const onDisposed = (): void => finish(() => reject(new BuildAfterDisposeError(`The container was disposed before waitFor('${name}') matched.`)))
-
-    function finish(outcome: () => void): void {
-      if (done)
-        return
-
-      done = true
-      stopWatch?.()
-      stopListening()
-      disarm()
-      node.disposedListeners.delete(onDisposed)
-      outcome()
-    }
-
+  untracked(() => {
+    const onDisposed = (): void => waiter.reject(new BuildAfterDisposeError(`The container was disposed before waitFor('${name}') matched.`))
     node.disposedListeners.add(onDisposed)
-    disarm = onAbort(signal, reason => finish(() => reject(abortError(reason))))
+    waiter.defer(() => node.disposedListeners.delete(onDisposed))
 
     const checkFailure = (): void => {
       const failure = failureOf(node, name)
       if (failure)
-        finish(() => reject(new UnitFailedError(`waitFor('${name}') found a failed unit.`, name, { cause: failure.error })))
+        waiter.reject(new UnitFailedError(`waitFor('${name}') found a failed unit.`, name, { cause: failure.error }))
     }
 
     // A failure of a dependency does not change the state of `key`. The check runs after each drain, as for `resolve`.
-    stopListening = node.runtime.reconciler.onDrained(checkFailure)
-    stopWatch = subscribe(node, name, (state) => {
+    waiter.defer(node.runtime.reconciler.onDrained(checkFailure))
+    // The first state can match at once. Then `defer` stops the watch at once.
+    waiter.defer(subscribe(node, name, (state) => {
       if (matches(state))
-        finish(() => resolve(state))
+        waiter.resolve(state)
       else if (state.phase === 'failed')
         checkFailure()
-    })
+    }))
     node.runtime.reconciler.requestDrain()
-    // The first state can match at once, before `stopWatch` was assigned.
-    if (done)
-      stopWatch()
-  }))
+  })
+
+  return waiter.promise
 }

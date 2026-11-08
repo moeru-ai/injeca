@@ -67,9 +67,15 @@ export function readPolicy(owner: string, fields: PolicyFields, inherit?: Policy
   })
 }
 
-/** The value of the nearest container, from `container` up to the root, that sets it. */
-function fromContainers<T>(container: ContainerNode | undefined, pick: (policy: Policy) => T | undefined): T | undefined {
-  for (let current = container; current; current = current.parent) {
+/** A unit or a container. A unit reads its own policy, then the policies of its containers. A container reads its own policy, then the policies of its ancestors. */
+export type PolicyOwner = UnitNode | ContainerNode
+
+/** The nearest value of `pick` for `owner`. `undefined` means that no policy sets it. */
+export function policyValue<T>(owner: PolicyOwner, pick: (policy: Policy) => T | undefined): T | undefined {
+  if ('kind' in owner)
+    return pick(owner.policy) ?? policyValue(owner.container, pick)
+
+  for (let current: ContainerNode | undefined = owner; current; current = current.parent) {
     const value = pick(current.policy)
     if (value !== undefined)
       return value
@@ -80,20 +86,15 @@ function fromContainers<T>(container: ContainerNode | undefined, pick: (policy: 
 
 /** The attempt limit of a requeue: the decision, then the unit, then the containers. `undefined` means no limit. */
 export function maxAttemptsOf(unit: UnitNode, fromDecision: number | undefined): number | undefined {
-  return fromDecision ?? unit.policy.maxAttempts ?? fromContainers(unit.container, policy => policy.maxAttempts)
+  return fromDecision ?? policyValue(unit, policy => policy.maxAttempts)
 }
 
-/** The timeout of a hook: the unit, then the containers. `undefined` means no timeout. */
-export function timeoutOf(unit: UnitNode, hook: 'start' | 'stop'): number | undefined {
-  return unit.policy.timeouts?.[hook] ?? fromContainers(unit.container, policy => policy.timeouts?.[hook])
-}
-
-/** The timeout of a hook for the effects of `container`: the container, then its ancestors. `undefined` means no timeout. */
-export function containerTimeoutOf(container: ContainerNode, hook: 'start' | 'stop'): number | undefined {
-  return fromContainers(container, policy => policy.timeouts?.[hook])
+/** The timeout of a hook for a unit, or for the effects of a container. `undefined` means no timeout. */
+export function timeoutOf(owner: PolicyOwner, hook: 'start' | 'stop'): number | undefined {
+  return policyValue(owner, policy => policy.timeouts?.[hook])
 }
 
 /** The `onTimeout` handler: the unit, then the containers. */
 export function timeoutHandlerOf(unit: UnitNode): TimeoutHandler | undefined {
-  return unit.policy.onTimeout ?? fromContainers(unit.container, policy => policy.onTimeout)
+  return policyValue(unit, policy => policy.onTimeout)
 }

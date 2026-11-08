@@ -4,8 +4,9 @@ import type { Container, DependencyDeclarations, ResolveDependencyDeclaration } 
 import { BuildAfterDisposeError } from '../diagnostics/errors'
 import { assertActive, createUnit, nodeOf, readEdges, releaseUnit } from '../graph/nodes'
 import { blockingFailure } from '../graph/resolvers/resolvers'
-import { onAbort, readSignal, waitAbortError } from '../helpers/abort'
+import { readSignal, waitAbortError } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
+import { createWaiter } from '../helpers/waiter'
 
 export interface ResolveOptions {
   /**
@@ -27,30 +28,15 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
 
   const edges = readEdges('resolve', dependsOn)
   const signal = readSignal(options, 'resolve')
-  if (signal?.aborted)
-    return Promise.reject(waitAbortError(signal.reason, 'resolve() timed out.'))
+  const waiter = createWaiter<ResolveDependencyDeclaration<Deps>>(signal, reason => waitAbortError(reason, 'resolve() timed out.'))
+  if (waiter.settled())
+    return waiter.promise
 
   const { reconciler } = node.runtime
-
-  return new Promise((done, fail) => untracked(() => {
-    let settled = false
+  untracked(() => {
     let unit: UnitNode | undefined
-    let stopListening = () => {}
-    let disarm = () => {}
-
-    const finish = (outcome: () => void): void => {
-      if (settled)
-        return
-
-      settled = true
-      stopListening()
-      disarm()
-      batch(() => releaseUnit(unit!))
-      outcome()
-    }
-
     // The resolver reads its dependencies in `build`, then withdraws itself. It never starts.
-    const build: BuildFunction = context => finish(() => done({ ...context.dependsOn } as ResolveDependencyDeclaration<Deps>))
+    const build: BuildFunction = context => waiter.resolve({ ...context.dependsOn } as ResolveDependencyDeclaration<Deps>)
 
     batch(() => {
       unit = createUnit({ container: node, kind: 'resolver', name: 'resolve', edges, build })
@@ -58,12 +44,14 @@ export function resolve<Deps extends DependencyDeclarations>(container: Containe
     })
 
     // A required dependency that failed, directly or through a pending provider, rejects the call.
-    stopListening = reconciler.onDrained(() => {
+    waiter.defer(reconciler.onDrained(() => {
       const failure = blockingFailure(unit!)
       if (failure)
-        finish(() => fail(failure.error))
-    })
-    disarm = onAbort(signal, reason => finish(() => fail(waitAbortError(reason, 'resolve() timed out.'))))
-    void unit!.withdrawal.promise.then(() => finish(() => fail(new BuildAfterDisposeError('The container was disposed before resolve() got its dependencies.'))))
-  }))
+        waiter.reject(failure.error)
+    }))
+    waiter.defer(() => batch(() => releaseUnit(unit!)))
+    void unit!.withdrawal.promise.then(() => waiter.reject(new BuildAfterDisposeError('The container was disposed before resolve() got its dependencies.')))
+  })
+
+  return waiter.promise
 }
