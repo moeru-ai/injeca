@@ -5,7 +5,7 @@ import { effectScope, getActiveSub, signal } from 'alien-signals'
 
 import { BuildAfterDisposeError, HookTimeoutError, InvalidArgumentError } from '../diagnostics/errors'
 import { createDefaultLogger } from '../diagnostics/logger'
-import { assertActive, containerTimeoutOf, nodeOf, readPolicy, registerNode, releaseUnit } from '../graph/nodes'
+import { assertActive, nodeOf, readPolicy, registerNode, releaseUnit, timeoutOf } from '../graph/nodes'
 import { emitRecord, recordAbortedWait } from '../graph/observers'
 import { abortable, raceAbort, readSignal, timeoutSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
@@ -235,7 +235,7 @@ async function runEffects(container: ContainerNode, frame: ContainerNode['frame'
     return errors
 
   const { clock, context } = container.runtime
-  const timeoutMs = containerTimeoutOf(container, 'stop')
+  const timeoutMs = timeoutOf(container, 'stop')
   const deadline = timeoutMs === undefined
     ? undefined
     : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The effects of the container ${JSON.stringify(container.owner)} timed out.`, 'stop', timeoutMs))
