@@ -1,7 +1,7 @@
 {
   "name": "injeca",
   "type": "module",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Pure functional programming based dependency injection library inspired by go.uber.org/fig and go.uber.org/dig.",
   "author": {
     "name": "Moeru AI Project AIRI Team",
