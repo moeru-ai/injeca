@@ -7,9 +7,10 @@ import { BuildAfterDisposeError, HookTimeoutError, InvalidArgumentError } from '
 import { createDefaultLogger } from '../diagnostics/logger'
 import { assertActive, nodeOf, readPolicy, registerNode, releaseUnit, timeoutOf } from '../graph/nodes'
 import { recordAbortedWait, recordTimeout } from '../graph/observers'
-import { abortable, raceAbort, readSignal, timeoutSignal } from '../helpers/abort'
+import { abortable, readSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
+import { openDeadline } from '../helpers/deadline'
 import { createDeliveryQueue } from '../helpers/delivery-queue'
 import { errorFrom, messageOf } from '../helpers/error-from'
 import { batch, untracked, withOwner } from '../helpers/signals'
@@ -229,49 +230,35 @@ function effectTimeoutWarning(container: ContainerNode, timeoutMs: number): stri
  * The effect in progress is abandoned. The remaining effects still run, but injeca does not wait for them. A late failure of an abandoned effect goes to `logger.warn`.
  */
 async function runEffects(container: ContainerNode, frame: ContainerNode['frame']): Promise<unknown[]> {
-  const errors: unknown[] = []
   const disposers = container.effects.splice(0).reverse()
   if (disposers.length === 0)
-    return errors
+    return []
 
   const { clock, context } = container.runtime
+  const errors: unknown[] = []
+  const owner = JSON.stringify(container.owner)
   const timeoutMs = timeoutOf(container, 'stop')
-  const deadline = timeoutMs === undefined
-    ? undefined
-    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The effects of the container ${JSON.stringify(container.owner)} timed out.`, 'stop', timeoutMs))
-  let timedOut = false
-  const abandon = (promise: Promise<void>): void => {
-    promise.catch((error: unknown) => container.api.logger.warn(`An effect of the container ${JSON.stringify(container.owner)} failed after injeca stopped waiting for it: ${messageOf(error)}`))
-  }
-
-  for (const disposer of disposers) {
-    // A disposer is a user callback. It runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
-    const run = context.run(frame, () => invokeUser(disposer))
-    if (timedOut) {
-      abandon(run)
-      continue
-    }
-    try {
-      if (!deadline) {
-        await run
-        continue
-      }
-      const result = await raceAbort(run, deadline.signal)
-      if (result.kind === 'settled')
-        continue
-
-      abandon(run)
-      timedOut = true
-      const reason = `The effects of the container ${JSON.stringify(container.owner)} did not settle within ${timeoutMs}ms.`
+  const deadline = openDeadline({
+    clock,
+    ms: timeoutMs,
+    reason: () => new HookTimeoutError(`The effects of the container ${owner} timed out.`, 'stop', timeoutMs!),
+    onTimeout: () => {
       container.api.logger.warn(effectTimeoutWarning(container, timeoutMs!))
-      recordTimeout(container, { key: '', instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason })
+      recordTimeout(container, { key: '', instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason: `The effects of the container ${owner} did not settle within ${timeoutMs}ms.` })
+    },
+    onLateFailure: error => container.api.logger.warn(`An effect of the container ${owner} failed after injeca stopped waiting for it: ${messageOf(error)}`),
+  })
+  // A disposer is a user callback. It runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
+  for (const disposer of disposers) {
+    try {
+      await deadline.run(context.run(frame, () => invokeUser(disposer)))
     }
     catch (error) {
       errors.push(error)
     }
   }
 
-  deadline?.cancel()
+  deadline.end()
   return errors
 }
 

@@ -49,7 +49,7 @@ export function recordDecision(unit: UnitNode, instance: InstanceNode, decision:
  *
  * A failure with the reason of one of `signals` is not reported, because the callback only followed its abort.
  */
-export function reportLateFailure(unit: UnitNode, source: UnitHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined>): void {
+export function reportLateFailure(unit: UnitNode, source: UnitHook | 'effect', error: unknown, signals: ReadonlyArray<AbortSignal | undefined> = []): void {
   if (signals.some(signal => signal?.aborted && signal.reason === error))
     return
 
