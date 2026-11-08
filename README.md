@@ -14,11 +14,11 @@
 
 # injeca
 
-[![npm version][npm-version-src]][npm-version-href]
-[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![npm version][npmx-version-src]][npmx-version-href]
+[![npm downloads][npmx-downloads-src]][npmx-downloads-href]
 [![bundle][bundle-src]][bundle-href]
-[![JSDocs][jsdocs-src]][jsdocs-href]
 [![License][license-src]][license-href]
+[![JSDocs][jsdocs-src]][jsdocs-href]
 
 Pure functional dependency injection for TypeScript. Units declare their dependencies, own their lifecycle, and converge when the graph changes at run time. No classes, no decorators, and no extra wrappers.
 
@@ -1424,13 +1424,13 @@ pnpm -F @injeca/docs dev # the Docs, with the Playground
 
 [MIT](./LICENSE)
 
-[npm-version-src]: https://img.shields.io/npm/v/injeca?style=flat&colorA=080f12&colorB=1fa669
-[npm-version-href]: https://npmjs.com/package/injeca
-[npm-downloads-src]: https://img.shields.io/npm/dm/injeca?style=flat&colorA=080f12&colorB=1fa669
-[npm-downloads-href]: https://npmjs.com/package/injeca
-[bundle-src]: https://img.shields.io/bundlephobia/minzip/injeca?style=flat&colorA=080f12&colorB=1fa669&label=minzip
+[npmx-version-src]: https://npmx.dev/api/registry/badge/version/injeca
+[npmx-version-href]: https://npmx.dev/injeca
+[npmx-downloads-src]: https://npmx.dev/api/registry/badge/downloads-month/injeca
+[npmx-downloads-href]: https://npmx.dev/injeca
+[bundle-src]: https://npmx.dev/api/registry/badge/size/injeca
 [bundle-href]: https://bundlephobia.com/result?p=injeca
-[license-src]: https://img.shields.io/github/license/moeru-ai/injeca.svg?style=flat&colorA=080f12&colorB=1fa669
+[license-src]: https://npmx.dev/api/registry/badge/license/injeca
 [license-href]: https://github.com/moeru-ai/injeca/blob/main/LICENSE
 [jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
 [jsdocs-href]: https://www.jsdocs.io/package/injeca
