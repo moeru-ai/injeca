@@ -5,8 +5,9 @@ import type { Container, DeclareOptions, KeyReference, Registration, Transaction
 import { DuplicateUnitError, InvalidArgumentError, ReplaceWhileStoppingError, StaleRegistrationError, TransactionIncompleteError } from '../diagnostics/errors'
 import { assertActive, cancelPending, createRegistration, currentUnit, nodeOf, readDefinition, readEdges, releaseReservation, releaseReservations, reservedBy, reserveKey, setPhase } from '../graph/nodes'
 import { slotOf } from '../graph/resolvers/resolvers'
-import { onAbort, readSignal } from '../helpers/abort'
+import { readSignal } from '../helpers/abort'
 import { batch, untracked } from '../helpers/signals'
+import { createWaiter, onAbort } from '../helpers/waiter'
 import { abortTransaction, buildMembers, orderMembers, rollbackMembers, startMembers } from '../reconciler/commit'
 import { isExclusiveKey, normalizeName } from './keys'
 import { assertNoDuplicate, publishRegistration, unitOf } from './provide'
@@ -183,23 +184,17 @@ function startCommit(transaction: TransactionNode, options: unknown): Promise<vo
   if (!signal)
     return committed
 
-  return new Promise((resolve, reject) => {
-    const removeAbort = onAbort(signal, (reason) => {
-      // After the publish, the abort has no effect.
-      if (transaction.state !== 'committing')
-        return
+  const waiter = createWaiter<void>(undefined)
+  waiter.defer(onAbort(signal, (reason) => {
+    // After the publish, the abort has no effect.
+    if (transaction.state !== 'committing')
+      return
 
-      void abortTransaction(transaction, reason)
-      reject(reason)
-    })
-    committed.then((value) => {
-      removeAbort()
-      resolve(value)
-    }, (error: unknown) => {
-      removeAbort()
-      reject(error)
-    })
-  })
+    void abortTransaction(transaction, reason)
+    waiter.reject(reason)
+  }))
+  committed.then(waiter.resolve, waiter.reject)
+  return waiter.promise
 }
 
 /** Throws `duplicate-unit` when another open transaction of the container declares or provides `name`. */

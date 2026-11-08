@@ -35,10 +35,7 @@ function withdrawWith(release: () => UnitNode | undefined, options: unknown): Pr
     return Promise.resolve(true)
   }
 
-  return abortable(withdrawal, signal, (reason) => {
-    recordAbortedWait(untracked(() => unit.signals.phase()) === 'withdrawn' ? [] : [unit], 'withdraw', reason)
-    return reason
-  })
+  return abortable(withdrawal, signal, reason => recordAbortedWait(untracked(() => unit.signals.phase()) === 'withdrawn' ? [] : [unit], 'withdraw', reason))
 }
 
 /** The `withdraw()` of a registration. Resolves `false` for a stale registration. */

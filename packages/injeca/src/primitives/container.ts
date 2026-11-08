@@ -403,8 +403,5 @@ export function dispose(container: Container, options?: DisposeOptions): Promise
     return Promise.resolve()
   }
 
-  return abortable(disposal, abortSignal, (reason) => {
-    recordAbortedWait(unfinishedUnits(node), 'dispose', reason)
-    return reason
-  })
+  return abortable(disposal, abortSignal, reason => recordAbortedWait(unfinishedUnits(node), 'dispose', reason))
 }

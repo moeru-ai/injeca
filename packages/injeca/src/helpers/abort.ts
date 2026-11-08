@@ -3,6 +3,7 @@ import type { Clock } from './clock'
 import { InvalidArgumentError, WaitTimeoutError } from '../diagnostics/errors'
 import { setWeakTimeout } from './clock'
 import { untracked } from './signals'
+import { createWaiter, onAbort } from './waiter'
 
 /** The reason of a timeout signal: a `DOMException` with the name `TimeoutError`, as for `AbortSignal.timeout()`. */
 export function timeoutReason(message: string): DOMException {
@@ -125,16 +126,6 @@ export function readSignal(options: { readonly signal?: unknown } | undefined, a
   return signal
 }
 
-/** Calls `callback` with the reason when `signal` aborts. Returns a function that removes the listener. The callback is an entry point, so it runs untracked. */
-export function onAbort(signal: AbortSignal | undefined, callback: (reason: unknown) => void): () => void {
-  if (!signal)
-    return () => {}
-
-  const listener = (): void => untracked(() => callback(signal.reason))
-  signal.addEventListener('abort', listener, { once: true })
-  return () => signal.removeEventListener('abort', listener)
-}
-
 /**
  * Waits for `promise` until `signal` aborts. At the abort, it rejects with the result of `reasonOf`, and nothing waits for `promise` any more.
  *
@@ -143,27 +134,13 @@ export function onAbort(signal: AbortSignal | undefined, callback: (reason: unkn
 export function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined, reasonOf: (reason: unknown) => unknown = reason => reason): Promise<T> {
   if (!signal)
     return promise
-  if (signal.aborted) {
-    promise.catch(() => {})
-    return Promise.reject(reasonOf(signal.reason))
-  }
 
-  return new Promise<T>((resolve, reject) => {
-    const remove = onAbort(signal, (reason) => {
-      promise.catch(() => {})
-      reject(reasonOf(reason))
-    })
-    promise.then(
-      (value) => {
-        remove()
-        resolve(value)
-      },
-      (error: unknown) => {
-        remove()
-        reject(error)
-      },
-    )
+  const waiter = createWaiter<T>(signal, (reason) => {
+    promise.catch(() => {})
+    return reasonOf(reason)
   })
+  promise.then(waiter.resolve, waiter.reject)
+  return waiter.promise
 }
 
 /** The result of `raceAbort`: the value of the promise, or `aborted` when the signal aborted first. */
@@ -175,26 +152,15 @@ export type RaceResult<T> = { readonly kind: 'settled', readonly value: T } | { 
  * A rejection of `promise` before the abort rejects the result. After the abort, nothing waits for `promise`, and its rejection is not reported.
  */
 export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<RaceResult<T>> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      promise.catch(() => {})
-      resolve({ kind: 'aborted' })
-      return
-    }
-
-    const remove = onAbort(signal, () => {
-      promise.catch(() => {})
-      resolve({ kind: 'aborted' })
-    })
-    promise.then(
-      (value) => {
-        remove()
-        resolve({ kind: 'settled', value })
-      },
-      (error: unknown) => {
-        remove()
-        reject(error)
-      },
-    )
-  })
+  const waiter = createWaiter<RaceResult<T>>(undefined)
+  const aborted = (): void => {
+    promise.catch(() => {})
+    waiter.resolve({ kind: 'aborted' })
+  }
+  if (signal.aborted)
+    aborted()
+  else
+    waiter.defer(onAbort(signal, aborted))
+  promise.then(value => waiter.resolve({ kind: 'settled', value }), waiter.reject)
+  return waiter.promise
 }

@@ -6,9 +6,10 @@ import { ReplaceWhileStoppingError, WaitTimeoutError } from '../diagnostics/erro
 import { describeExplanations, explainUnit } from '../diagnostics/explain'
 import { cancelPending, cancelSuccessor, createUnit, currentUnit, publishUnit, readDefinition, releaseUnit } from '../graph/nodes'
 import { blockingFailure } from '../graph/resolvers/resolvers'
-import { isTimeoutReason, onAbort, readSignal } from '../helpers/abort'
+import { isTimeoutReason, readSignal } from '../helpers/abort'
 import { createDeferred } from '../helpers/deferred'
 import { batch, untracked } from '../helpers/signals'
+import { onAbort } from '../helpers/waiter'
 import { completeSwap, createSuccessor } from '../reconciler/swap'
 import { withdrawRegistration } from './withdraw'
 
