@@ -457,6 +457,7 @@ provide(container, 'tts', {
 - A cleanup or a `start` hook that injeca stopped waiting for can still fail later. injeca writes that failure with `logger.warn`, and a late `stop` decision gets a `decision` record with `ignored: true`. A rejection with the abort reason of the callback signal has no warning, because the callback only followed its abort.
 - `stop()` and `dispose()` abort the signal of a `start` hook in progress and do not wait for it. The `stop` hooks run at once. A decision that the hook returns later is ignored.
 - At a `start` timeout, the `signal` of the hook aborts with the `HookTimeoutError`. A `stop` handler sees the `stop` timeout on its `signal` in the same way.
+- The `stop` timeout of a container also covers its container effects at its disposal, all of them together. A child container without a value uses the value of its nearest ancestor. At the timeout, injeca warns, `observe` gets a `timeout` record with `key: ''`, and the disposal continues and resolves. `onTimeout` does not run for it. A container effect has no signal, so it must not await `stop()` or `dispose()` of its own container. Before 0.5.2, such an effect blocked the disposal forever.
 
 </details>
 
@@ -992,6 +993,7 @@ await dispose(plugin)
 - `stop()` stops. `dispose()` also withdraws the registrations and runs the container effects.
 - `dispose(parent)` disposes the child containers first, newest first, each one with its effects. Then the units of the parent stop, and then its effects run.
 - `effect(container, setup)` after the disposal started runs the disposer at once.
+- The `stop` timeout of the container, or of its nearest ancestor, covers the container effects. See [How do I limit how long a hook runs?](#dependency-injection).
 - `start(parent)` does not start a child container that was never started. Call `start(child)` for it.
 - A unit with a missing provider, or in a dependency cycle, stays `pending`. Use a timeout signal to find it.
 - A provider in a child container shadows the provider of an ancestor only while it is `running`. Until then, and after it stops, dependents use the ancestor provider. So shadowing never leaves a gap.

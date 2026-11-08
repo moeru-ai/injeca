@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createNoopLogger } from '../diagnostics/logger'
-import { createContainer, dispose, provide, start, stop } from '../scoped'
+import { createContainer, dispose, effect, provide, start, stop } from '../scoped'
 import { collectRecords, createTestContainer, deferred, drained, manualClock, stateOf, warningLogger } from '../testing/helpers'
 
 describe('serial transitions', () => {
@@ -237,6 +237,93 @@ describe('stop timeouts', () => {
     gate.resolve()
     await stopped
     expect(stateOf(app, 'airi.tray').phase).toBe('pending')
+  })
+})
+
+describe('stop timeouts of container effects', () => {
+  it('ends a container effect that awaits the disposal of its own container without a signal, warns, records it, and the disposal resolves', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const session = createContainer({ logger, clock: manual.clock, owner: { kind: 'extension', id: 'a' }, timeouts: { stop: 100 } })
+    const later = vi.fn()
+    let cleanupDone = false
+    effect(session, () => later)
+    effect(session, () => async () => {
+      // A dispose after an await is not found as re-entrant. It gets the promise of the disposal that waits for this effect.
+      await Promise.resolve()
+      await dispose(session)
+      cleanupDone = true
+    })
+    const { records } = collectRecords(session)
+
+    const disposal = dispose(session)
+    await drained(session)
+    expect(later).not.toHaveBeenCalled()
+
+    manual.advance(100)
+    await expect(disposal).resolves.toBeUndefined()
+    // The remaining effects still run after the timeout.
+    expect(later).toHaveBeenCalledTimes(1)
+    expect(records.filter(record => record.type === 'timeout')).toEqual([
+      expect.objectContaining({ type: 'timeout', key: '', owner: { kind: 'extension', id: 'a' }, instanceId: undefined, hook: 'stop', timeoutMs: 100, attempt: 1 }),
+    ])
+    expect(warnings).toEqual([
+      'The effects of the container {"kind":"extension","id":"a"} did not settle within the stop timeout of 100ms. injeca stopped waiting for them, and the disposal continues. '
+      + 'The container is disposing. A cleanup can be waiting for its own container. A container effect has no signal. It must not await stop() or dispose() of its own container.',
+    ])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(cleanupDone).toBe(true)
+  })
+
+  it('uses the stop timeout of the nearest ancestor, and warns for a late failure', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const host = createContainer({ logger, clock: manual.clock, timeouts: { stop: 40 } })
+    const session = createContainer({ parent: host, owner: { kind: 'extension', id: 'a' } })
+    const gate = deferred()
+    effect(session, () => async () => {
+      await gate.promise
+      throw new Error('The session closed late.')
+    })
+
+    const disposal = dispose(session)
+    await drained(session)
+    manual.advance(40)
+    await expect(disposal).resolves.toBeUndefined()
+
+    gate.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(warnings).toEqual([
+      expect.stringContaining('did not settle within the stop timeout of 40ms'),
+      'An effect of the container {"kind":"extension","id":"a"} failed after injeca stopped waiting for it: The session closed late.',
+    ])
+  })
+
+  it('records nothing for container effects that settle in time, and keeps their errors', async () => {
+    const manual = manualClock()
+    const { logger, warnings } = warningLogger()
+    const app = createContainer({ logger, clock: manual.clock, timeouts: { stop: 100 } })
+    const failure = new Error('The effect failed in time.')
+    const gate = deferred()
+    effect(app, () => async () => {
+      await Promise.resolve()
+      throw failure
+    })
+    effect(app, () => () => gate.promise)
+    const { records } = collectRecords(app)
+
+    const disposal = dispose(app)
+    await drained(app)
+    // The stop timeout covers the effects while they run.
+    expect(manual.pending()).toBe(1)
+    manual.advance(99)
+    gate.resolve()
+    await expect(disposal).rejects.toBe(failure)
+    // The timer of the stop timeout is cancelled.
+    expect(manual.pending()).toBe(0)
+    manual.advance(100)
+    expect(records.filter(record => record.type === 'timeout')).toEqual([])
+    expect(warnings).toEqual([])
   })
 })
 

@@ -3,16 +3,17 @@ import type { Container, ContainerOptions, EffectSetup, OwnerRecord } from '../t
 
 import { effectScope, getActiveSub, signal } from 'alien-signals'
 
-import { BuildAfterDisposeError, InvalidArgumentError } from '../diagnostics/errors'
+import { BuildAfterDisposeError, HookTimeoutError, InvalidArgumentError } from '../diagnostics/errors'
 import { createDefaultLogger } from '../diagnostics/logger'
-import { assertActive, nodeOf, readPolicy, registerNode, releaseUnit } from '../graph/nodes'
-import { recordAbortedWait } from '../graph/observers'
-import { abortable, readSignal } from '../helpers/abort'
+import { assertActive, containerTimeoutOf, nodeOf, readPolicy, registerNode, releaseUnit } from '../graph/nodes'
+import { emitRecord, recordAbortedWait } from '../graph/observers'
+import { abortable, raceAbort, readSignal, timeoutSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
 import { createDeliveryQueue } from '../helpers/delivery-queue'
-import { errorFrom } from '../helpers/error-from'
+import { errorFrom, messageOf } from '../helpers/error-from'
 import { batch, untracked, withOwner } from '../helpers/signals'
+import { invokeUser } from '../reconciler/calls'
 import { abortTransaction } from '../reconciler/commit'
 import { createReconciler } from '../reconciler/reconciler'
 import { findReentry, reportReentry } from '../reconciler/reentry'
@@ -188,6 +189,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
 
 /**
  * Runs `setup` and stores the returned disposer on the container. `dispose(container)` runs the disposers in reverse order.
+ * The `stop` timeout of the container covers them. The disposer gets no signal, so it must not await `stop()` or `dispose()` of its own container.
  *
  * When the disposal of the container started or ended, the disposer runs at once after `setup`, so that the resource does not leak.
  * A disposer that throws throws to the caller. A disposer promise that rejects is reported outside the call, as an unhandled error.
@@ -213,11 +215,71 @@ export function effect(container: Container, setup: EffectSetup): void {
   }
 }
 
+/** The warning of a `stop` timeout of container effects. The container is always disposing, so it tells the most common cause. */
+function effectTimeoutWarning(container: ContainerNode, timeoutMs: number): string {
+  return `The effects of the container ${JSON.stringify(container.owner)} did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the disposal continues. `
+    + 'The container is disposing. A cleanup can be waiting for its own container. A container effect has no signal. It must not await stop() or dispose() of its own container.'
+}
+
+/**
+ * Runs the effects of `container` in reverse order, and returns their errors.
+ *
+ * The `stop` timeout of the container or of its nearest ancestor covers all of them, as it covers the `stop` hooks and effects of a unit instance. It runs on the container clock.
+ * When it passes, injeca warns, sends a `timeout` record with `key: ''`, and stops waiting. The disposal continues and does not fail. `onTimeout` does not run, because a container effect has no hook run.
+ * The effect in progress is abandoned. The remaining effects still run, but injeca does not wait for them. A late failure of an abandoned effect goes to `logger.warn`.
+ */
+async function runEffects(container: ContainerNode, frame: ContainerNode['frame']): Promise<unknown[]> {
+  const errors: unknown[] = []
+  const disposers = container.effects.splice(0).reverse()
+  if (disposers.length === 0)
+    return errors
+
+  const { clock, context } = container.runtime
+  const timeoutMs = containerTimeoutOf(container, 'stop')
+  const deadline = timeoutMs === undefined
+    ? undefined
+    : timeoutSignal(clock, timeoutMs, () => new HookTimeoutError(`The effects of the container ${JSON.stringify(container.owner)} timed out.`, 'stop', timeoutMs))
+  let timedOut = false
+  const abandon = (promise: Promise<void>): void => {
+    promise.catch((error: unknown) => container.api.logger.warn(`An effect of the container ${JSON.stringify(container.owner)} failed after injeca stopped waiting for it: ${messageOf(error)}`))
+  }
+
+  for (const disposer of disposers) {
+    // A disposer is a user callback. It runs inside the cleanup frame, so that a `stop()` or `dispose()` from its synchronous part is found.
+    const run = context.run(frame, () => invokeUser(disposer))
+    if (timedOut) {
+      abandon(run)
+      continue
+    }
+    try {
+      if (!deadline) {
+        await run
+        continue
+      }
+      const result = await raceAbort(run, deadline.signal)
+      if (result.kind === 'settled')
+        continue
+
+      abandon(run)
+      timedOut = true
+      const reason = `The effects of the container ${JSON.stringify(container.owner)} did not settle within ${timeoutMs}ms.`
+      container.api.logger.warn(effectTimeoutWarning(container, timeoutMs!))
+      emitRecord(container, { type: 'timeout', key: '', owner: container.owner, instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason })
+    }
+    catch (error) {
+      errors.push(error)
+    }
+  }
+
+  deadline?.cancel()
+  return errors
+}
+
 /**
  * Starts the disposal of `container` and of its descendants. The whole subtree enters `disposing` at once, so nothing new registers in it.
  *
  * The child containers dispose first, one after the other, in reverse creation order. Then the units of the container withdraw in one batch, so that dependents stop without a rebuild.
- * Then the effects of the container run in reverse order. `after` delays the work until an earlier sibling completed its disposal.
+ * Then the effects of the container run in reverse order, within the `stop` timeout of the container. `after` delays the work until an earlier sibling completed its disposal.
  */
 function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['frame'], after?: Promise<unknown>): Promise<void> {
   if (container.disposal)
@@ -277,15 +339,7 @@ function beginDisposal(container: ContainerNode, parentFrame: ContainerNode['fra
         errors.push(...unitErrors)
     }
 
-    for (const disposer of container.effects.splice(0).reverse()) {
-      try {
-        // A disposer is a user callback.
-        await context.run(frame, () => untracked(disposer))
-      }
-      catch (error) {
-        errors.push(error)
-      }
-    }
+    errors.push(...await runEffects(container, frame))
 
     if (errors.length > 0)
       throw errorFrom(errors, 'Container disposal failed.')
@@ -330,6 +384,7 @@ function unfinishedUnits(container: ContainerNode): UnitNode[] {
 
 /**
  * Withdraws the registrations and invocations of the container, disposes the child containers, and runs the container effects in reverse order.
+ * The `stop` timeout of the container, or of its nearest ancestor, covers all its effects. At the timeout, injeca warns, sends a `timeout` record with `key: ''`, and the disposal continues.
  *
  * One error keeps its identity. More than one error becomes an `AggregateError`. A second call from outside without a signal gets the same promise.
  *

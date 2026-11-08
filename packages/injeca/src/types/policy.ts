@@ -26,7 +26,7 @@ export type TimeoutHandler = (context: TimeoutContext) => unknown
 export interface HookTimeouts {
   /** The time for all `start` hooks of one attempt. */
   start?: number
-  /** The time for all `stop` hooks and effect disposers of one instance. */
+  /** The time for all `stop` hooks and effect disposers of one instance. For a container, it is also the time for all effects of the container at its disposal. */
   stop?: number
 }
 
@@ -43,6 +43,9 @@ export interface PolicyOptions {
   maxAttempts?: number
   /** The timeouts of the `start` and `stop` hooks. Each field overrides the same field of the container. */
   timeouts?: HookTimeouts
-  /** Decides what happens when a hook times out. Without it, a `start` timeout gives `fail` with `hook-timeout`, and a `stop` timeout counts as `handled`. */
+  /**
+   * Decides what happens when a hook times out. Without it, a `start` timeout gives `fail` with `hook-timeout`, and a `stop` timeout counts as `handled`.
+   * It does not run for a timeout of container effects. That timeout always counts as `handled`.
+   */
   onTimeout?: TimeoutHandler
 }
