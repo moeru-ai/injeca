@@ -88,6 +88,11 @@ export function timeoutOf(unit: UnitNode, hook: 'start' | 'stop'): number | unde
   return unit.policy.timeouts?.[hook] ?? fromContainers(unit.container, policy => policy.timeouts?.[hook])
 }
 
+/** The timeout of a hook for the effects of `container`: the container, then its ancestors. `undefined` means no timeout. */
+export function containerTimeoutOf(container: ContainerNode, hook: 'start' | 'stop'): number | undefined {
+  return fromContainers(container, policy => policy.timeouts?.[hook])
+}
+
 /** The `onTimeout` handler: the unit, then the containers. */
 export function timeoutHandlerOf(unit: UnitNode): TimeoutHandler | undefined {
   return unit.policy.onTimeout ?? fromContainers(unit.container, policy => policy.onTimeout)

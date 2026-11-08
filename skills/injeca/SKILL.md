@@ -135,6 +135,7 @@ injeca.provide('modules:camera', {
 - A withdrawn required dependency or `stop()` cancels the wait and stops the unit.
 - A timeout records a `timeout` record in `observe`, then `onTimeout` decides. Without it, a `start` timeout gives `fail` with `hook-timeout`.
 - Without `onTimeout`, a `stop` timeout counts as `handled`. It ends a stuck cleanup with a `logger.warn` warning, and `stop()`, `dispose()`, and `withdraw()` resolve. Only `decide.fail()` from `onTimeout` fails them.
+- The `stop` timeout of a container, or of its nearest ancestor, also covers its container effects at its disposal. The `timeout` record has `key: ''`, and `onTimeout` does not run. A container effect has no signal, so it must not await `stop()` or `dispose()` of its own container.
 - A late failure of a callback that injeca stopped waiting for goes to `logger.warn`. It is not an unhandled rejection.
 - At a `start` or `stop` timeout, the `signal` of the hook aborts with the `HookTimeoutError`.
 

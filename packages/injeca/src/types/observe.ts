@@ -42,7 +42,10 @@ export interface IgnoredObserveRecord extends ObserveRecordBase {
   readonly call: 'setStatus'
 }
 
-/** A `start` or `stop` hook did not settle before its configured timeout. The `onTimeout` decision follows as a `decision` record. */
+/**
+ * A `start` or `stop` hook did not settle before its configured timeout. The `onTimeout` decision follows as a `decision` record.
+ * For the effects of a container at its disposal, `key` is `''`, `owner` is the owner of that container, `instanceId` is `undefined`, `hook` is `'stop'`, and `attempt` is `1`. No `decision` record follows.
+ */
 export interface TimeoutObserveRecord extends ObserveRecordBase {
   readonly type: 'timeout'
   readonly hook: 'start' | 'stop'
