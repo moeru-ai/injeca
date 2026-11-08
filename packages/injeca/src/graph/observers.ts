@@ -1,4 +1,4 @@
-import type { ErrorObserveRecord, ObserveRecord, WaitAbortedObserveRecord } from '../types'
+import type { ErrorObserveRecord, ObserveRecord, TimeoutObserveRecord, WaitAbortedObserveRecord } from '../types'
 import type { ContainerNode, Observer, UnitNode } from './graph'
 
 import { messageOf } from '../helpers/error-from'
@@ -62,4 +62,9 @@ export function recordAbortedWait(units: readonly UnitNode[], call: WaitAbortedO
       abortReason: reason,
     })
   }
+}
+
+/** Sends a `timeout` record. A timeout of container effects has `key: ''`, no instance, and attempt 1. */
+export function recordTimeout(container: ContainerNode, record: Omit<TimeoutObserveRecord, 'type' | 'owner'>): void {
+  emitRecord(container, { type: 'timeout', key: record.key, owner: container.owner, instanceId: record.instanceId, hook: record.hook, timeoutMs: record.timeoutMs, attempt: record.attempt, reason: record.reason })
 }

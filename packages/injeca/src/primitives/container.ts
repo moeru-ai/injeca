@@ -6,7 +6,7 @@ import { effectScope, getActiveSub, signal } from 'alien-signals'
 import { BuildAfterDisposeError, HookTimeoutError, InvalidArgumentError } from '../diagnostics/errors'
 import { createDefaultLogger } from '../diagnostics/logger'
 import { assertActive, nodeOf, readPolicy, registerNode, releaseUnit, timeoutOf } from '../graph/nodes'
-import { emitRecord, recordAbortedWait } from '../graph/observers'
+import { recordAbortedWait, recordTimeout } from '../graph/observers'
 import { abortable, raceAbort, readSignal, timeoutSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
@@ -264,7 +264,7 @@ async function runEffects(container: ContainerNode, frame: ContainerNode['frame'
       timedOut = true
       const reason = `The effects of the container ${JSON.stringify(container.owner)} did not settle within ${timeoutMs}ms.`
       container.api.logger.warn(effectTimeoutWarning(container, timeoutMs!))
-      emitRecord(container, { type: 'timeout', key: '', owner: container.owner, instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason })
+      recordTimeout(container, { key: '', instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason })
     }
     catch (error) {
       errors.push(error)
