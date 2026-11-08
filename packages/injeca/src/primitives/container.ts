@@ -10,7 +10,7 @@ import { recordAbortedWait, recordTimeout } from '../graph/observers'
 import { abortable, readSignal } from '../helpers/abort'
 import { createCleanupContext } from '../helpers/cleanup-context'
 import { systemClock } from '../helpers/clock'
-import { openDeadline } from '../helpers/deadline'
+import { openDeadline, stopTimeoutWarning } from '../helpers/deadline'
 import { createDeliveryQueue } from '../helpers/delivery-queue'
 import { errorFrom, messageOf } from '../helpers/error-from'
 import { batch, untracked, withOwner } from '../helpers/signals'
@@ -216,12 +216,6 @@ export function effect(container: Container, setup: EffectSetup): void {
   }
 }
 
-/** The warning of a `stop` timeout of container effects. The container is always disposing, so it tells the most common cause. */
-function effectTimeoutWarning(container: ContainerNode, timeoutMs: number): string {
-  return `The effects of the container ${JSON.stringify(container.owner)} did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the disposal continues. `
-    + 'The container is disposing. A cleanup can be waiting for its own container. A container effect has no signal. It must not await stop() or dispose() of its own container.'
-}
-
 /**
  * Runs the effects of `container` in reverse order, and returns their errors.
  *
@@ -243,7 +237,8 @@ async function runEffects(container: ContainerNode, frame: ContainerNode['frame'
     ms: timeoutMs,
     reason: () => new HookTimeoutError(`The effects of the container ${owner} timed out.`, 'stop', timeoutMs!),
     onTimeout: () => {
-      container.api.logger.warn(effectTimeoutWarning(container, timeoutMs!))
+      // The container is always disposing, so the warning tells the most common cause.
+      container.api.logger.warn(stopTimeoutWarning(`The effects of the container ${owner}`, timeoutMs!, 'disposal', { action: 'disposing', advice: 'A container effect has no signal. It must not await stop() or dispose() of its own container.' }))
       recordTimeout(container, { key: '', instanceId: undefined, hook: 'stop', timeoutMs: timeoutMs!, attempt: 1, reason: `The effects of the container ${owner} did not settle within ${timeoutMs}ms.` })
     },
     onLateFailure: error => container.api.logger.warn(`An effect of the container ${owner} failed after injeca stopped waiting for it: ${messageOf(error)}`),

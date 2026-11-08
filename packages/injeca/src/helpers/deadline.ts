@@ -57,3 +57,9 @@ export function openDeadline(options: DeadlineOptions): Deadline {
 
   return { signal, run: (promise, late) => expired ? abandon(promise, late) : wait(promise, late), end: () => timer?.cancel() }
 }
+
+/** The warning of a `stop` timeout. With `hint`, it tells the most common cause: a cleanup that waits for its own container. */
+export function stopTimeoutWarning(subject: string, timeoutMs: number, work: 'stop' | 'disposal', hint?: { readonly action: string, readonly advice: string }): string {
+  const warning = `${subject} did not settle within the stop timeout of ${timeoutMs}ms. injeca stopped waiting for them, and the ${work} continues.`
+  return hint ? `${warning} The container is ${hint.action}. A cleanup can be waiting for its own container. ${hint.advice}` : warning
+}
