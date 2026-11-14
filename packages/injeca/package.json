@@ -54,6 +54,6 @@
   },
   "dependencies": {
     "alien-signals": "^3.2.1",
-    "es-toolkit": "^1.53.1"
+    "es-toolkit": "^1.53.2"
   }
 }
