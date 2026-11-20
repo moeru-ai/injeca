@@ -16,7 +16,7 @@
     "docs:update": "pnpm docs:toc && pnpm docs:sync-readme"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^8.3.0",
+    "@antfu/eslint-config": "^10.0.0",
     "@moeru/eslint-config": "^0.1.0-beta.20",
     "@moeru/std": "^0.1.0-beta.20",
     "@moeru/tsconfig": "^0.1.0-beta.20",
